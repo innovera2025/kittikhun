@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Sans+Thai:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  body { margin:0; background:#0F1925; font-family:"IBM Plex Sans Thai","Space Grotesk",system-ui,sans-serif; color:#F3F7FB; -webkit-font-smoothing:antialiased; }
+  a { color:#84BAF3; }
+  a:hover { color:#BBDBFC; }
+  input::placeholder { color:#8492A0; }
+  @keyframes sweep { 0%{transform:translateY(-44%)} 100%{transform:translateY(44%)} }
+  @keyframes pulse { 0%,100%{opacity:.35;transform:scale(.9)} 50%{opacity:1;transform:scale(1)} }
+  @keyframes rise { from{transform:translateY(26px);opacity:0} to{transform:translateY(0);opacity:1} }
+  @keyframes nudge { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-6px)} 75%{transform:translateX(6px)} }
+  @keyframes glow { 0%,100%{box-shadow:0 0 0 0 rgba(132,186,243,.35)} 50%{box-shadow:0 0 0 14px rgba(132,186,243,0)} }
+  * { scrollbar-width:thin; scrollbar-color:rgba(255,255,255,.26) transparent; }
+  ::-webkit-scrollbar { width:5px; height:5px; }
+  ::-webkit-scrollbar-track { background:transparent; }
+  ::-webkit-scrollbar-thumb { background:rgba(255,255,255,.22); border-radius:999px; }
+</style>
+</helmet>
+
+<div style="height:100vh;overflow:hidden;display:flex;justify-content:center;align-items:center;padding:12px;background:radial-gradient(900px 620px at 50% -8%,#2B4058,#0F1925 72%)">
+
+  <div style="width:392px;height:846px;max-height:calc(100vh - 24px);background:#18232F;border:1px solid rgba(255,255,255,.15);border-radius:46px;padding:9px;box-shadow:0 40px 90px rgba(0,0,0,.6),inset 0 1px 0 rgba(255,255,255,.10)">
+    <div style="position:relative;width:100%;height:100%;border-radius:38px;overflow:hidden;background:linear-gradient(#22303F,#18232F 42%);display:flex;flex-direction:column">
+
+      <div style="flex:none;display:flex;align-items:center;justify-content:space-between;padding:14px 26px 4px;font-family:'Space Grotesk',sans-serif;font-size:13px;font-weight:500;letter-spacing:.02em;color:#DCE6F0">
+        <span>{{ clock }}</span>
+        <span style="display:flex;gap:7px;align-items:center;opacity:.8">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 13a10 10 0 0 1 14 0M8.5 16.5a5 5 0 0 1 7 0"/><circle cx="12" cy="20" r="1"/></svg>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="8" width="17" height="9" rx="2.5"/><path d="M21.5 11.5v2"/><rect x="4" y="10" width="12" height="5" rx="1.2" fill="currentColor" stroke="none"/></svg>
+        </span>
+      </div>
+
+      <!-- ══════════ LOGIN ══════════ -->
+      <sc-if value="{{ isLogin }}" hint-placeholder-val="{{ true }}">
+        <div style="flex:1;display:flex;flex-direction:column;padding:0 26px 30px;overflow:auto;animation:{{ shake }}">
+          <div style="padding:26px 0 22px;display:flex;align-items:center;gap:14px">
+            <div style="width:54px;height:54px;flex:none;border-radius:17px;background:linear-gradient(150deg,#84BAF3,#5A96D6);display:grid;place-items:center;box-shadow:0 12px 26px rgba(90,150,214,.4)">
+              <svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="#18232F" stroke-width="2" stroke-linecap="round"><path d="M4 6v12M8 6v12M11.5 6v12M15.5 6v12M20 6v12"/></svg>
+            </div>
+            <div style="min-width:0">
+              <div style="font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:24px;letter-spacing:.02em;color:#FBFDFF">KITTIKHUN</div>
+              <div style="font-size:12.5px;color:#A4B2C0;margin-top:2px">เข้าสู่ระบบด้วยรหัสพนักงานและ PIN</div>
+            </div>
+          </div>
+
+          <div style="background:rgba(255,255,255,.075);border:1px solid rgba(255,255,255,.13);border-radius:24px;padding:20px;box-shadow:0 18px 40px rgba(0,0,0,.35)">
+            <div style="font-size:12px;font-weight:500;color:#A4B2C0;margin-bottom:8px">รหัสพนักงาน · Employee ID</div>
+            <div style="display:flex;align-items:center;gap:10px;background:rgba(255,255,255,.085);border:1px solid rgba(255,255,255,.15);border-radius:16px;padding:0 14px;height:52px">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#84BAF3" stroke-width="1.8" stroke-linecap="round" style="flex:none"><circle cx="12" cy="8.5" r="3.5"/><path d="M5 20c0-3.6 3.1-5.5 7-5.5s7 1.9 7 5.5"/></svg>
+              <input value="{{ empId }}" onChange="{{ setEmp }}" inputmode="numeric" placeholder="52104" style="flex:1;min-width:0;background:transparent;border:0;outline:none;color:#FBFDFF;font-family:'Space Grotesk',sans-serif;font-size:19px;font-weight:500;letter-spacing:.14em">
+            </div>
+
+            <div style="display:flex;justify-content:space-between;align-items:baseline;margin:20px 0 10px">
+              <span style="font-size:12px;font-weight:500;color:#A4B2C0">รหัส PIN · 6 หลัก</span>
+              <span style="font-family:'Space Grotesk',sans-serif;font-size:12px;color:#8492A0">{{ pinHint }}</span>
+            </div>
+            <div style="display:flex;gap:10px;justify-content:space-between">
+              <sc-for list="{{ pinCells }}" as="c" hint-placeholder-count="6">
+                <div style="flex:1;height:12px;border-radius:6px;background:{{ c.fill }};border:1px solid {{ c.border }}"></div>
+              </sc-for>
+            </div>
+
+            <sc-if value="{{ loginKeypad }}" hint-placeholder-val="{{ true }}">
+              <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin-top:22px">
+                <sc-for list="{{ keys }}" as="k" hint-placeholder-count="12">
+                  <button onClick="{{ k.press }}" style="height:54px;border:1px solid rgba(255,255,255,.11);border-radius:16px;background:rgba(255,255,255,.07);color:#F3F7FB;font-family:'Space Grotesk',sans-serif;font-size:21px;font-weight:500;cursor:pointer;transition:background .14s" style-hover="background:rgba(132,186,243,.16);border-color:rgba(132,186,243,.4)" style-active="background:rgba(132,186,243,.28)">{{ k.label }}</button>
+                </sc-for>
+              </div>
+            </sc-if>
+
+            <button onClick="{{ signIn }}" style="width:100%;margin-top:20px;height:56px;border:0;border-radius:18px;background:linear-gradient(140deg,#95C6F7,#5A96D6);color:#07121B;font-family:'Space Grotesk','IBM Plex Sans Thai',sans-serif;font-size:16px;font-weight:600;letter-spacing:.01em;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:9px;box-shadow:0 14px 30px rgba(90,150,214,.38)" style-hover="filter:brightness(1.07)" style-active="filter:brightness(.94)">
+              เข้าสู่ระบบ
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h13M12.5 6.5 19 12l-6.5 5.5"/></svg>
+            </button>
+            <div style="text-align:center;margin-top:14px;font-size:12.5px;color:{{ loginMsgColor }}">{{ loginMsg }}</div>
+          </div>
+
+          <div style="margin-top:auto;padding-top:24px;display:flex;gap:8px;flex-wrap:wrap;font-family:'Space Grotesk',sans-serif;font-size:11px;color:#8492A0">
+            <span style="padding:5px 11px;border-radius:999px;background:rgba(255,255,255,.085)">WH-BKK-02</span>
+            <span style="padding:5px 11px;border-radius:999px;background:rgba(255,255,255,.085)">v4.0</span>
+            <span style="padding:5px 11px;border-radius:999px;background:rgba(255,255,255,.085)">PIN 000000</span>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ══════════ APP ══════════ -->
+      <sc-if value="{{ signedIn }}" hint-placeholder-val="{{ false }}">
+        <div style="flex:1;display:flex;flex-direction:column;min-height:0">
+
+          <div style="flex:none;padding:8px 22px 16px;display:flex;align-items:center;justify-content:space-between;gap:14px">
+            <div style="min-width:0;display:flex;align-items:center;gap:11px">
+              <div style="width:34px;height:34px;flex:none;border-radius:11px;background:linear-gradient(150deg,#84BAF3,#5A96D6);display:grid;place-items:center">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#18232F" stroke-width="2.2" stroke-linecap="round"><path d="M4 6v12M8 6v12M11.5 6v12M15.5 6v12M20 6v12"/></svg>
+              </div>
+              <div style="min-width:0">
+              <div style="font-size:12px;color:#A4B2C0">{{ headKicker }}</div>
+              <div style="font-family:'Space Grotesk','IBM Plex Sans Thai',sans-serif;font-weight:600;font-size:26px;line-height:1.2;letter-spacing:-.01em;color:#FBFDFF;margin-top:2px">{{ headTitle }}</div>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:10px;flex:none">
+              <div style="text-align:right">
+                <div style="font-size:12px;color:#DCE6F0">{{ meName }}</div>
+                <div style="font-family:'Space Grotesk',sans-serif;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#84BAF3">{{ meRole }}</div>
+              </div>
+              <div style="width:42px;height:42px;border-radius:14px;background:rgba(132,186,243,.16);border:1px solid rgba(132,186,243,.3);display:grid;place-items:center;font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:14px;color:#BBDBFC">{{ meInitials }}</div>
+            </div>
+          </div>
+
+          <!-- ── SCAN ── -->
+          <sc-if value="{{ isScan }}" hint-placeholder-val="{{ true }}">
+            <div style="flex:1;display:flex;flex-direction:column;min-height:0">
+              <div style="flex:{{ camFlex }};min-height:190px;margin:0 18px;position:relative;border-radius:28px;overflow:hidden;background:#121C27;border:1px solid rgba(255,255,255,.13)">
+                <video ref="{{ videoRef }}" playsinline muted style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:{{ videoOpacity }}"></video>
+                <div style="position:absolute;inset:0;background:radial-gradient(circle at 50% 46%,rgba(132,186,243,.2),transparent 62%)"></div>
+                <div style="position:absolute;left:16%;right:16%;top:50%;height:2px;border-radius:2px;background:linear-gradient(90deg,transparent,#A6D2FB,transparent);box-shadow:0 0 22px rgba(166,210,251,.85);animation:sweep 2.2s ease-in-out infinite alternate"></div>
+                <div style="position:absolute;left:14%;right:14%;top:26%;bottom:26%">
+                  <div style="position:absolute;top:0;left:0;width:30px;height:30px;border-top:3px solid #A6D2FB;border-left:3px solid #A6D2FB;border-top-left-radius:14px"></div>
+                  <div style="position:absolute;top:0;right:0;width:30px;height:30px;border-top:3px solid #A6D2FB;border-right:3px solid #A6D2FB;border-top-right-radius:14px"></div>
+                  <div style="position:absolute;bottom:0;left:0;width:30px;height:30px;border-bottom:3px solid #A6D2FB;border-left:3px solid #A6D2FB;border-bottom-left-radius:14px"></div>
+                  <div style="position:absolute;bottom:0;right:0;width:30px;height:30px;border-bottom:3px solid #A6D2FB;border-right:3px solid #A6D2FB;border-bottom-right-radius:14px"></div>
+                </div>
+                <div style="position:absolute;left:16px;top:16px;display:flex;align-items:center;gap:8px;max-width:74%;padding:7px 13px;border-radius:999px;background:rgba(12,20,29,.55);border:1px solid rgba(255,255,255,.16)">
+                  <i style="width:7px;height:7px;border-radius:50%;background:#6FE7AC;display:block;animation:pulse 1.5s infinite"></i>
+                  <span style="font-size:11.5px;color:#E6EEF6;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ camStatus }}</span>
+                </div>
+                <div style="position:absolute;right:14px;bottom:14px;display:flex;flex-direction:column;gap:10px">
+                  <button onClick="{{ toggleCam }}" title="กล้อง" style="width:46px;height:46px;border-radius:16px;background:rgba(12,20,29,.55);border:1px solid rgba(255,255,255,.18);color:#F3F7FB;cursor:pointer;display:grid;place-items:center;animation:{{ camGlow }}" style-hover="background:rgba(132,186,243,.3)">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M4 9.5A2.5 2.5 0 0 1 6.5 7h1L9 5h6l1.5 2h1A2.5 2.5 0 0 1 20 9.5v7A2.5 2.5 0 0 1 17.5 19h-11A2.5 2.5 0 0 1 4 16.5z"/><circle cx="12" cy="13" r="3.4"/></svg>
+                  </button>
+                  <button onClick="{{ goManual }}" title="ค้นหา" style="width:46px;height:46px;border-radius:16px;background:rgba(12,20,29,.55);border:1px solid rgba(255,255,255,.18);color:#F3F7FB;cursor:pointer;display:grid;place-items:center" style-hover="background:rgba(132,186,243,.3)">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4.3-4.3"/></svg>
+                  </button>
+                </div>
+              </div>
+
+              <div style="flex:none;padding:14px 18px 6px;display:flex;align-items:center;justify-content:space-between;gap:10px">
+                <div style="font-size:12.5px;color:#A4B2C0">{{ scanCountLabel }}</div>
+                <div style="display:flex;gap:7px">
+                  <sc-for list="{{ demoCodes }}" as="d" hint-placeholder-count="3">
+                    <button onClick="{{ d.scan }}" title="{{ d.code }}" style="width:34px;height:34px;border-radius:11px;border:1px solid rgba(132,186,243,.35);background:rgba(132,186,243,.12);color:#BBDBFC;font-family:'Space Grotesk',sans-serif;font-size:12px;cursor:pointer;display:grid;place-items:center" style-hover="background:rgba(132,186,243,.26)">{{ d.n }}</button>
+                  </sc-for>
+                  <sc-if value="{{ hasScans }}" hint-placeholder-val="{{ false }}">
+                    <button onClick="{{ clearAll }}" style="height:34px;padding:0 12px;border-radius:11px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.07);color:#DCE6F0;font:inherit;font-size:12px;cursor:pointer" style-hover="background:rgba(255,255,255,.14)">ล้าง</button>
+                  </sc-if>
+                </div>
+              </div>
+
+              <div style="flex:1;min-height:0;overflow:auto;padding:6px 18px 18px;display:flex;flex-direction:column;gap:9px">
+                <sc-for list="{{ scanList }}" as="r" hint-placeholder-count="3">
+                  <div style="border-radius:20px;border:1px solid {{ r.border }};background:linear-gradient(#2A3846,#1E2A36);box-shadow:0 12px 26px rgba(0,0,0,.3);animation:rise .22s cubic-bezier(.22,.9,.24,1)">
+                    <button onClick="{{ r.toggle }}" style="width:100%;text-align:left;display:flex;gap:13px;align-items:center;padding:14px 16px;background:transparent;border:0;cursor:pointer;font:inherit">
+                      <span style="width:8px;height:40px;border-radius:999px;background:{{ r.tone }};flex:none"></span>
+                      <span style="flex:1;min-width:0">
+                        <span style="display:block;font-family:'Space Grotesk',sans-serif;font-size:11px;letter-spacing:.08em;color:#84BAF3">{{ r.sku }} · {{ r.at }}</span>
+                        <span style="display:block;font-family:'Space Grotesk','IBM Plex Sans Thai',sans-serif;font-weight:600;font-size:17px;line-height:1.25;color:#FBFDFF;margin-top:2px">{{ r.name }}</span>
+                        <span style="font-size:11.5px;color:#8492A0">{{ r.status }} · {{ r.loc }}</span>
+                      </span>
+                      <span style="text-align:right;flex:none">
+                        <span style="display:block;font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:30px;line-height:.95;letter-spacing:-.02em;color:{{ r.tone }}">{{ r.onHand }}</span>
+                        <span style="font-size:10.5px;color:#8492A0">{{ r.unit }} คงเหลือ</span>
+                      </span>
+                    </button>
+                    <sc-if value="{{ r.expanded }}" hint-placeholder-val="{{ false }}">
+                      <div style="padding:0 16px 16px">
+                        <div style="height:8px;border-radius:999px;background:rgba(255,255,255,.11);overflow:hidden"><div style="height:100%;border-radius:999px;width:{{ r.bar }};background:{{ r.tone }}"></div></div>
+                        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin-top:14px">
+                          <div style="background:rgba(255,255,255,.075);border:1px solid rgba(255,255,255,.10);border-radius:16px;padding:11px">
+                            <div style="font-size:10.5px;color:#A4B2C0">จอง</div>
+                            <div style="font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:18px;color:#F3F7FB;margin-top:2px">{{ r.reserved }}</div>
+                          </div>
+                          <div style="background:rgba(255,255,255,.075);border:1px solid rgba(255,255,255,.10);border-radius:16px;padding:11px">
+                            <div style="font-size:10.5px;color:#A4B2C0">พร้อมขาย</div>
+                            <div style="font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:18px;color:#F3F7FB;margin-top:2px">{{ r.free }}</div>
+                          </div>
+                          <div style="background:rgba(255,255,255,.075);border:1px solid rgba(255,255,255,.10);border-radius:16px;padding:11px">
+                            <div style="font-size:10.5px;color:#A4B2C0">จุดสั่งซื้อ</div>
+                            <div style="font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:18px;color:#F3F7FB;margin-top:2px">{{ r.rop }}</div>
+                          </div>
+                        </div>
+                        <sc-if value="{{ cardSpec }}" hint-placeholder-val="{{ true }}">
+                          <div style="margin-top:14px">
+                            <sc-for list="{{ r.specs }}" as="s" hint-placeholder-count="3">
+                              <div style="display:flex;justify-content:space-between;gap:14px;padding:9px 0;border-bottom:1px solid rgba(255,255,255,.10);font-size:13px">
+                                <span style="color:#A4B2C0">{{ s.k }}</span><span style="color:#E6EEF6;text-align:right">{{ s.v }}</span>
+                              </div>
+                            </sc-for>
+                          </div>
+                        </sc-if>
+                        <div style="display:flex;gap:10px;margin-top:16px">
+                          <button onClick="{{ goCount }}" style="flex:1;height:48px;border:0;border-radius:16px;background:linear-gradient(140deg,#95C6F7,#5A96D6);color:#07121B;font-family:'Space Grotesk','IBM Plex Sans Thai',sans-serif;font-weight:600;font-size:15px;cursor:pointer" style-hover="filter:brightness(1.07)">นับสต็อกรายการนี้</button>
+                          <button onClick="{{ r.remove }}" style="flex:none;min-width:96px;height:48px;border:1px solid rgba(255,255,255,.18);border-radius:16px;background:rgba(255,255,255,.07);color:#F3F7FB;font-family:'Space Grotesk','IBM Plex Sans Thai',sans-serif;font-weight:600;font-size:15px;cursor:pointer" style-hover="background:rgba(255,255,255,.15)">นำออก</button>
+                        </div>
+                        <div style="margin-top:10px;font-size:11.5px;color:#8492A0">{{ r.nameEn }} · อัปเดต {{ r.updated }}</div>
+                      </div>
+                    </sc-if>
+                  </div>
+                </sc-for>
+
+                <sc-if value="{{ noScans }}" hint-placeholder-val="{{ true }}">
+                  <div style="padding:4px 2px">
+                    <div style="font-size:15px;line-height:1.55;color:#DCE6F0;max-width:290px">สแกนต่อเนื่องได้เรื่อย ๆ ทุกรายการที่อ่านได้จะเรียงไว้ด้านล่างพร้อมยอดคงเหลือ</div>
+                    <div style="font-size:12.5px;color:#8492A0;margin-top:5px">แตะรายการเพื่อดูรายละเอียดเพิ่ม</div>
+                  </div>
+                </sc-if>
+              </div>
+
+            </div>
+          </sc-if>
+
+          <!-- ── SEARCH ── -->
+          <sc-if value="{{ isSearch }}" hint-placeholder-val="{{ true }}">
+            <div style="flex:1;display:flex;flex-direction:column;min-height:0">
+              <div style="flex:none;padding:0 18px">
+                <div style="display:flex;align-items:center;gap:11px;height:52px;padding:0 16px;border-radius:18px;background:rgba(255,255,255,.085);border:1px solid rgba(255,255,255,.15)">
+                  <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="#84BAF3" stroke-width="1.8" stroke-linecap="round" style="flex:none"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4.3-4.3"/></svg>
+                  <input value="{{ query }}" onChange="{{ setQuery }}" placeholder="ชื่อสินค้า / SKU / บาร์โค้ด" style="flex:1;min-width:0;background:transparent;border:0;outline:none;color:#FBFDFF;font:inherit;font-size:15px">
+                </div>
+                <div style="font-size:12px;color:#8492A0;margin:12px 2px 4px">{{ resultCount }} รายการ</div>
+              </div>
+              <div style="flex:1;min-height:0;overflow:auto;padding:6px 18px 18px;display:flex;flex-direction:column;gap:10px">
+                <sc-for list="{{ results }}" as="r" hint-placeholder-count="5">
+                  <button onClick="{{ r.open }}" style="width:100%;text-align:left;display:flex;gap:13px;align-items:center;padding:15px;border-radius:20px;border:1px solid rgba(255,255,255,.11);background:linear-gradient(#2A3846,#212D3A);cursor:pointer;font:inherit;box-shadow:0 10px 24px rgba(0,0,0,.28)" style-hover="border-color:rgba(132,186,243,.4)">
+                    <span style="width:8px;height:38px;border-radius:999px;background:{{ r.statusDot }};flex:none"></span>
+                    <span style="flex:1;min-width:0">
+                      <span style="display:block;font-family:'Space Grotesk',sans-serif;font-size:11px;letter-spacing:.08em;color:#84BAF3">{{ r.sku }} · {{ r.loc }}</span>
+                      <span style="display:block;font-family:'Space Grotesk','IBM Plex Sans Thai',sans-serif;font-weight:600;font-size:17px;line-height:1.25;color:#FBFDFF;margin-top:2px">{{ r.name }}</span>
+                      <span style="font-size:11.5px;color:#8492A0">{{ r.nameEn }}</span>
+                    </span>
+                    <span style="text-align:right;flex:none">
+                      <span style="display:block;font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:24px;line-height:1;color:{{ r.qtyColor }}">{{ r.onHand }}</span>
+                      <span style="font-size:10.5px;color:#8492A0">{{ r.unit }}</span>
+                    </span>
+                  </button>
+                </sc-for>
+                <sc-if value="{{ noResults }}" hint-placeholder-val="{{ false }}">
+                  <div style="padding:44px 0;text-align:center;font-size:13.5px;color:#8492A0">ไม่พบสินค้าที่ตรงกับคำค้น<br>No matching items</div>
+                </sc-if>
+              </div>
+            </div>
+          </sc-if>
+
+          <!-- ── COUNT ── -->
+          <sc-if value="{{ isCount }}" hint-placeholder-val="{{ true }}">
+            <div style="flex:1;display:flex;flex-direction:column;min-height:0">
+              <div style="flex:none;padding:0 18px">
+                <div style="border-radius:20px;border:1px solid rgba(255,255,255,.11);background:rgba(255,255,255,.075);padding:16px">
+                  <div style="display:flex;justify-content:space-between;align-items:baseline">
+                    <span style="font-size:12.5px;color:#DCE6F0">โซน A · CC-2408</span>
+                    <span style="font-family:'Space Grotesk',sans-serif;font-size:12.5px;color:#84BAF3">{{ countedLabel }}</span>
+                  </div>
+                  <div style="height:8px;border-radius:999px;background:rgba(255,255,255,.11);margin-top:12px;overflow:hidden"><div style="height:100%;border-radius:999px;background:linear-gradient(90deg,#95C6F7,#6FE7AC);width:{{ countProgress }}"></div></div>
+                </div>
+              </div>
+              <div style="flex:1;min-height:0;overflow:auto;padding:12px 18px 8px;display:flex;flex-direction:column;gap:10px">
+                <sc-for list="{{ countRows }}" as="c" hint-placeholder-count="4">
+                  <div style="border-radius:20px;border:1px solid rgba(255,255,255,.11);background:linear-gradient(#2A3846,#212D3A);padding:16px;box-shadow:0 10px 24px rgba(0,0,0,.26)">
+                    <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">
+                      <div style="min-width:0">
+                        <div style="font-family:'Space Grotesk',sans-serif;font-size:11px;letter-spacing:.08em;color:#84BAF3">{{ c.sku }} · {{ c.loc }}</div>
+                        <div style="font-family:'Space Grotesk','IBM Plex Sans Thai',sans-serif;font-weight:600;font-size:17px;line-height:1.25;color:#FBFDFF;margin-top:2px">{{ c.name }}</div>
+                      </div>
+                      <div style="text-align:right;flex:none">
+                        <div style="font-size:10.5px;color:#8492A0">ระบบ</div>
+                        <div style="font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:18px;color:#DCE6F0">{{ c.onHand }}</div>
+                      </div>
+                    </div>
+                    <div style="display:flex;gap:10px;align-items:center;margin-top:14px">
+                      <button onClick="{{ c.dec }}" style="width:44px;height:44px;border-radius:14px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.07);color:#F3F7FB;font-size:20px;cursor:pointer" style-hover="background:rgba(255,255,255,.16)">−</button>
+                      <input value="{{ c.value }}" onChange="{{ c.set }}" inputmode="numeric" placeholder="นับได้" style="width:88px;height:44px;border-radius:14px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.10);color:#FBFDFF;text-align:center;font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:18px;outline:none" style-focus="border-color:#84BAF3">
+                      <button onClick="{{ c.inc }}" style="width:44px;height:44px;border-radius:14px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.07);color:#F3F7FB;font-size:20px;cursor:pointer" style-hover="background:rgba(255,255,255,.16)">+</button>
+                      <span style="margin-left:auto;text-align:right;font-size:12px;padding:6px 11px;border-radius:999px;background:{{ c.varBg }};color:{{ c.varColor }}">{{ c.varLabel }}</span>
+                    </div>
+                  </div>
+                </sc-for>
+              </div>
+              <div style="flex:none;padding:10px 18px 14px">
+                <button onClick="{{ submitCount }}" style="width:100%;height:54px;border:0;border-radius:18px;background:linear-gradient(140deg,#95C6F7,#5A96D6);color:#07121B;font-family:'Space Grotesk','IBM Plex Sans Thai',sans-serif;font-weight:600;font-size:16px;cursor:pointer;box-shadow:0 14px 30px rgba(90,150,214,.34)" style-hover="filter:brightness(1.07)">ส่งผลการนับ</button>
+              </div>
+            </div>
+          </sc-if>
+
+          <!-- ── TEAM ── -->
+          <sc-if value="{{ isTeam }}" hint-placeholder-val="{{ true }}">
+            <div style="flex:1;display:flex;flex-direction:column;min-height:0">
+              <div style="flex:1;min-height:0;overflow:auto;padding:0 18px 8px;display:flex;flex-direction:column;gap:10px">
+                <sc-for list="{{ members }}" as="m" hint-placeholder-count="4">
+                  <div style="display:flex;gap:13px;align-items:center;padding:14px 15px;border-radius:20px;border:1px solid rgba(255,255,255,.11);background:linear-gradient(#2A3846,#212D3A)">
+                    <div style="width:44px;height:44px;flex:none;border-radius:15px;background:{{ m.avatarBg }};display:grid;place-items:center;font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:15px;color:{{ m.avatarFg }}">{{ m.initials }}</div>
+                    <div style="flex:1;min-width:0">
+                      <div style="font-family:'Space Grotesk','IBM Plex Sans Thai',sans-serif;font-weight:600;font-size:17px;line-height:1.25;color:#FBFDFF">{{ m.name }}</div>
+                      <div style="font-size:11.5px;color:#8492A0">{{ m.empId }} · {{ m.shift }}</div>
+                    </div>
+                    <button onClick="{{ m.cycle }}" style="flex:none;padding:7px 13px;border-radius:999px;border:1px solid {{ m.roleBorder }};background:{{ m.roleBg }};color:{{ m.roleFg }};font-family:'Space Grotesk',sans-serif;font-size:11px;font-weight:600;letter-spacing:.1em;cursor:pointer" style-hover="filter:brightness(1.15)">{{ m.roleLabel }}</button>
+                  </div>
+                </sc-for>
+                <div style="font-size:11.5px;line-height:1.6;color:#8492A0;padding:6px 4px 0">แตะที่สิทธิ์เพื่อสลับ admin / staff / viewer (เฉพาะผู้ดูแล)</div>
+              </div>
+              <div style="flex:none;padding:12px 18px 14px;display:flex;gap:10px">
+                <button onClick="{{ openAdd }}" style="flex:1;height:52px;border:0;border-radius:17px;background:linear-gradient(140deg,#95C6F7,#5A96D6);color:#07121B;font-family:'Space Grotesk','IBM Plex Sans Thai',sans-serif;font-weight:600;font-size:15px;cursor:pointer;box-shadow:0 12px 26px rgba(90,150,214,.32)" style-hover="filter:brightness(1.07)">เพิ่มสมาชิก</button>
+                <button onClick="{{ signOut }}" style="flex:none;min-width:118px;height:52px;border:1px solid rgba(255,255,255,.18);border-radius:17px;background:rgba(255,255,255,.07);color:#F3F7FB;font-family:'Space Grotesk','IBM Plex Sans Thai',sans-serif;font-weight:600;font-size:15px;cursor:pointer" style-hover="background:rgba(255,255,255,.15)">ออกจากระบบ</button>
+              </div>
+            </div>
+          </sc-if>
+
+          <div style="flex:none;padding:6px 18px 16px">
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px;padding:7px;border-radius:24px;background:rgba(255,255,255,.09);border:1px solid rgba(255,255,255,.13);box-shadow:0 -6px 26px rgba(0,0,0,.35)">
+              <button onClick="{{ tabScan }}" style="height:56px;border:0;border-radius:18px;background:{{ bScan }};cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;font:inherit;font-size:10.5px;color:{{ tScan }}">
+                <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M3 8V6.5A2.5 2.5 0 0 1 5.5 4H7M17 4h1.5A2.5 2.5 0 0 1 21 6.5V8M21 16v1.5A2.5 2.5 0 0 1 18.5 20H17M7 20H5.5A2.5 2.5 0 0 1 3 17.5V16M3 12h18"/></svg>
+                สแกน
+              </button>
+              <button onClick="{{ tabSearch }}" style="height:56px;border:0;border-radius:18px;background:{{ bSearch }};cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;font:inherit;font-size:10.5px;color:{{ tSearch }}">
+                <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4.3-4.3"/></svg>
+                ค้นหา
+              </button>
+              <button onClick="{{ tabCount }}" style="height:56px;border:0;border-radius:18px;background:{{ bCount }};cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;font:inherit;font-size:10.5px;color:{{ tCount }}">
+                <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="5" y="4" width="14" height="17" rx="3"/><path d="M9.5 3.5h5M9 11h6M9 15h4"/></svg>
+                นับสต็อก
+              </button>
+              <button onClick="{{ tabTeam }}" style="height:56px;border:0;border-radius:18px;background:{{ bTeam }};cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;font:inherit;font-size:10.5px;color:{{ tTeam }}">
+                <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="9" cy="8" r="3.4"/><path d="M3 20c0-3.4 2.8-5.6 6-5.6s6 2.2 6 5.6M16 6.6a3 3 0 0 1 0 5.8M18.5 20c0-2.5-.9-4-2.2-4.8"/></svg>
+                สมาชิก
+              </button>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ addOpen }}" hint-placeholder-val="{{ false }}">
+        <div style="position:absolute;inset:0;display:flex;align-items:flex-end;padding:16px;background:rgba(10,17,25,.62)">
+          <div style="width:100%;background:linear-gradient(#28374A,#1E2A36);border:1px solid rgba(255,255,255,.15);border-radius:28px;padding:22px;display:flex;flex-direction:column;gap:16px;box-shadow:0 30px 60px rgba(0,0,0,.5);animation:rise .24s cubic-bezier(.22,.9,.24,1)">
+            <div style="width:42px;height:4px;border-radius:999px;background:rgba(255,255,255,.26);margin:0 auto"></div>
+            <div>
+              <div style="font-family:'Space Grotesk','IBM Plex Sans Thai',sans-serif;font-weight:600;font-size:23px;color:#FBFDFF">เพิ่มสมาชิกใหม่</div>
+              <div style="font-size:12.5px;color:#A4B2C0;margin-top:2px">กำหนดชื่อ รหัสพนักงาน และสิทธิ์การใช้งาน</div>
+            </div>
+            <div>
+              <div style="font-size:12px;color:#A4B2C0;margin-bottom:7px">ชื่อ-สกุล</div>
+              <input value="{{ newName }}" onChange="{{ setNewName }}" placeholder="ชื่อพนักงาน" style="width:100%;height:50px;border-radius:16px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.085);color:#FBFDFF;font:inherit;font-size:15px;padding:0 14px;outline:none" style-focus="border-color:#84BAF3">
+            </div>
+            <div>
+              <div style="font-size:12px;color:#A4B2C0;margin-bottom:7px">รหัสพนักงาน</div>
+              <input value="{{ newId }}" onChange="{{ setNewId }}" inputmode="numeric" placeholder="52xxx" style="width:100%;height:50px;border-radius:16px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.085);color:#FBFDFF;font-family:'Space Grotesk',sans-serif;font-size:16px;letter-spacing:.12em;padding:0 14px;outline:none" style-focus="border-color:#84BAF3">
+            </div>
+            <div>
+              <div style="font-size:12px;color:#A4B2C0;margin-bottom:7px">สิทธิ์</div>
+              <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
+                <sc-for list="{{ roleOpts }}" as="o" hint-placeholder-count="3">
+                  <button onClick="{{ o.pick }}" style="height:46px;border-radius:15px;border:1px solid {{ o.border }};background:{{ o.bg }};color:{{ o.fg }};font-family:'Space Grotesk',sans-serif;font-size:12px;font-weight:600;letter-spacing:.08em;cursor:pointer">{{ o.label }}</button>
+                </sc-for>
+              </div>
+            </div>
+            <div style="display:flex;gap:10px;margin-top:4px">
+              <button onClick="{{ closeAdd }}" style="flex:none;min-width:106px;height:50px;border:1px solid rgba(255,255,255,.18);border-radius:16px;background:rgba(255,255,255,.07);color:#F3F7FB;font-family:'Space Grotesk','IBM Plex Sans Thai',sans-serif;font-weight:600;font-size:15px;cursor:pointer" style-hover="background:rgba(255,255,255,.15)">ยกเลิก</button>
+              <button onClick="{{ addMember }}" style="flex:1;height:50px;border:0;border-radius:16px;background:linear-gradient(140deg,#95C6F7,#5A96D6);color:#07121B;font-family:'Space Grotesk','IBM Plex Sans Thai',sans-serif;font-weight:600;font-size:15px;cursor:pointer" style-hover="filter:brightness(1.07)">บันทึก</button>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ toast }}" hint-placeholder-val="{{ false }}">
+        <div style="position:absolute;left:20px;right:20px;bottom:96px;display:flex;align-items:center;gap:10px;padding:13px 16px;border-radius:18px;background:rgba(34,48,63,.96);border:1px solid rgba(255,255,255,.16);box-shadow:0 18px 40px rgba(0,0,0,.5);font-size:13px;color:#F3F7FB;animation:rise .2s ease-out">
+          <i style="width:8px;height:8px;border-radius:50%;background:#84BAF3;flex:none;display:block"></i>{{ toast }}
+        </div>
+      </sc-if>
+    </div>
+  </div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:720,&quot;height&quot;:940},&quot;loginLayout&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;keypad&quot;,&quot;form&quot;],&quot;default&quot;:&quot;keypad&quot;,&quot;tsType&quot;:&quot;'keypad'|'form'&quot;,&quot;section&quot;:&quot;Layout variants&quot;},&quot;scanLayout&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;sheet&quot;,&quot;split&quot;],&quot;default&quot;:&quot;sheet&quot;,&quot;tsType&quot;:&quot;'sheet'|'split'&quot;,&quot;section&quot;:&quot;Layout variants&quot;},&quot;itemCard&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;spec&quot;,&quot;compact&quot;],&quot;default&quot;:&quot;spec&quot;,&quot;tsType&quot;:&quot;'spec'|'compact'&quot;,&quot;section&quot;:&quot;Layout variants&quot;}}">
+const ITEMS = [
+  {barcode:'8851234567890', sku:'SKU-40128', name:'สลักเกลียวหัวหกเหลี่ยม M12', nameEn:'Hex bolt M12 × 60 mm, zinc', loc:'A-04-12', onHand:1240, reserved:180, rop:400, unit:'ชิ้น', updated:'วันนี้ 09:42',
+   specs:[{k:'ผู้ผลิต · Vendor',v:'Siam Fastener Co.'},{k:'ล็อต · Lot',v:'LOT-24C-118'},{k:'นับครั้งล่าสุด · Last count',v:'12 ส.ค. 2569'}]},
+  {barcode:'8859900112233', sku:'SKU-77340', name:'เทปพันสายไฟ PVC 19 มม.', nameEn:'PVC insulation tape 19 mm', loc:'C-01-08', onHand:86, reserved:60, rop:120, unit:'ม้วน', updated:'วันนี้ 08:15',
+   specs:[{k:'ผู้ผลิต · Vendor',v:'Thai Poly Tape'},{k:'ล็อต · Lot',v:'LOT-24A-902'},{k:'นับครั้งล่าสุด · Last count',v:'02 ส.ค. 2569'}]},
+  {barcode:'8850001456712', sku:'SKU-11902', name:'ถุงมือหนังนิรภัย เบอร์ 9', nameEn:'Leather safety gloves, size 9', loc:'B-07-03', onHand:0, reserved:0, rop:50, unit:'คู่', updated:'เมื่อวาน 17:20',
+   specs:[{k:'ผู้ผลิต · Vendor',v:'Protex Industrial'},{k:'ล็อต · Lot',v:'—'},{k:'นับครั้งล่าสุด · Last count',v:'28 ก.ค. 2569'}]},
+  {barcode:'8851777090412', sku:'SKU-63015', name:'น้ำมันหล่อลื่นเกียร์ 20 ลิตร', nameEn:'Gear oil, 20 L drum', loc:'D-02-01', onHand:34, reserved:6, rop:10, unit:'ถัง', updated:'วันนี้ 07:55',
+   specs:[{k:'ผู้ผลิต · Vendor',v:'PTT Lubricants'},{k:'ล็อต · Lot',v:'LOT-24B-441'},{k:'นับครั้งล่าสุด · Last count',v:'09 ส.ค. 2569'}]},
+  {barcode:'8853344556677', sku:'SKU-20887', name:'แผ่นตัดเหล็ก 4 นิ้ว', nameEn:'Steel cutting disc 4"', loc:'A-09-05', onHand:512, reserved:24, rop:150, unit:'แผ่น', updated:'วันนี้ 09:10',
+   specs:[{k:'ผู้ผลิต · Vendor',v:'Nippon Abrasive'},{k:'ล็อต · Lot',v:'LOT-24C-077'},{k:'นับครั้งล่าสุด · Last count',v:'05 ส.ค. 2569'}]}
+];
+
+const OK = '#6FE7AC', WARN = '#FFBA5C', BAD = '#FF8377', BLUE = '#84BAF3';
+
+const ROLES = [
+  {id:'admin',  label:'ADMIN',  bg:'rgba(132,186,243,.18)', fg:'#BBDBFC', border:'rgba(132,186,243,.45)', avatarBg:'rgba(132,186,243,.18)', avatarFg:'#BBDBFC'},
+  {id:'staff',  label:'STAFF',  bg:'rgba(111,231,172,.16)',  fg:'#A6F0C8', border:'rgba(111,231,172,.4)',   avatarBg:'rgba(111,231,172,.16)', avatarFg:'#A6F0C8'},
+  {id:'viewer', label:'VIEWER', bg:'rgba(255,255,255,.10)', fg:'#A4B2C0', border:'rgba(255,255,255,.18)', avatarBg:'rgba(255,255,255,.11)', avatarFg:'#A4B2C0'}
+];
+
+const HEADS = {
+  scan:   {kicker:'คลัง WH-BKK-02', title:'สแกนบาร์โค้ด'},
+  search: {kicker:'คลัง WH-BKK-02', title:'ค้นหาสินค้า'},
+  count:  {kicker:'รอบตรวจนับ CC-2408', title:'นับสต็อก'},
+  team:   {kicker:'คลัง WH-BKK-02', title:'สมาชิกและสิทธิ์'}
+};
+
+const PIN = '000000';
+
+class Component extends DCLogic {
+  state = {
+    screen:'login', empId:'52104', pin:'', err:false, loginMsg:'ใช้ PIN 000000 สำหรับตัวอย่างนี้',
+    scans:[], expanded:null, camOn:false, camStatus:'กล้องปิดอยู่ · แตะไอคอนกล้อง', detectSupported:true,
+    query:'', counts:{}, toast:null, history:[], clock:'09:41',
+    addOpen:false, newName:'', newId:'', newRole:'staff',
+    members:[
+      {name:'Kittikhun S.', empId:'52104', shift:'กะเช้า · A', role:'admin'},
+      {name:'ปิยะนุช ศรีทอง', empId:'52210', shift:'กะเช้า · A', role:'staff'},
+      {name:'ธนากร แสงทวี', empId:'52318', shift:'กะบ่าย · B', role:'staff'},
+      {name:'Nattaporn K.', empId:'52402', shift:'สำนักงาน', role:'viewer'}
+    ]
+  };
+
+  videoRef = React.createRef();
+
+  componentDidMount() { this.tick(); this._clock = setInterval(() => this.tick(), 20000); }
+  componentWillUnmount() { clearInterval(this._clock); clearTimeout(this._t); this.stopCamera(); }
+  tick() {
+    const d = new Date();
+    this.setState({clock: String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0')});
+  }
+  flash(msg) { clearTimeout(this._t); this.setState({toast:msg}); this._t = setTimeout(() => this.setState({toast:null}), 2400); }
+  buzz() { if (navigator.vibrate) navigator.vibrate(35); }
+
+  async startCamera() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}}});
+      this._stream = stream;
+      this.setState({camOn:true, camStatus:'กำลังค้นหาบาร์โค้ด · scanning'});
+      requestAnimationFrame(() => {
+        const v = this.videoRef.current;
+        if (v) { v.srcObject = stream; v.play().catch(() => {}); }
+      });
+      this.startDetect();
+    } catch (e) {
+      this.setState({camOn:false, camStatus:'เปิดกล้องไม่ได้ · ใช้ปุ่มจำลอง'});
+      this.flash('ไม่ได้รับอนุญาตใช้กล้อง · camera blocked');
+    }
+  }
+  startDetect() {
+    const Det = window.BarcodeDetector;
+    if (!Det) { this.setState({detectSupported:false, camStatus:'เบราว์เซอร์นี้อ่านบาร์โค้ดไม่ได้ · ใช้ปุ่มจำลอง'}); return; }
+    const det = new Det({formats:['ean_13','code_128','qr_code','ean_8','code_39']});
+    clearInterval(this._detect);
+    this._detect = setInterval(async () => {
+      const v = this.videoRef.current;
+      if (!v || v.readyState < 2) return;
+      try { const codes = await det.detect(v); if (codes && codes.length) this.resolveCode(codes[0].rawValue); } catch (e) {}
+    }, 450);
+  }
+  stopCamera() {
+    clearInterval(this._detect);
+    if (this._stream) { this._stream.getTracks().forEach(t => t.stop()); this._stream = null; }
+    const v = this.videoRef.current;
+    if (v) v.srcObject = null;
+  }
+  addScan(it, note) {
+    const at = new Date();
+    const stamp = String(at.getHours()).padStart(2,'0') + ':' + String(at.getMinutes()).padStart(2,'0');
+    this.setState(st => ({
+      camStatus: (note || 'พบสินค้า') + ' · ' + it.sku,
+      scans: [{sku:it.sku, at:stamp}, ...st.scans.filter(x => x.sku !== it.sku)]
+    }));
+  }
+  resolveCode(code) {
+    const it = ITEMS.find(i => i.barcode === code);
+    this.buzz();
+    if (!it) { this.setState({camStatus:'ไม่พบรหัส ' + code}); this.flash('ไม่พบบาร์โค้ดนี้ในคลัง · not found'); return; }
+    this.addScan(it);
+  }
+  tone(i) { return i.onHand === 0 ? BAD : (i.onHand <= i.rop ? WARN : OK); }
+
+  renderVals() {
+    const s = this.state;
+    const me = s.members.find(m => m.empId === s.empId) || s.members[0];
+    const canWrite = me.role !== 'viewer';
+    const head = HEADS[s.screen] || HEADS.scan;
+    const meParts = me.name.trim().split(' ');
+
+    const scanList = s.scans.map(rec => {
+      const i = ITEMS.find(x => x.sku === rec.sku);
+      const tone = this.tone(i);
+      const open = s.expanded === rec.sku;
+      return {
+        sku:i.sku, name:i.name, nameEn:i.nameEn, loc:i.loc, unit:i.unit, updated:i.updated, specs:i.specs, at:rec.at,
+        onHand: i.onHand.toLocaleString(),
+        reserved: i.reserved.toLocaleString(),
+        free: (i.onHand - i.reserved).toLocaleString(),
+        rop: i.rop.toLocaleString(),
+        bar: Math.max(3, Math.min(100, Math.round(i.onHand / (i.rop * 3) * 100))) + '%',
+        tone,
+        status: i.onHand === 0 ? 'หมดสต็อก' : (i.onHand <= i.rop ? 'ใกล้หมด' : 'พร้อมจ่าย'),
+        border: open ? 'rgba(132,186,243,.45)' : 'rgba(255,255,255,.13)',
+        expanded: open,
+        toggle: () => this.setState(st => ({expanded: st.expanded === rec.sku ? null : rec.sku})),
+        remove: () => this.setState(st => ({scans: st.scans.filter(x => x.sku !== rec.sku), expanded:null}))
+      };
+    });
+
+    const q = s.query.trim().toLowerCase();
+    const results = ITEMS.filter(i => !q || (i.name + i.nameEn + i.sku + i.barcode).toLowerCase().includes(q))
+      .map(i => ({...i, onHand: i.onHand.toLocaleString(), qtyColor: this.tone(i), statusDot: this.tone(i),
+        open: () => { this.addScan(i, 'เลือกจากการค้นหา'); this.setState({screen:'scan', expanded:i.sku}); }}));
+
+    const setCount = (sku, v) => this.setState(st => ({counts:{...st.counts, [sku]: v}}));
+    const countRows = ITEMS.slice(0,4).map(i => {
+      const v = s.counts[i.sku] ?? '';
+      const diff = v === '' ? null : Number(v) - i.onHand;
+      return {
+        sku:i.sku, loc:i.loc, name:i.name, onHand:i.onHand.toLocaleString(), value:v,
+        varLabel: diff === null ? 'ยังไม่ได้นับ' : (diff === 0 ? 'ตรงกับระบบ' : (diff > 0 ? 'เกิน +' + diff : 'ขาด ' + diff)),
+        varColor: diff === null ? '#A4B2C0' : (diff === 0 ? OK : WARN),
+        varBg: diff === null ? 'rgba(255,255,255,.10)' : (diff === 0 ? 'rgba(111,231,172,.14)' : 'rgba(255,186,92,.14)'),
+        set: e => setCount(i.sku, e.target.value.replace(/[^0-9]/g,'')),
+        inc: () => setCount(i.sku, String((Number(v) || 0) + 1)),
+        dec: () => setCount(i.sku, String(Math.max(0, (Number(v) || 0) - 1)))
+      };
+    });
+    const done = countRows.filter(r => r.value !== '').length;
+
+    const keys = ['1','2','3','4','5','6','7','8','9','C','0','⌫'].map(k => ({
+      label:k,
+      press: () => this.setState(st => k === 'C' ? {pin:'', err:false}
+        : k === '⌫' ? {pin: st.pin.slice(0,-1), err:false}
+        : {pin: (st.pin + k).slice(0,6), err:false})
+    }));
+
+    const tabFg = n => s.screen === n ? '#07121B' : '#A4B2C0';
+    const tabBg = n => s.screen === n ? 'linear-gradient(140deg,#A2CEF9,#6EA8E8)' : 'transparent';
+    const go = n => () => this.setState({screen:n});
+
+    return {
+      clock: s.clock,
+      isLogin: s.screen === 'login', signedIn: s.screen !== 'login',
+      isScan: s.screen === 'scan', isSearch: s.screen === 'search',
+      isCount: s.screen === 'count', isTeam: s.screen === 'team',
+      headKicker: head.kicker, headTitle: head.title,
+      meName: me.name, meRole: me.role, meInitials: (meParts[0] || ' ').charAt(0) + (meParts[1] || ' ').charAt(0),
+
+      loginKeypad: (this.props.loginLayout ?? 'keypad') === 'keypad',
+      cardSpec: (this.props.itemCard ?? 'spec') === 'spec',
+      camFlex: (this.props.scanLayout ?? 'sheet') === 'split' ? '0 0 250px' : (s.scans.length ? '0 0 186px' : '1 1 auto'),
+      scanList, hasScans: s.scans.length > 0, noScans: s.scans.length === 0,
+      scanCountLabel: s.scans.length ? 'สแกนแล้ว ' + s.scans.length + ' รายการ' : 'ยังไม่มีรายการที่สแกน',
+      clearAll: () => this.setState({scans:[], expanded:null}),
+      shake: s.err ? 'nudge .3s ease-in-out' : 'none',
+      camGlow: s.camOn ? 'none' : 'glow 2.4s ease-out infinite',
+      loginMsg: s.loginMsg,
+      loginMsgColor: s.err ? BAD : '#8492A0',
+      empId: s.empId, setEmp: e => this.setState({empId: e.target.value.replace(/[^0-9]/g,'').slice(0,6), err:false}),
+      pinCells: Array.from({length:6}, (_, i) => ({
+        fill: i < s.pin.length ? BLUE : 'transparent',
+        border: s.err ? 'rgba(255,131,119,.7)' : 'rgba(255,255,255,.2)'
+      })),
+      pinHint: s.pin.length + '/6',
+      keys,
+      signIn: () => {
+        const found = s.members.find(m => m.empId === s.empId);
+        if (!found) { this.setState({err:true, loginMsg:'ไม่พบรหัสพนักงานนี้ · unknown employee ID'}); return; }
+        if (s.pin && s.pin !== PIN) { this.setState({err:true, pin:'', loginMsg:'PIN ไม่ถูกต้อง ลองอีกครั้ง'}); return; }
+        this.setState({screen:'scan', pin:'', err:false, loginMsg:'ใช้ PIN 000000 สำหรับตัวอย่างนี้'});
+      },
+      signOut: () => { this.stopCamera(); this.setState({screen:'login', pin:'', scans:[], expanded:null, camOn:false, camStatus:'กล้องปิดอยู่ · แตะไอคอนกล้อง'}); },
+
+      videoRef: this.videoRef,
+      videoOpacity: s.camOn ? 1 : 0,
+      camStatus: s.camStatus,
+      toggleCam: () => { if (s.camOn) { this.stopCamera(); this.setState({camOn:false, camStatus:'กล้องปิดอยู่ · camera off'}); } else this.startCamera(); },
+      simLabel: s.camOn && s.detectSupported ? 'หรือจำลองการสแกน' : 'จำลองการสแกน · simulate a scan',
+      demoCodes: ITEMS.slice(0,3).map((i, n) => ({code:i.barcode, n: String(n + 1), scan: () => this.resolveCode(i.barcode)})),
+
+      permNote: canWrite ? 'สิทธิ์ ' + me.role : 'ดูอย่างเดียว · read-only',
+      goCount: () => canWrite ? this.setState({screen:'count'}) : this.flash('สิทธิ์ viewer นับสต็อกไม่ได้'),
+      goManual: go('search'),
+
+      query: s.query, setQuery: e => this.setState({query:e.target.value}),
+      results, resultCount: results.length, noResults: results.length === 0,
+
+      countRows, countedLabel:'นับแล้ว ' + done + '/' + countRows.length,
+      countProgress: Math.round(done / countRows.length * 100) + '%',
+      submitCount: () => done === 0 ? this.flash('ยังไม่มีรายการที่นับ') : this.flash('ส่งผลการนับ ' + done + ' รายการแล้ว'),
+
+      members: s.members.map((m, idx) => {
+        const r = ROLES.find(x => x.id === m.role);
+        const parts = m.name.trim().split(' ');
+        return {
+          name:m.name, empId:m.empId, shift:m.shift,
+          initials: (parts[0] || ' ').charAt(0) + (parts[1] || ' ').charAt(0),
+          roleLabel:r.label, roleBg:r.bg, roleFg:r.fg, roleBorder:r.border,
+          avatarBg:r.avatarBg, avatarFg:r.avatarFg,
+          cycle: () => {
+            if (me.role !== 'admin') return this.flash('ต้องมีสิทธิ์ผู้ดูแลเพื่อแก้ไขสิทธิ์');
+            this.setState(st => ({members: st.members.map((mm, i) =>
+              i === idx ? {...mm, role: ROLES[(ROLES.findIndex(x => x.id === mm.role) + 1) % 3].id} : mm)}));
+          }
+        };
+      }),
+      addOpen: s.addOpen,
+      openAdd: () => me.role === 'admin' ? this.setState({addOpen:true}) : this.flash('ต้องมีสิทธิ์ผู้ดูแลเพื่อเพิ่มสมาชิก'),
+      closeAdd: () => this.setState({addOpen:false, newName:'', newId:''}),
+      newName: s.newName, setNewName: e => this.setState({newName:e.target.value}),
+      newId: s.newId, setNewId: e => this.setState({newId:e.target.value.replace(/[^0-9]/g,'').slice(0,6)}),
+      roleOpts: ROLES.map(r => ({
+        label:r.label, pick: () => this.setState({newRole:r.id}),
+        bg: s.newRole === r.id ? r.bg : 'rgba(255,255,255,.07)',
+        fg: s.newRole === r.id ? r.fg : '#A4B2C0',
+        border: s.newRole === r.id ? r.border : 'rgba(255,255,255,.16)'
+      })),
+      addMember: () => {
+        if (!s.newName.trim() || s.newId.length < 3) return this.flash('กรอกชื่อและรหัสพนักงานให้ครบ');
+        this.setState(st => ({
+          members: [...st.members, {name:st.newName.trim(), empId:st.newId, shift:'ยังไม่กำหนดกะ', role:st.newRole}],
+          addOpen:false, newName:'', newId:''
+        }));
+        this.flash('เพิ่มสมาชิกแล้ว · member added');
+      },
+
+      tabScan: go('scan'), tabSearch: go('search'), tabCount: go('count'), tabTeam: go('team'),
+      tScan: tabFg('scan'), tSearch: tabFg('search'), tCount: tabFg('count'), tTeam: tabFg('team'),
+      bScan: tabBg('scan'), bSearch: tabBg('search'), bCount: tabBg('count'), bTeam: tabBg('team'),
+      toast: s.toast
+    };
+  }
+}
+</script>
+</body>
+</html>

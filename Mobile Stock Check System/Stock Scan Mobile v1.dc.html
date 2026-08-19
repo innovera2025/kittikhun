@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;700&family=Barlow+Condensed:wght@400;600&family=IBM+Plex+Sans+Thai:wght@400;500;600&family=IBM+Plex+Sans+Thai+Looped:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  body { margin:0; background:#2b2b2d; font-family:"Barlow","IBM Plex Sans Thai",system-ui,sans-serif; color:#1d1f20; -webkit-font-smoothing:antialiased; }
+  a { color:#416180; text-underline-offset:3px; }
+  a:hover { color:#5980a6; }
+  @keyframes sweep { 0%{transform:translateY(-42%)} 100%{transform:translateY(42%)} }
+  @keyframes blip { 0%,100%{opacity:.35} 50%{opacity:1} }
+  @keyframes rise { from{transform:translateY(14px);opacity:0} to{transform:translateY(0);opacity:1} }
+</style>
+</helmet>
+
+<div style="min-height:100vh;display:flex;justify-content:center;align-items:flex-start;gap:34px;padding:34px 24px 60px;background:
+  linear-gradient(rgba(242,242,243,0.06) 1px,transparent 1px) 0 0/100% 34px,
+  linear-gradient(90deg,rgba(242,242,243,0.06) 1px,transparent 1px) 0 0/34px 100%,#2b2b2d;flex-wrap:wrap">
+
+  <div style="position:relative;width:390px;height:844px;background:#f2f2f3;border:1px solid rgba(242,242,243,0.35);display:flex;flex-direction:column;overflow:hidden;box-shadow:0 12px 32px rgba(0,0,0,.45)">
+    <span style="position:absolute;top:-6px;left:-6px;width:11px;height:11px;color:rgba(242,242,243,.75);z-index:9" style-before="content:'';position:absolute;left:5px;top:0;width:1px;height:100%;background:currentColor" style-after="content:'';position:absolute;top:5px;left:0;width:100%;height:1px;background:currentColor"></span>
+    <span style="position:absolute;top:-6px;right:-6px;width:11px;height:11px;color:rgba(242,242,243,.75);z-index:9" style-before="content:'';position:absolute;left:5px;top:0;width:1px;height:100%;background:currentColor" style-after="content:'';position:absolute;top:5px;left:0;width:100%;height:1px;background:currentColor"></span>
+    <span style="position:absolute;bottom:-6px;left:-6px;width:11px;height:11px;color:rgba(242,242,243,.75);z-index:9" style-before="content:'';position:absolute;left:5px;top:0;width:1px;height:100%;background:currentColor" style-after="content:'';position:absolute;top:5px;left:0;width:100%;height:1px;background:currentColor"></span>
+    <span style="position:absolute;bottom:-6px;right:-6px;width:11px;height:11px;color:rgba(242,242,243,.75);z-index:9" style-before="content:'';position:absolute;left:5px;top:0;width:1px;height:100%;background:currentColor" style-after="content:'';position:absolute;top:5px;left:0;width:100%;height:1px;background:currentColor"></span>
+
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 18px 4px;font-size:12px;letter-spacing:.04em;color:rgba(29,31,32,.7);flex:none">
+      <span>09:41</span>
+      <span style="display:flex;gap:7px;align-items:center">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 13a10 10 0 0 1 14 0M8.5 16.5a5 5 0 0 1 7 0"/><circle cx="12" cy="20" r="1"/></svg>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="7" width="17" height="10"/><path d="M22 11v2"/><rect x="4" y="9" width="11" height="6" fill="currentColor" stroke="none"/></svg>
+      </span>
+    </div>
+
+    <!-- ══ LOGIN ══ -->
+    <sc-if value="{{ isLogin }}" hint-placeholder-val="{{ true }}">
+      <div style="flex:1;display:flex;flex-direction:column;padding:0 24px 26px;overflow:auto">
+        <div style="padding:26px 0 22px">
+          <div style="display:flex;align-items:center;gap:10px;color:#5980a6">
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 8v8M10 8v8M13 8v8M17 8v8"/></svg>
+            <div style="font-family:'Barlow Condensed','IBM Plex Sans Thai',sans-serif;font-weight:600;font-size:13px;letter-spacing:.16em;text-transform:uppercase;color:#416180">Stockcheck / คลังสินค้า</div>
+          </div>
+          <h1 style="font-family:'Barlow Condensed','IBM Plex Sans Thai',sans-serif;font-weight:600;font-size:38px;line-height:1.08;letter-spacing:-.015em;margin:16px 0 6px">เข้าสู่ระบบ<br>ตรวจเช็คสต็อก</h1>
+          <div style="font-size:13px;color:rgba(29,31,32,.55)">Sign in to check stock — employee ID + PIN</div>
+        </div>
+
+        <div style="position:relative;border:1px solid rgba(29,31,32,.16);padding:18px 16px 20px">
+          <span style="position:absolute;top:-6px;left:-6px;width:11px;height:11px;color:rgba(29,31,32,.55)" style-before="content:'';position:absolute;left:5px;top:0;width:1px;height:100%;background:currentColor" style-after="content:'';position:absolute;top:5px;left:0;width:100%;height:1px;background:currentColor"></span>
+          <span style="position:absolute;top:-6px;right:-6px;width:11px;height:11px;color:rgba(29,31,32,.55)" style-before="content:'';position:absolute;left:5px;top:0;width:1px;height:100%;background:currentColor" style-after="content:'';position:absolute;top:5px;left:0;width:100%;height:1px;background:currentColor"></span>
+          <span style="position:absolute;bottom:-6px;left:-6px;width:11px;height:11px;color:rgba(29,31,32,.55)" style-before="content:'';position:absolute;left:5px;top:0;width:1px;height:100%;background:currentColor" style-after="content:'';position:absolute;top:5px;left:0;width:100%;height:1px;background:currentColor"></span>
+          <span style="position:absolute;bottom:-6px;right:-6px;width:11px;height:11px;color:rgba(29,31,32,.55)" style-before="content:'';position:absolute;left:5px;top:0;width:1px;height:100%;background:currentColor" style-after="content:'';position:absolute;top:5px;left:0;width:100%;height:1px;background:currentColor"></span>
+
+          <div>
+            <label style="display:block;font-size:12px;margin-bottom:5px;color:rgba(29,31,32,.7)">รหัสพนักงาน · Employee ID</label>
+            <input class="empid" value="{{ empId }}" onChange="{{ setEmp }}" inputmode="numeric" style="width:100%;min-height:42px;padding:6px 10px;font:inherit;font-size:16px;letter-spacing:.12em;color:#1d1f20;caret-color:#5980a6;background:#e9e9ea;border:1px solid rgba(29,31,32,.16);border-radius:0" style-focus="border-color:#5980a6;outline:none">
+          </div>
+
+          <div style="margin-top:18px">
+            <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
+              <label style="font-size:12px;color:rgba(29,31,32,.7)">รหัส PIN 6 หลัก · 6-digit PIN</label>
+              <span style="font-size:11px;color:{{ pinHintColor }}">{{ pinHint }}</span>
+            </div>
+            <div style="display:flex;gap:8px">
+              <sc-for list="{{ pinCells }}" as="c" hint-placeholder-count="6">
+                <div style="flex:1;height:46px;border:1px solid rgba(29,31,32,.16);background:#e9e9ea;display:grid;place-items:center;font-size:22px;color:#416180">{{ c.mark }}</div>
+              </sc-for>
+            </div>
+          </div>
+
+          <sc-if value="{{ loginKeypad }}" hint-placeholder-val="{{ true }}">
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:18px">
+              <sc-for list="{{ keys }}" as="k" hint-placeholder-count="12">
+                <button onClick="{{ k.press }}" style="height:52px;border:1px solid rgba(29,31,32,.16);background:transparent;font-family:'Barlow Condensed',sans-serif;font-weight:600;font-size:21px;color:#1d1f20;cursor:pointer;border-radius:0;display:grid;place-items:center" style-hover="background:rgba(29,31,32,.07)" style-active="background:rgba(29,31,32,.14)">{{ k.label }}</button>
+              </sc-for>
+            </div>
+          </sc-if>
+
+          <button onClick="{{ signIn }}" style="width:100%;margin-top:16px;min-height:48px;border:1px solid #5980a6;background:#5980a6;color:#f2f2f3;font-family:'Barlow Condensed','IBM Plex Sans Thai',sans-serif;font-weight:600;font-size:16px;letter-spacing:.04em;cursor:pointer;border-radius:0;display:flex;align-items:center;justify-content:center;gap:8px" style-hover="background:#597ea3" style-active="background:#416180">
+            เข้าสู่ระบบ · SIGN IN
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+          </button>
+          <div style="text-align:center;margin-top:12px;font-size:12px;color:rgba(29,31,32,.55)">ลืม PIN? ติดต่อผู้ดูแลระบบ · Forgot PIN? Ask your admin</div>
+        </div>
+
+        <div style="margin-top:auto;padding-top:22px;display:flex;gap:16px;font-size:11px;color:rgba(29,31,32,.45);letter-spacing:.06em;text-transform:uppercase">
+          <span>WH-BKK-02</span><span>v1.0.4</span><span>Demo PIN 000000</span>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- ══ SCAN ══ -->
+    <sc-if value="{{ isScan }}" hint-placeholder-val="{{ true }}">
+      <div style="flex:1;display:flex;flex-direction:column;overflow:hidden">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 18px 12px;flex:none">
+          <div>
+            <div style="font-family:'Barlow Condensed','IBM Plex Sans Thai',sans-serif;font-weight:600;font-size:24px;line-height:1.1">สแกนบาร์โค้ด</div>
+            <div style="font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:#416180">Scan to check stock</div>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button onClick="{{ toggleTorch }}" style="width:38px;height:38px;border:1px solid rgba(29,31,32,.16);background:transparent;cursor:pointer;border-radius:0;display:grid;place-items:center;color:#1d1f20" style-hover="background:rgba(29,31,32,.07)">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 3h12l-2 5H8L6 3ZM8 8h8v3l-2 2v8h-4v-8l-2-2V8Z"/></svg>
+            </button>
+            <button onClick="{{ goManual }}" style="width:38px;height:38px;border:1px solid rgba(29,31,32,.16);background:transparent;cursor:pointer;border-radius:0;display:grid;place-items:center;color:#1d1f20" style-hover="background:rgba(29,31,32,.07)">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 7h16M4 12h16M4 17h10"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <div style="position:relative;margin:0 18px;background:#1d2d3d;flex:{{ camFlex }};min-height:190px;overflow:hidden;border:1px solid rgba(29,31,32,.16)">
+          <div style="position:absolute;inset:0;background:
+            linear-gradient(rgba(242,242,243,.05) 1px,transparent 1px) 0 0/100% 26px,
+            linear-gradient(90deg,rgba(242,242,243,.05) 1px,transparent 1px) 0 0/26px 100%"></div>
+          <div style="position:absolute;inset:0;background:radial-gradient(circle at 50% 45%,rgba(89,128,166,.28),transparent 62%)"></div>
+          <div style="position:absolute;left:14%;right:14%;top:50%;height:2px;background:#94bce3;box-shadow:0 0 14px #5980a6;animation:sweep 2.1s ease-in-out infinite alternate"></div>
+          <div style="position:absolute;left:12%;right:12%;top:28%;bottom:28%;border:1px solid rgba(148,188,227,.55)">
+            <span style="position:absolute;top:-6px;left:-6px;width:12px;height:12px;color:#94bce3" style-before="content:'';position:absolute;left:5px;top:0;width:1px;height:100%;background:currentColor" style-after="content:'';position:absolute;top:5px;left:0;width:100%;height:1px;background:currentColor"></span>
+            <span style="position:absolute;top:-6px;right:-6px;width:12px;height:12px;color:#94bce3" style-before="content:'';position:absolute;left:5px;top:0;width:1px;height:100%;background:currentColor" style-after="content:'';position:absolute;top:5px;left:0;width:100%;height:1px;background:currentColor"></span>
+            <span style="position:absolute;bottom:-6px;left:-6px;width:12px;height:12px;color:#94bce3" style-before="content:'';position:absolute;left:5px;top:0;width:1px;height:100%;background:currentColor" style-after="content:'';position:absolute;top:5px;left:0;width:100%;height:1px;background:currentColor"></span>
+            <span style="position:absolute;bottom:-6px;right:-6px;width:12px;height:12px;color:#94bce3" style-before="content:'';position:absolute;left:5px;top:0;width:1px;height:100%;background:currentColor" style-after="content:'';position:absolute;top:5px;left:0;width:100%;height:1px;background:currentColor"></span>
+          </div>
+          <div style="position:absolute;left:0;right:0;bottom:0;padding:10px 14px;display:flex;justify-content:space-between;align-items:center;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:rgba(242,242,243,.8)">
+            <span style="display:flex;align-items:center;gap:6px"><i style="width:6px;height:6px;background:#94bce3;display:block;animation:blip 1.2s infinite"></i>{{ camStatus }}</span>
+            <span>EAN-13 · CODE-128 · QR</span>
+          </div>
+        </div>
+
+        <div style="padding:14px 18px 0;flex:none">
+          <div style="font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:rgba(29,31,32,.5);margin-bottom:8px">จำลองการสแกน · Simulate a scan</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <sc-for list="{{ demoCodes }}" as="d" hint-placeholder-count="3">
+              <button onClick="{{ d.scan }}" style="border:1px solid #5980a6;background:transparent;color:#416180;font-size:12px;letter-spacing:.04em;padding:7px 11px;cursor:pointer;border-radius:0;font-family:'Barlow',monospace" style-hover="background:rgba(89,128,166,.1)">{{ d.code }}</button>
+            </sc-for>
+          </div>
+        </div>
+
+        <div style="flex:1;overflow:auto;padding:14px 18px 18px">
+          <sc-if value="{{ hasScan }}" hint-placeholder-val="{{ true }}">
+            <div style="position:relative;border:1px solid rgba(29,31,32,.16);padding:16px 14px;background:#f2f2f3;animation:rise .22s ease-out">
+              <span style="position:absolute;top:-6px;left:-6px;width:11px;height:11px;color:rgba(29,31,32,.55)" style-before="content:'';position:absolute;left:5px;top:0;width:1px;height:100%;background:currentColor" style-after="content:'';position:absolute;top:5px;left:0;width:100%;height:1px;background:currentColor"></span>
+              <span style="position:absolute;top:-6px;right:-6px;width:11px;height:11px;color:rgba(29,31,32,.55)" style-before="content:'';position:absolute;left:5px;top:0;width:1px;height:100%;background:currentColor" style-after="content:'';position:absolute;top:5px;left:0;width:100%;height:1px;background:currentColor"></span>
+              <span style="position:absolute;bottom:-6px;left:-6px;width:11px;height:11px;color:rgba(29,31,32,.55)" style-before="content:'';position:absolute;left:5px;top:0;width:1px;height:100%;background:currentColor" style-after="content:'';position:absolute;top:5px;left:0;width:100%;height:1px;background:currentColor"></span>
+              <span style="position:absolute;bottom:-6px;right:-6px;width:11px;height:11px;color:rgba(29,31,32,.55)" style-before="content:'';position:absolute;left:5px;top:0;width:1px;height:100%;background:currentColor" style-after="content:'';position:absolute;top:5px;left:0;width:100%;height:1px;background:currentColor"></span>
+
+              <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">
+                <div>
+                  <div style="font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#5980a6">{{ item.sku }} · {{ item.barcode }}</div>
+                  <div style="font-family:'Barlow Condensed','IBM Plex Sans Thai',sans-serif;font-weight:600;font-size:21px;line-height:1.15;margin-top:4px">{{ item.name }}</div>
+                  <div style="font-size:12px;color:rgba(29,31,32,.55)">{{ item.nameEn }}</div>
+                </div>
+                <span style="flex:none;font-size:11px;padding:3px 10px;background:{{ item.statusBg }};color:{{ item.statusFg }};white-space:nowrap">{{ item.status }}</span>
+              </div>
+
+              <div style="display:flex;align-items:flex-end;gap:10px;margin-top:14px;padding-top:12px;border-top:1px solid rgba(29,31,32,.16)">
+                <div style="font-family:'Barlow Condensed',sans-serif;font-weight:600;font-size:46px;line-height:.9;color:#1d2d3d">{{ item.onHand }}</div>
+                <div style="font-size:12px;color:rgba(29,31,32,.6);padding-bottom:6px">{{ item.unit }} คงเหลือ<br>On hand</div>
+              </div>
+
+              <div style="display:grid;grid-template-columns:repeat(3,1fr);border:1px solid rgba(29,31,32,.16);margin-top:14px">
+                <div style="padding:9px 10px;border-right:1px solid rgba(29,31,32,.16)">
+                  <div style="font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:rgba(29,31,32,.5)">จอง · Reserved</div>
+                  <div style="font-family:'Barlow Condensed',sans-serif;font-weight:600;font-size:19px">{{ item.reserved }}</div>
+                </div>
+                <div style="padding:9px 10px;border-right:1px solid rgba(29,31,32,.16)">
+                  <div style="font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:rgba(29,31,32,.5)">พร้อมขาย · Free</div>
+                  <div style="font-family:'Barlow Condensed',sans-serif;font-weight:600;font-size:19px">{{ item.free }}</div>
+                </div>
+                <div style="padding:9px 10px">
+                  <div style="font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:rgba(29,31,32,.5)">ตำแหน่ง · Bin</div>
+                  <div style="font-family:'Barlow Condensed',sans-serif;font-weight:600;font-size:19px">{{ item.loc }}</div>
+                </div>
+              </div>
+
+              <sc-if value="{{ cardSpec }}" hint-placeholder-val="{{ true }}">
+                <div style="margin-top:14px;display:flex;flex-direction:column">
+                  <sc-for list="{{ item.specs }}" as="s" hint-placeholder-count="4">
+                    <div style="display:flex;justify-content:space-between;gap:12px;padding:7px 0;border-bottom:1px solid rgba(29,31,32,.08);font-size:13px">
+                      <span style="color:rgba(29,31,32,.55)">{{ s.k }}</span>
+                      <span style="text-align:right">{{ s.v }}</span>
+                    </div>
+                  </sc-for>
+                </div>
+              </sc-if>
+
+              <div style="display:flex;gap:8px;margin-top:16px">
+                <button onClick="{{ goCount }}" style="flex:1;min-height:44px;border:1px solid #5980a6;background:#5980a6;color:#f2f2f3;font-family:'Barlow Condensed','IBM Plex Sans Thai',sans-serif;font-weight:600;font-size:15px;cursor:pointer;border-radius:0" style-hover="background:#597ea3" style-active="background:#416180">นับสต็อกรายการนี้</button>
+                <button onClick="{{ clearScan }}" style="flex:none;min-width:112px;min-height:44px;border:1px solid rgba(29,31,32,.16);background:transparent;font-family:'Barlow Condensed','IBM Plex Sans Thai',sans-serif;font-weight:600;font-size:15px;cursor:pointer;border-radius:0" style-hover="background:rgba(29,31,32,.07)">สแกนต่อ</button>
+              </div>
+              <div style="margin-top:10px;font-size:11px;color:rgba(29,31,32,.45)">อัปเดตล่าสุด {{ item.updated }} · ดูอย่างเดียว (read-only)</div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ noScan }}" hint-placeholder-val="{{ true }}">
+            <div style="border:1px dashed rgba(29,31,32,.25);padding:18px 14px;text-align:center;color:rgba(29,31,32,.55);font-size:13px">
+              เล็งบาร์โค้ดให้อยู่ในกรอบ ระบบจะอ่านค่าอัตโนมัติ<br>
+              <span style="font-size:12px;opacity:.8">Line the barcode up inside the frame</span>
+            </div>
+          </sc-if>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- ══ SEARCH ══ -->
+    <sc-if value="{{ isSearch }}" hint-placeholder-val="{{ true }}">
+      <div style="flex:1;display:flex;flex-direction:column;overflow:hidden">
+        <div style="padding:8px 18px 12px;flex:none">
+          <div style="font-family:'Barlow Condensed','IBM Plex Sans Thai',sans-serif;font-weight:600;font-size:24px;line-height:1.1">ค้นหาสินค้า</div>
+          <div style="font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:#416180;margin-bottom:12px">Item lookup · {{ resultCount }} results</div>
+          <input value="{{ query }}" onChange="{{ setQuery }}" placeholder="ชื่อสินค้า / SKU / บาร์โค้ด" style="width:100%;min-height:42px;padding:6px 10px;font:inherit;font-size:15px;background:#e9e9ea;border:1px solid rgba(29,31,32,.16);border-radius:0;caret-color:#5980a6" style-focus="border-color:#5980a6;outline:none">
+        </div>
+        <div style="flex:1;overflow:auto;padding:0 18px 18px">
+          <sc-for list="{{ results }}" as="r" hint-placeholder-count="5">
+            <button onClick="{{ r.open }}" style="width:100%;text-align:left;background:transparent;border:0;border-bottom:1px solid rgba(29,31,32,.12);padding:12px 2px;cursor:pointer;display:flex;gap:12px;align-items:center;font:inherit" style-hover="background:rgba(29,31,32,.04)">
+              <div style="flex:1;min-width:0">
+                <div style="font-size:10px;letter-spacing:.08em;color:#5980a6">{{ r.sku }} · {{ r.loc }}</div>
+                <div style="font-family:'Barlow Condensed','IBM Plex Sans Thai',sans-serif;font-weight:600;font-size:17px;line-height:1.2">{{ r.name }}</div>
+                <div style="font-size:11px;color:rgba(29,31,32,.5)">{{ r.nameEn }}</div>
+              </div>
+              <div style="text-align:right;flex:none">
+                <div style="font-family:'Barlow Condensed',sans-serif;font-weight:600;font-size:22px;color:{{ r.qtyColor }}">{{ r.onHand }}</div>
+                <div style="font-size:10px;color:rgba(29,31,32,.5)">{{ r.unit }}</div>
+              </div>
+            </button>
+          </sc-for>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- ══ CYCLE COUNT ══ -->
+    <sc-if value="{{ isCount }}" hint-placeholder-val="{{ true }}">
+      <div style="flex:1;display:flex;flex-direction:column;overflow:hidden">
+        <div style="padding:8px 18px 12px;flex:none">
+          <div style="font-family:'Barlow Condensed','IBM Plex Sans Thai',sans-serif;font-weight:600;font-size:24px;line-height:1.1">รอบตรวจนับ CC-2408</div>
+          <div style="font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:#416180">Cycle count · โซน A · {{ countedLabel }}</div>
+          <div style="height:4px;background:#d4d4d7;margin-top:12px"><div style="height:100%;background:#5980a6;width:{{ countProgress }}"></div></div>
+        </div>
+        <div style="flex:1;overflow:auto;padding:0 18px 8px">
+          <sc-for list="{{ countRows }}" as="c" hint-placeholder-count="4">
+            <div style="padding:13px 0;border-bottom:1px solid rgba(29,31,32,.12)">
+              <div style="display:flex;justify-content:space-between;gap:10px">
+                <div style="min-width:0">
+                  <div style="font-size:10px;letter-spacing:.08em;color:#5980a6">{{ c.sku }} · {{ c.loc }}</div>
+                  <div style="font-family:'Barlow Condensed','IBM Plex Sans Thai',sans-serif;font-weight:600;font-size:17px">{{ c.name }}</div>
+                </div>
+                <div style="text-align:right;flex:none;font-size:11px;color:rgba(29,31,32,.55)">ระบบ · System<br><b style="font-family:'Barlow Condensed',sans-serif;font-size:17px;color:#1d1f20">{{ c.onHand }}</b></div>
+              </div>
+              <div style="display:flex;gap:8px;align-items:center;margin-top:9px">
+                <input value="{{ c.value }}" onChange="{{ c.set }}" inputmode="numeric" placeholder="นับได้" style="width:104px;min-height:40px;padding:6px 10px;font:inherit;font-size:15px;background:#e9e9ea;border:1px solid rgba(29,31,32,.16);border-radius:0;caret-color:#5980a6" style-focus="border-color:#5980a6;outline:none">
+                <span style="font-size:12px;color:{{ c.varColor }}">{{ c.varLabel }}</span>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+        <div style="flex:none;padding:12px 18px 16px;border-top:1px solid rgba(29,31,32,.16)">
+          <button onClick="{{ submitCount }}" style="width:100%;min-height:48px;border:1px solid #5980a6;background:#5980a6;color:#f2f2f3;font-family:'Barlow Condensed','IBM Plex Sans Thai',sans-serif;font-weight:600;font-size:16px;cursor:pointer;border-radius:0" style-hover="background:#597ea3" style-active="background:#416180">ส่งผลการนับ · SUBMIT COUNT</button>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- ══ TEAM ══ -->
+    <sc-if value="{{ isTeam }}" hint-placeholder-val="{{ true }}">
+      <div style="flex:1;display:flex;flex-direction:column;overflow:hidden">
+        <div style="padding:8px 18px 12px;flex:none">
+          <div style="font-family:'Barlow Condensed','IBM Plex Sans Thai',sans-serif;font-weight:600;font-size:24px;line-height:1.1">สมาชิกและสิทธิ์</div>
+          <div style="font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:#416180">Members & permissions · {{ myRoleLabel }}</div>
+        </div>
+        <div style="flex:1;overflow:auto;padding:0 18px 8px">
+          <sc-for list="{{ members }}" as="m" hint-placeholder-count="4">
+            <div style="display:flex;gap:12px;align-items:center;padding:12px 0;border-bottom:1px solid rgba(29,31,32,.12)">
+              <div style="width:40px;height:40px;flex:none;border:1px solid rgba(29,31,32,.16);display:grid;place-items:center;font-family:'Barlow Condensed',sans-serif;font-weight:600;font-size:15px;color:#416180">{{ m.initials }}</div>
+              <div style="flex:1;min-width:0">
+                <div style="font-family:'Barlow Condensed','IBM Plex Sans Thai',sans-serif;font-weight:600;font-size:17px">{{ m.name }}</div>
+                <div style="font-size:11px;color:rgba(29,31,32,.5)">{{ m.empId }} · {{ m.shift }}</div>
+              </div>
+              <button onClick="{{ m.cycle }}" style="flex:none;font-size:11px;padding:5px 11px;border:1px solid {{ m.roleBorder }};background:{{ m.roleBg }};color:{{ m.roleFg }};cursor:pointer;border-radius:0;font:inherit;font-size:11px">{{ m.roleLabel }}</button>
+            </div>
+          </sc-for>
+          <div style="font-size:11px;color:rgba(29,31,32,.45);padding:12px 0">แตะที่สิทธิ์เพื่อสลับ admin / staff / viewer (เฉพาะผู้ดูแล)<br>Tap a role to change it — admins only</div>
+        </div>
+        <div style="flex:none;padding:12px 18px 16px;border-top:1px solid rgba(29,31,32,.16);display:flex;gap:8px">
+          <button onClick="{{ addMember }}" style="flex:1;min-height:46px;border:1px solid #5980a6;background:#5980a6;color:#f2f2f3;font-family:'Barlow Condensed','IBM Plex Sans Thai',sans-serif;font-weight:600;font-size:15px;cursor:pointer;border-radius:0">เพิ่มสมาชิก · ADD</button>
+          <button onClick="{{ signOut }}" style="flex:none;min-width:118px;min-height:46px;border:1px solid rgba(29,31,32,.16);background:transparent;font-family:'Barlow Condensed','IBM Plex Sans Thai',sans-serif;font-weight:600;font-size:15px;cursor:pointer;border-radius:0" style-hover="background:rgba(29,31,32,.07)">ออกจากระบบ</button>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- ══ TAB BAR ══ -->
+    <sc-if value="{{ signedIn }}" hint-placeholder-val="{{ true }}">
+      <div style="flex:none;border-top:1px solid rgba(29,31,32,.16);display:grid;grid-template-columns:repeat(4,1fr);background:#f2f2f3">
+        <button onClick="{{ tabScan }}" style="min-height:60px;background:transparent;border:0;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;font:inherit;font-size:11px;color:{{ tScan }}">
+          <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M3 12h18"/></svg>
+          สแกน
+        </button>
+        <button onClick="{{ tabSearch }}" style="min-height:60px;background:transparent;border:0;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;font:inherit;font-size:11px;color:{{ tSearch }}">
+          <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4.3-4.3"/></svg>
+          ค้นหา
+        </button>
+        <button onClick="{{ tabCount }}" style="min-height:60px;background:transparent;border:0;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;font:inherit;font-size:11px;color:{{ tCount }}">
+          <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5" y="4" width="14" height="17"/><path d="M9 3h6v3H9zM9 11h6M9 15h6"/></svg>
+          นับสต็อก
+        </button>
+        <button onClick="{{ tabTeam }}" style="min-height:60px;background:transparent;border:0;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;font:inherit;font-size:11px;color:{{ tTeam }}">
+          <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-5 6-5s6 1.7 6 5M16 6.5a3 3 0 0 1 0 5.8M18 20c0-2.4-.8-3.9-2-4.7"/></svg>
+          สมาชิก
+        </button>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ toast }}" hint-placeholder-val="{{ false }}">
+      <div style="position:absolute;left:18px;right:18px;bottom:78px;background:#1d2d3d;color:#f2f2f3;padding:11px 14px;font-size:13px;animation:rise .2s ease-out">{{ toast }}</div>
+    </sc-if>
+  </div>
+
+  <div style="width:250px;color:rgba(242,242,243,.75);font-size:12px;line-height:1.65;padding-top:28px">
+    <div style="font-family:'Barlow Condensed',sans-serif;font-weight:600;font-size:16px;letter-spacing:.14em;text-transform:uppercase;color:#94bce3;margin-bottom:10px">Prototype notes</div>
+    <div style="border-top:1px solid rgba(242,242,243,.2);padding-top:10px">PIN สาธิต <b>000000</b> หรือกด “เข้าสู่ระบบ” ได้เลย</div>
+    <div style="border-top:1px solid rgba(242,242,243,.2);padding-top:10px;margin-top:10px">กล้องเป็นภาพจำลอง — กดปุ่มบาร์โค้ดใต้กรอบเพื่อจำลองการสแกน</div>
+    <div style="border-top:1px solid rgba(242,242,243,.2);padding-top:10px;margin-top:10px">ตัวเลือกเลย์เอาต์ (หน้า Login, หน้าสแกน, การ์ดสินค้า) ปรับได้จากแผง Tweaks</div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:720,&quot;height&quot;:940},&quot;loginLayout&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;keypad&quot;,&quot;form&quot;],&quot;default&quot;:&quot;keypad&quot;,&quot;tsType&quot;:&quot;'keypad'|'form'&quot;,&quot;section&quot;:&quot;Layout variants&quot;},&quot;scanLayout&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;sheet&quot;,&quot;split&quot;],&quot;default&quot;:&quot;sheet&quot;,&quot;tsType&quot;:&quot;'sheet'|'split'&quot;,&quot;section&quot;:&quot;Layout variants&quot;},&quot;itemCard&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;spec&quot;,&quot;compact&quot;],&quot;default&quot;:&quot;spec&quot;,&quot;tsType&quot;:&quot;'spec'|'compact'&quot;,&quot;section&quot;:&quot;Layout variants&quot;}}">
+const ITEMS = [
+  {barcode:'8851234567890', sku:'SKU-40128', name:'สลักเกลียวหัวหกเหลี่ยม M12', nameEn:'Hex bolt M12 × 60 mm, zinc', loc:'A-04-12', onHand:1240, reserved:180, unit:'ชิ้น', status:'พร้อมจ่าย', updated:'วันนี้ 09:42',
+   specs:[{k:'ผู้ผลิต · Vendor',v:'Siam Fastener Co.'},{k:'ล็อต · Lot',v:'LOT-24C-118'},{k:'จุดสั่งซื้อ · Reorder point',v:'400 ชิ้น'},{k:'นับครั้งล่าสุด · Last count',v:'12 ส.ค. 2568'}]},
+  {barcode:'8859900112233', sku:'SKU-77340', name:'เทปพันสายไฟ PVC 19 มม.', nameEn:'PVC insulation tape 19 mm', loc:'C-01-08', onHand:86, reserved:60, unit:'ม้วน', status:'ใกล้หมด', updated:'วันนี้ 08:15',
+   specs:[{k:'ผู้ผลิต · Vendor',v:'Thai Poly Tape'},{k:'ล็อต · Lot',v:'LOT-24A-902'},{k:'จุดสั่งซื้อ · Reorder point',v:'120 ม้วน'},{k:'นับครั้งล่าสุด · Last count',v:'02 ส.ค. 2568'}]},
+  {barcode:'8850001456712', sku:'SKU-11902', name:'ถุงมือหนังนิรภัย เบอร์ 9', nameEn:'Leather safety gloves, size 9', loc:'B-07-03', onHand:0, reserved:0, unit:'คู่', status:'หมดสต็อก', updated:'เมื่อวาน 17:20',
+   specs:[{k:'ผู้ผลิต · Vendor',v:'Protex Industrial'},{k:'ล็อต · Lot',v:'—'},{k:'จุดสั่งซื้อ · Reorder point',v:'50 คู่'},{k:'นับครั้งล่าสุด · Last count',v:'28 ก.ค. 2568'}]},
+  {barcode:'8851777090412', sku:'SKU-63015', name:'น้ำมันหล่อลื่นเกียร์ 20 ลิตร', nameEn:'Gear oil, 20 L drum', loc:'D-02-01', onHand:34, reserved:6, unit:'ถัง', status:'พร้อมจ่าย', updated:'วันนี้ 07:55',
+   specs:[{k:'ผู้ผลิต · Vendor',v:'PTT Lubricants'},{k:'ล็อต · Lot',v:'LOT-24B-441'},{k:'จุดสั่งซื้อ · Reorder point',v:'10 ถัง'},{k:'นับครั้งล่าสุด · Last count',v:'09 ส.ค. 2568'}]},
+  {barcode:'8853344556677', sku:'SKU-20887', name:'แผ่นตัดเหล็ก 4 นิ้ว', nameEn:'Steel cutting disc 4"', loc:'A-09-05', onHand:512, reserved:24, unit:'แผ่น', status:'พร้อมจ่าย', updated:'วันนี้ 09:10',
+   specs:[{k:'ผู้ผลิต · Vendor',v:'Nippon Abrasive'},{k:'ล็อต · Lot',v:'LOT-24C-077'},{k:'จุดสั่งซื้อ · Reorder point',v:'150 แผ่น'},{k:'นับครั้งล่าสุด · Last count',v:'05 ส.ค. 2568'}]}
+];
+
+const ROLES = [
+  {id:'admin', label:'ADMIN', bg:'#eef6ff', fg:'#2c455d', border:'#5980a6'},
+  {id:'staff', label:'STAFF', bg:'transparent', fg:'#416180', border:'#5980a6'},
+  {id:'viewer', label:'VIEWER', bg:'transparent', fg:'rgba(29,31,32,.6)', border:'rgba(29,31,32,.16)'}
+];
+
+class Component extends DCLogic {
+  state = {
+    screen: 'login', empId: '52104', pin: '', scanned: null, camStatus: 'กำลังค้นหาบาร์โค้ด',
+    torch: false, query: '', counts: {}, toast: null,
+    members: [
+      {name:'สมชาย พูนทรัพย์', empId:'52104', shift:'กะเช้า · A', role:'admin'},
+      {name:'ปิยะนุช ศรีทอง', empId:'52210', shift:'กะเช้า · A', role:'staff'},
+      {name:'ธนากร แสงทวี', empId:'52318', shift:'กะบ่าย · B', role:'staff'},
+      {name:'Nattaporn K.', empId:'52402', shift:'สำนักงาน', role:'viewer'}
+    ]
+  };
+
+  flash(msg) {
+    clearTimeout(this._t);
+    this.setState({toast: msg});
+    this._t = setTimeout(() => this.setState({toast: null}), 2200);
+  }
+
+  scanCode = (code) => {
+    this.setState({camStatus: 'อ่านค่าได้ · decoding'});
+    setTimeout(() => {
+      const it = ITEMS.find(i => i.barcode === code) || ITEMS[0];
+      this.setState({scanned: it, camStatus: 'พบสินค้า · ' + it.sku});
+    }, 420);
+  };
+
+  numColor(n) { return n === 0 ? '#8a2f2f' : (n < 100 ? '#416180' : '#1d1f20'); }
+
+  renderVals() {
+    const s = this.state;
+    const cardMode = this.props.itemCard ?? 'spec';
+    const scanLayout = this.props.scanLayout ?? 'sheet';
+    const me = s.members.find(m => m.empId === s.empId) || s.members[0];
+    const it = s.scanned;
+
+    const item = it ? {
+      ...it,
+      onHand: it.onHand.toLocaleString(),
+      reserved: it.reserved.toLocaleString(),
+      free: (it.onHand - it.reserved).toLocaleString(),
+      statusBg: it.onHand === 0 ? '#e9e9ea' : (it.onHand - it.reserved < 100 ? '#eef6ff' : '#eef6ff'),
+      statusFg: it.onHand === 0 ? '#5d5d60' : '#2c455d'
+    } : {specs: []};
+
+    const q = s.query.trim().toLowerCase();
+    const results = ITEMS.filter(i => !q || (i.name + i.nameEn + i.sku + i.barcode).toLowerCase().includes(q))
+      .map(i => ({...i, onHand: i.onHand.toLocaleString(), qtyColor: this.numColor(i.onHand),
+        open: () => this.setState({screen: 'scan', scanned: i, camStatus: 'เลือกจากการค้นหา · ' + i.sku})}));
+
+    const ccItems = ITEMS.slice(0, 4);
+    const countRows = ccItems.map(i => {
+      const v = s.counts[i.sku] ?? '';
+      const diff = v === '' ? null : Number(v) - i.onHand;
+      return {
+        sku: i.sku, loc: i.loc, name: i.name, onHand: i.onHand.toLocaleString(), value: v,
+        varLabel: diff === null ? 'ยังไม่ได้นับ · not counted' : (diff === 0 ? 'ตรงกับระบบ · match' : (diff > 0 ? 'เกิน +' + diff : 'ขาด ' + diff)),
+        varColor: diff === null ? 'rgba(29,31,32,.45)' : (diff === 0 ? '#416180' : '#8a2f2f'),
+        set: e => this.setState(st => ({counts: {...st.counts, [i.sku]: e.target.value.replace(/[^0-9]/g, '')}}))
+      };
+    });
+    const done = countRows.filter(r => r.value !== '').length;
+
+    const keys = ['1','2','3','4','5','6','7','8','9','C','0','⌫'].map(k => ({
+      label: k,
+      press: () => this.setState(st => {
+        if (k === 'C') return {pin: ''};
+        if (k === '⌫') return {pin: st.pin.slice(0, -1)};
+        return {pin: (st.pin + k).slice(0, 6)};
+      })
+    }));
+
+    return {
+      isLogin: s.screen === 'login', signedIn: s.screen !== 'login',
+      isScan: s.screen === 'scan', isSearch: s.screen === 'search',
+      isCount: s.screen === 'count', isTeam: s.screen === 'team',
+      loginKeypad: (this.props.loginLayout ?? 'keypad') === 'keypad',
+      cardSpec: cardMode === 'spec',
+      camFlex: scanLayout === 'split' ? '0 0 260px' : '1 1 auto',
+      camStatus: s.camStatus, toast: s.toast,
+      empId: s.empId, setEmp: e => this.setState({empId: e.target.value.replace(/[^0-9]/g, '').slice(0, 6)}),
+      pinCells: Array.from({length: 6}, (_, i) => ({mark: i < s.pin.length ? '•' : ''})),
+      pinHint: s.pin.length === 6 ? 'ครบ 6 หลัก' : s.pin.length + '/6',
+      pinHintColor: s.pin.length === 6 ? '#416180' : 'rgba(29,31,32,.45)',
+      keys,
+      signIn: () => this.setState({screen: 'scan', pin: ''}),
+      signOut: () => this.setState({screen: 'login', pin: '', scanned: null}),
+      demoCodes: ITEMS.slice(0, 3).map(i => ({code: i.barcode, scan: () => this.scanCode(i.barcode)})),
+      hasScan: !!it, noScan: !it, item,
+      clearScan: () => this.setState({scanned: null, camStatus: 'กำลังค้นหาบาร์โค้ด'}),
+      goCount: () => this.setState({screen: 'count'}),
+      goManual: () => this.setState({screen: 'search'}),
+      toggleTorch: () => { this.setState(st => ({torch: !st.torch})); this.flash(s.torch ? 'ปิดไฟฉาย' : 'เปิดไฟฉาย · Torch on'); },
+      query: s.query, setQuery: e => this.setState({query: e.target.value}), results, resultCount: results.length,
+      countRows, countedLabel: 'นับแล้ว ' + done + '/' + countRows.length,
+      countProgress: Math.round(done / countRows.length * 100) + '%',
+      submitCount: () => this.flash('ส่งผลการนับ ' + done + ' รายการแล้ว · submitted'),
+      myRoleLabel: 'สิทธิ์ของคุณ: ' + (me.role === 'admin' ? 'ผู้ดูแล admin' : me.role),
+      members: s.members.map((m, idx) => {
+        const r = ROLES.find(x => x.id === m.role);
+        return {
+          name: m.name, empId: m.empId, shift: m.shift,
+          initials: m.name.trim().charAt(0) + (m.name.split(' ')[1] || ' ').charAt(0),
+          roleLabel: r.label, roleBg: r.bg, roleFg: r.fg, roleBorder: r.border,
+          cycle: () => {
+            if (me.role !== 'admin') return this.flash('ต้องมีสิทธิ์ผู้ดูแลเพื่อแก้ไข');
+            this.setState(st => {
+              const next = ROLES[(ROLES.findIndex(x => x.id === st.members[idx].role) + 1) % 3].id;
+              const members = st.members.map((mm, i) => i === idx ? {...mm, role: next} : mm);
+              return {members};
+            });
+          }
+        };
+      }),
+      addMember: () => this.flash('เปิดฟอร์มเพิ่มสมาชิก (ยังไม่เชื่อมต่อ)')
+    };
+  }
+}
+</script>
+</body>
+</html>
