@@ -9,7 +9,7 @@ ERP (`db_TCL` / SQL Server 2019) เป็นแหล่ง **อ่านอ�
 
 | ชั้น | กลไก | สถานะ |
 |---|---|---|
-| 1 | สิทธิ์ระดับ DB — login ต้องเป็น `db_datareader` | ⏳ รอ login ใหม่ (ยังใช้ `sa` อยู่) |
+| 1 | สิทธิ์ระดับ DB — login ต้องเป็น `db_datareader` | ⏳ รอฝ่าย ERP จัดเตรียม login |
 | 2 | Boot probe — ยิง INSERT ทดสอบ ถ้าสำเร็จ = ปฏิเสธ start | ✅ อยู่ใน `MssqlDriver.verifyReadOnly()` |
 | 3 | Statement guard — รับเฉพาะ `SELECT`/`WITH` | ✅ `assertReadOnlySql()` · **เทสต์ 24 เคสผ่าน** |
 | 4 | Interface ไม่มี method เขียน + compile-time guard | ✅ เพิ่ม method เขียน = **build พังทันที** (ทดสอบแล้ว) |
@@ -204,9 +204,10 @@ docker compose up -d
 ## งานที่รออยู่
 
 **รอจากฝ่าย ERP**
-1. **login สิทธิ์ `db_datareader`** แทน `sa` (จำเป็นก่อนต่อ ERP จริง — boot probe จะปฏิเสธ start ถ้ายังใช้ `sa`)
+1. **login สิทธิ์ `db_datareader`** สำหรับต่อ ERP — จำเป็นก่อนใช้งานจริง
+   (boot probe ปฏิเสธการ start ถ้า login เขียน ERP ได้)
 2. **script/query ยอดคงเหลือ** → วางเป็น `.sql` ใน `server/config/` แล้วชี้ด้วย `ERP_SQL_ITEMS_SQL_FILE`
-3. จำกัด firewall พอร์ต 1433 (ปัจจุบันเปิด public IP) + เปิด `ERP_SQL_ENCRYPT=true`
+3. จำกัดการเข้าถึงพอร์ต ERP ให้เฉพาะเซิร์ฟเวอร์แอป (firewall/VPN) + ตั้ง `ERP_SQL_ENCRYPT=true`
 
 **ฝั่งพัฒนา**
 4. ตัดสินกติกา **ItemCode ซ้ำ 85 รหัส** (ตอนนี้ driver ใช้ "Roworder สูงสุดชนะ")
