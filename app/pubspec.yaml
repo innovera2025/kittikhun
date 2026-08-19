@@ -1,0 +1,61 @@
+name: kittikhun_stock
+description: KITTIKHUN Mobile Stock Check — ระบบนับสต็อกคลังสินค้า
+publish_to: "none"
+version: 4.0.0+1
+
+environment:
+  sdk: ^3.12.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+
+  # State management
+  flutter_riverpod: ^3.0.0
+
+  # Barcode scanning — formats ตาม design: ean13, ean8, code128, code39, qrCode
+  mobile_scanner: ^7.0.0
+
+  # HTTP + storage (เตรียมสำหรับเชื่อม backend)
+  dio: ^5.9.0
+  flutter_secure_storage: ^10.0.0
+  connectivity_plus: ^6.1.0
+
+  # Local DB (offline-first)
+  drift: ^2.28.0
+  drift_flutter: ^0.2.0
+  sqlite3_flutter_libs: ^0.5.0
+  path_provider: ^2.1.0
+
+  # Utilities
+  characters: ^1.4.0
+  intl: ^0.20.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  drift_dev: ^2.28.0
+  build_runner: ^2.4.0
+
+flutter:
+  uses-material-design: true
+
+  # ฟอนต์ bundle ในแอป (ห้าม fetch runtime — เครื่องคลังออฟไลน์บ่อย)
+  # ไฟล์อยู่ใน assets/fonts/ แล้ว (OFL license จาก Google Fonts)
+  fonts:
+    # ไทย — เป็นฟอนต์ default ของ TextTheme (สแต็ก body ใน design เป็นไทยนำ)
+    - family: IBMPlexSansThai
+      fonts:
+        - asset: assets/fonts/IBMPlexSansThai-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/IBMPlexSansThai-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/IBMPlexSansThai-SemiBold.ttf
+          weight: 600
+    # ตัวเลข / SKU / แบรนด์ / keypad — variable font (Flutter map fontWeight → wght axis)
+    - family: SpaceGrotesk
+      fonts:
+        - asset: assets/fonts/SpaceGrotesk.ttf
