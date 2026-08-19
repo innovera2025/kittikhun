@@ -1,0 +1,248 @@
+# ============================================================================
+# KITTIKHUN Mobile Stock Check — Docker Compose stack (เซิร์ฟเวอร์ LAN เครื่องเดียว)
+# อ้างอิง: docs/architecture.md §8 · docs/erp-integration.md
+#
+# 🚫 กฎเหล็ก: ระบบนี้ "อ่าน ERP อย่างเดียว" — ไม่มี service ใดในสแต็กนี้เขียนกลับ ERP
+#    ยอดจาก ERP ใช้เทียบเท่านั้น · ผลนับ/ส่วนต่างเก็บใน Postgres ของเราเอง
+#
+# ⚠️ ห้ามใส่ค่า secret จริงในไฟล์นี้ — ทุก credential มาจาก `.env` (ไฟล์นี้ไม่ commit)
+#
+# ── เตรียมก่อน `docker compose up -d` ครั้งแรก ─────────────────────────────
+#   1) cp ../.env.example ./.env   แล้วกรอกค่าจริง
+#      (compose อ่าน `.env` จากโฟลเดอร์เดียวกับไฟล์นี้ทั้งเป็น env_file และตัวแปร ${...})
+#   2) mkdir -p config db public       # ต้องมีอยู่ก่อน ไม่งั้น bind mount จะสร้างเป็นโฟลเดอร์เปล่า
+#   3) วางไฟล์:
+#        db/schema.sql               → schema เริ่มต้นของ Postgres (init ครั้งแรกเท่านั้น)
+#        config/inventory-items.sql  → script ดึง Inventory ของเจ้าของโปรเจค (ERP_SQL_ITEMS_SQL_FILE)
+#        config/inventory-stock.sql  → script ดึงยอด/รอบนับ (ERP_SQL_STOCK_SQL_FILE)
+#        public/                     → APK + root CA ของ Caddy สำหรับแจกเครื่องมือถือ
+#   4) host prereq (runbook): chrony/NTP, DHCP reservation, disk-space alert
+#      — นาฬิกา host คือลำดับ received_at และวันที่ พ.ศ. ทั้งระบบ
+#
+# ── หมายเหตุการ pin image ─────────────────────────────────────────────────
+#   ใช้ tag ที่ระบุ minor series ชัดเจน (ไม่มี `latest` ที่นี่)
+#   production ควรยกระดับเป็น digest (`image: postgres:16-alpine@sha256:...`)
+#   ตาม docs/architecture.md §8.1 หลังทดสอบเวอร์ชันที่จะใช้จริงแล้ว
+# ============================================================================
+
+name: kittikhun
+
+# logging เหมือนกันทุก service — กัน disk เต็มจาก log (10MB × 3 ไฟล์ ต่อ container)
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  # ──────────────────────────────────────────────────────────────────────────
+  # api — NestJS 11 บน Fastify (Node 22) : Auth · Catalog · Count · Members · Ingest
+  #        + scheduler ที่ดึง ERP แบบอ่านอย่างเดียวตามรอบ (advisory lock กันรอบซ้อน)
+  # ──────────────────────────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: ./Dockerfile
+      target: runtime
+    image: kittikhun/stock-api:4.0.0
+    env_file: .env
+    depends_on:
+      postgres:
+        # ต้องรอ Postgres พร้อมจริง ไม่ใช่แค่ container start — migration ตอน boot ต้องต่อ DB ได้
+        condition: service_healthy
+    volumes:
+      # ไฟล์ .sql ของ script ดึง Inventory (ERP_SQL_*_SQL_FILE ชี้มาที่ /config/...)
+      # อ่านอย่างเดียว (:ro) — ปิดโอกาสที่ API จะไปแก้สัญญา query ของ ERP
+      - ./config:/config:ro
+    expose:
+      # ไม่ publish ออก host โดยตั้งใจ — ทางเข้าเดียวคือ Caddy (TLS ภายใน)
+      # ถ้าต้อง debug ให้เพิ่ม ports: ["127.0.0.1:8080:8080"] ชั่วคราวเท่านั้น
+      - "8080"
+    healthcheck:
+      # ⚠️ liveness เท่านั้น (event loop + Postgres ping) — ห้ามผูกกับสถานะ ERP
+      #    ไม่งั้น ERP ล่มจะทำให้ container ถูก restart วนไม่จบ (สถานะ ERP อยู่ที่ /healthz/erp)
+      #    node:22-slim ไม่มี curl/wget → probe ด้วย fetch ของ Node 22 เอง
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:' + (process.env.APP_PORT || 8080) + '/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      # เผื่อเวลา migration ตอน boot (รันใต้ Postgres advisory lock) ก่อนเริ่มนับ retry
+      start_period: 60s
+    # ให้รอบ sync/คำขอที่ค้างจบก่อนถูก kill
+    stop_grace_period: 30s
+    restart: unless-stopped
+    logging: *default-logging
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # postgres — system of record ของระบบเรา (users, items_cache, count_*, audit_log, sync_runs)
+  #            ไม่ใช่ DB ของ ERP — DB ของ ERP เป็น SQL Server ภายนอกที่เราแตะแบบ SELECT เท่านั้น
+  # ──────────────────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      # ⚠️ POSTGRES_USER/DB ต้องตรงกับ DATABASE_URL ใน .env เป๊ะ ๆ ไม่งั้น api ต่อไม่ติด
+      POSTGRES_USER: ${POSTGRES_USER:-stock}
+      POSTGRES_DB: ${POSTGRES_DB:-kittikhun}
+      # ค่าจริงอยู่ใน .env เท่านั้น — ถ้าไม่ตั้ง compose จะหยุดพร้อมข้อความนี้
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?ต้องตั้ง POSTGRES_PASSWORD ใน server/.env}
+      TZ: ${TZ:-Asia/Bangkok}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # ⚠️ รันครั้งเดียวตอน volume ยังว่าง (init ครั้งแรก) — แก้ schema ภายหลังต้องใช้ migration ของ api
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      # $$ = ให้ shell ในคอนเทนเนอร์ขยายตัวแปร ไม่ใช่ compose ขยายตอน parse
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\" -q"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    logging: *default-logging
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # caddy — TLS ภายใน LAN (internal CA) + reverse proxy → api + แจก APK/root CA
+  #   ⚠️ พอร์ต 80 เปิดไว้เพื่อ bootstrap เครื่องแรก (ดาวน์โหลด root CA + APK) เท่านั้น
+  #   ⚠️ หลัง up ครั้งแรก ต้องคัดลอก root CA ออกมาวางใน ./public เพื่อแจก/ฝังในแอป:
+  #        docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt ./public/root-ca.crt
+  #      (Android 7+ ไม่เชื่อ CA ที่ผู้ใช้ติดตั้งเอง → Flutter ต้อง bundle + pin ที่ root — §8.2)
+  #   ⚠️ ห้ามใช้ชื่อ *.local (mDNS) — ตั้ง CADDY_SITE เป็นชื่อจาก DNS ของ router เช่น stock.lan
+  # ──────────────────────────────────────────────────────────────────────────
+  caddy:
+    image: caddy:2-alpine
+    depends_on:
+      - api
+    environment:
+      # ให้เฉพาะตัวแปรที่ Caddyfile ใช้ — ไม่ mount .env ทั้งไฟล์เข้ามา (ไม่ให้ secret ของ ERP/JWT หลุดเข้าคอนเทนเนอร์นี้)
+      CADDY_SITE: ${CADDY_SITE:-stock.lan}
+      TZ: ${TZ:-Asia/Bangkok}
+    ports:
+      - "80:80"
+      - "443:443"
+      # HTTP/3 (QUIC) — Caddy เปิดให้อยู่แล้ว ถ้า firewall LAN ไม่ยอม UDP ให้ลบบรรทัดนี้ได้
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # ⚠️ caddy_data เก็บกุญแจของ internal CA — หายแล้วเครื่องมือถือที่ pin root CA ไว้จะต่อไม่ได้ทั้ง fleet
+      - caddy_data:/data
+      - caddy_config:/config
+      # ไฟล์แจก: APK ล่าสุด + root-ca.crt (Caddyfile เสิร์ฟที่ /dl/*)
+      - ./public:/srv:ro
+    restart: unless-stopped
+    logging: *default-logging
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # backup — sidecar: pg_dump รายคืน → volume `backups` → **ส่งออกนอกเครื่อง**
+  #
+  #   ⚠️⚠️ dump ที่ยังอยู่ในเครื่องเดียวกับ Postgres ไม่ถือเป็น backup
+  #        ต้องตั้งค่าอย่างน้อยหนึ่งอย่างใน .env ให้ไฟล์ออกไปนอกเครื่องจริง:
+  #          BACKUP_REMOTE_TARGET=backup@nas.lan:/volume1/kittikhun/   (rsync over ssh)
+  #          BACKUP_SSH_KEY=/keys/id_ed25519  + mount ./secrets/ssh:/keys:ro (สร้างโฟลเดอร์เอง)
+  #        หรือคำสั่งอื่นเต็มรูปแบบ:
+  #          BACKUP_PUSH_CMD=rclone copy /backups nas:kittikhun --config /keys/rclone.conf
+  #   ⚠️ ใช้ image เดียวกับ postgres เพื่อให้เวอร์ชัน pg_dump ตรงกับ server เป๊ะ
+  #   ⚠️ rsync/openssh ไม่มีใน postgres:16-alpine → script ติดตั้งตอน start (ต้องมีเน็ตครั้งแรก);
+  #      production ที่ปิดเน็ตขาออกควร bake image ของตัวเองที่มี rsync/rclone ติดมาแล้ว
+  #   ปรับได้ผ่าน .env: BACKUP_HOUR (ดีฟอลต์ 2 = 02:00 น.), BACKUP_RETENTION_DAYS (14),
+  #                     BACKUP_STALE_MINUTES (1560 = 26 ชม. ตาม §8.1)
+  #   กู้คืน: docker compose exec -T postgres pg_restore -U <user> -d <db> --clean < <dump>
+  #          (ต้องซ้อม restore จริงรายไตรมาส — ดู runbook)
+  # ──────────────────────────────────────────────────────────────────────────
+  backup:
+    image: postgres:16-alpine
+    env_file: .env
+    environment:
+      TZ: ${TZ:-Asia/Bangkok}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - backups:/backups
+      # ถ้าใช้ rsync/rclone ให้ mount กุญแจแบบอ่านอย่างเดียวเพิ่ม (สร้างโฟลเดอร์ก่อน):
+      # - ./secrets/ssh:/keys:ro
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+
+        # ค่าทั้งหมดมาจาก .env (env_file) — ไม่มี secret ฝังในไฟล์ compose
+        export PGPASSWORD="$${POSTGRES_PASSWORD:?ต้องตั้ง POSTGRES_PASSWORD ใน server/.env}"
+        DB_HOST="$${POSTGRES_HOST:-postgres}"
+        DB_USER="$${POSTGRES_USER:-stock}"
+        DB_NAME="$${POSTGRES_DB:-kittikhun}"
+        RETENTION="$${BACKUP_RETENTION_DAYS:-14}"
+        RUN_HOUR="$${BACKUP_HOUR:-2}"
+        STALE_MIN="$${BACKUP_STALE_MINUTES:-1560}"
+        mkdir -p /backups
+
+        if [ -n "$${BACKUP_REMOTE_TARGET:-}" ] && ! command -v rsync >/dev/null 2>&1; then
+          echo "[backup] ติดตั้ง rsync/openssh-client (ต้องมีเน็ตขาออกตอน start)"
+          apk add --no-cache rsync openssh-client || echo "[backup] ⚠️ ติดตั้งไม่สำเร็จ — การส่งออกนอกเครื่องจะล้มเหลว"
+        fi
+        if [ -z "$${BACKUP_REMOTE_TARGET:-}" ] && [ -z "$${BACKUP_PUSH_CMD:-}" ]; then
+          echo "[backup] 🔴 ยังไม่ได้ตั้งเป้าหมายนอกเครื่อง (BACKUP_REMOTE_TARGET / BACKUP_PUSH_CMD) — dump จะอยู่ในเครื่องเดียวกับ Postgres = ยังไม่ใช่ backup จริง"
+        fi
+
+        while true; do
+          # busybox date ไม่รับ -d "today 02:00" → คำนวณวินาทีที่ต้องรอเอง (ตัดเลข 0 นำหน้ากันโหมด octal)
+          H=$$(date +%H); H=$${H#0}; H=$${H:-0}
+          M=$$(date +%M); M=$${M#0}; M=$${M:-0}
+          S=$$(date +%S); S=$${S#0}; S=$${S:-0}
+          NOW=$$(( H * 3600 + M * 60 + S ))
+          WAIT=$$(( RUN_HOUR * 3600 - NOW ))
+          if [ "$$WAIT" -le 0 ]; then WAIT=$$(( WAIT + 86400 )); fi
+          echo "[backup] รอบถัดไปในอีก $$WAIT วินาที (เป้าหมาย $${RUN_HOUR}:00 น. เขต $${TZ:-UTC})"
+          sleep "$$WAIT"
+
+          STAMP=$$(date +%Y%m%d-%H%M)
+          OUT="/backups/kittikhun-$${STAMP}.dump"
+          echo "[backup] เริ่ม pg_dump → $$OUT"
+          # เขียนเป็น .part ก่อนแล้วค่อย mv — ไฟล์ที่เห็นใน /backups จึงสมบูรณ์เสมอ
+          if pg_dump -h "$$DB_HOST" -U "$$DB_USER" -d "$$DB_NAME" -Fc -Z 6 -f "$$OUT.part"; then
+            mv "$$OUT.part" "$$OUT"
+            echo "[backup] pg_dump สำเร็จ: $$OUT"
+          else
+            rm -f "$$OUT.part"
+            echo "[backup] ❌ pg_dump ล้มเหลว — ตรวจ Postgres/สิทธิ์/พื้นที่ดิสก์"
+          fi
+
+          # ── ส่งออกนอกเครื่อง: ขั้นตอนที่ทำให้มันเป็น backup จริง ──────────
+          PUSHED=no
+          if [ -n "$${BACKUP_PUSH_CMD:-}" ]; then
+            if sh -c "$$BACKUP_PUSH_CMD"; then PUSHED=yes; else echo "[backup] ❌ BACKUP_PUSH_CMD ล้มเหลว"; fi
+          elif [ -n "$${BACKUP_REMOTE_TARGET:-}" ]; then
+            # ไม่ใช้ --delete: retention ฝั่งปลายทางให้ NAS/เครื่องสำรองคุมเอง กันเคสในเครื่องถูกลบแล้วลบตามไปด้วย
+            if rsync -a --partial \
+                 -e "ssh -o StrictHostKeyChecking=accept-new -i $${BACKUP_SSH_KEY:-/keys/id_ed25519}" \
+                 /backups/ "$$BACKUP_REMOTE_TARGET"; then
+              PUSHED=yes
+            else
+              echo "[backup] ❌ rsync ออกนอกเครื่องล้มเหลว — ตรวจ ssh key/สิทธิ์/ปลายทาง"
+            fi
+          fi
+          if [ "$$PUSHED" = yes ]; then
+            date -u +%Y-%m-%dT%H:%M:%SZ > /backups/.last-offsite-ok
+            echo "[backup] ส่งออกนอกเครื่องสำเร็จ"
+          fi
+
+          # retention 14 วัน (เฉพาะสำเนาในเครื่อง)
+          find /backups -maxdepth 1 -type f -name 'kittikhun-*.dump' -mtime +"$$RETENTION" -exec rm -f {} + || true
+
+          # แจ้งเตือนเมื่อ dump ที่ยืนยันว่าออกนอกเครื่องแล้วเก่ากว่า 26 ชม. (§8.1)
+          if [ ! -f /backups/.last-offsite-ok ] || [ -n "$$(find /backups/.last-offsite-ok -mmin +"$$STALE_MIN" 2>/dev/null)" ]; then
+            echo "[backup] 🔴 ALERT: ไม่มี dump ที่ยืนยันว่าออกนอกเครื่องภายใน 26 ชม. — ตรวจปลายทางสำรองด่วน"
+          fi
+        done
+    restart: unless-stopped
+    logging: *default-logging
+
+volumes:
+  pgdata: {}       # ข้อมูลจริงของระบบ (ผลนับ/ส่วนต่าง) — ห้ามลบ
+  caddy_data: {}   # ใบรับรอง + กุญแจ internal CA ของ Caddy
+  caddy_config: {}
+  backups: {}      # pg_dump ในเครื่อง (สำเนาชั่วคราวก่อนส่งออกนอกเครื่อง)

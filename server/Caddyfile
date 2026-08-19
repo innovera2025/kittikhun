@@ -1,0 +1,50 @@
+# Caddy — TLS ภายใน LAN + แจก APK และ root CA
+#
+# ⚠️ ห้ามใช้ชื่อ *.local (mDNS — Android resolve ไม่ได้บ่อย)
+#    ใช้ชื่อจาก DNS ของ router เช่น stock.lan หรือ IP นิ่ง + DHCP reservation
+#
+# ⚠️ Android 7+ ไม่เชื่อ CA ที่ผู้ใช้ติดตั้งเอง → แอป Flutter ต้อง bundle
+#    root CA ของ Caddy แล้ว pin ที่ root (ดู docs/architecture.md §8.2)
+
+{$CADDY_SITE:stock.lan} {
+	# ใบรับรองจาก internal CA ของ Caddy (ไม่ต้องมี public DNS)
+	tls internal
+
+	# API
+	handle /api/* {
+		uri strip_prefix /api
+		reverse_proxy api:8080
+	}
+
+	handle /healthz* {
+		reverse_proxy api:8080
+	}
+
+	# แจก APK และไฟล์ setup
+	handle /dl/* {
+		root * /srv
+		uri strip_prefix /dl
+		file_server browse
+	}
+
+	encode gzip
+	log {
+		output stdout
+		format console
+	}
+}
+
+# ── bootstrap แบบ HTTP เปล่า ────────────────────────────────────────────
+# แก้ปัญหาไก่กับไข่: เครื่องแรกยังไม่มี root CA จึงเปิด HTTPS ไม่ได้
+# เปิดพอร์ต 80 ให้ดาวน์โหลด "เฉพาะ" root CA + APK เท่านั้น — ไม่ proxy ไป API
+http://{$CADDY_SITE:stock.lan} {
+	handle /dl/* {
+		root * /srv
+		uri strip_prefix /dl
+		file_server browse
+	}
+	# ที่เหลือบังคับขึ้น HTTPS
+	handle {
+		redir https://{host}{uri} permanent
+	}
+}

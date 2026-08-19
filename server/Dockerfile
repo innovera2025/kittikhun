@@ -1,0 +1,23 @@
+# ── build stage ────────────────────────────────────────────────────────
+FROM node:22-slim AS build
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY tsconfig.json nest-cli.json ./
+COPY src ./src
+RUN npm run build && npm prune --omit=dev
+
+# ── runtime stage ──────────────────────────────────────────────────────
+FROM node:22-slim AS runtime
+WORKDIR /app
+ENV NODE_ENV=production
+# chrony/NTP อยู่ที่ host — นาฬิกาเครื่องนี้คือลำดับ received_at และวันที่ พ.ศ.
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/dist ./dist
+COPY --from=build /app/package.json ./
+# db/schema.sql ถูก mount โดย compose สำหรับ init ครั้งแรก
+USER node
+EXPOSE 8080
+# migration รันใน entrypoint ใต้ Postgres advisory lock (รันครั้งเดียวแน่นอน
+# แม้ scale api หลาย replica) — ดู docs/architecture.md §8.1
+CMD ["node", "dist/main.js"]
