@@ -24,10 +24,10 @@ ERP (`db_TCL` / SQL Server 2019) เป็นแหล่ง **อ่านอ�
 | ออกแบบสถาปัตยกรรม | ✅ เสร็จ ผ่านการตรวจเชิงปฏิปักษ์ 3 มุมมอง |
 | ทดสอบเชื่อมต่อ ERP จริง | ✅ เชื่อมได้ สำรวจข้อมูลครบ (อ่านอย่างเดียว) |
 | **UI (Flutter) — 5 หน้าจอครบ** | ✅ `flutter analyze` สะอาด · `flutter test` **22/22 ผ่าน** |
-| **Backend (NestJS) — โครงครบ** | ✅ `tsc` สะอาด · boot ได้จริง · guard test **24/24 ผ่าน** |
-| **ระบบผู้ใช้/login (ของเราเอง ไม่ดึงจาก ERP)** | ✅ **ใช้งานได้จริง** — ทดสอบ end-to-end กับ Postgres **26/26 ผ่าน** |
+| **Backend (NestJS) — โครงครบ** | ✅ `tsc` สะอาด · boot ได้จริง · เทสต์ **181/181 ผ่าน** (104 unit + 77 integration) |
+| **ระบบผู้ใช้/login (ของเราเอง ไม่ดึงจาก ERP)** | ✅ **ใช้งานได้จริง** — `test/auth-integration.spec.ts` **36/36 ผ่าน** กับ Postgres จริง |
 | ต่อ UI เข้ากับ backend (auth + members) | ✅ ตั้ง `API_BASE_URL` = ใช้ backend · ไม่ตั้ง = fixture สำหรับดู UI |
-| **โมดูล Catalog / Count / Sync** | ✅ **ใช้งานได้จริง** — ทดสอบวงจรนับ end-to-end **31/31 ผ่าน** |
+| **โมดูล Catalog / Count / Sync** | ✅ **ใช้งานได้จริง** — `test/count-cycle.spec.ts` **41/41 ผ่าน** กับ Postgres จริง |
 | จอแสดง PIN เริ่มต้นหลังเพิ่มสมาชิก | ✅ |
 | **Offline-first layer (drift + outbox + SyncEngine)** | ✅ **ใช้งานได้จริง** — เทสต์ **19/19 ผ่าน** |
 | ต่อหน้าจอ scan/search/count เข้า replica ในเครื่อง | ✅ สแกน/ค้นหา/นับ ทำงานได้แม้ออฟไลน์ |
@@ -88,7 +88,7 @@ admin ตัดสิน conflict → ปิดรอบ → closed_variance (�
 
 | ความสามารถ | รายละเอียด |
 |---|---|
-| PIN | argon2id + server pepper · **ปฏิเสธ PIN ที่เดาง่าย** (เลขซ้ำ, 123456) |
+| PIN | argon2id + server pepper · **ปฏิเสธ PIN ที่เดาง่าย** (เลขซ้ำ + เรียงขึ้น/ลง เช่น 123456, 654321) — กติกาเดียวกันทั้งตอนผู้ใช้ตั้งเองและตอนระบบสุ่ม PIN เริ่มต้น (`src/auth/pin-policy.ts`) |
 | กัน brute force | **หน่วงเวลาแบบทวีคูณต่อรหัสพนักงาน** (1s→2s→4s…) ไม่ล็อคบัญชี — กันคนอื่นยิง PIN ผิดเพื่อล็อคเพื่อนร่วมงาน |
 | Token | access 15 นาที + refresh 30 วัน rotate ทุกครั้ง · เก็บเฉพาะ sha256 · **ผูกกับเครื่อง** |
 | WiFi คลังหลุด | **grace window 60 วิ** — retry ด้วย token เดิมไม่ทำให้ถูกเตะออกจากระบบ |
@@ -139,7 +139,13 @@ server/                   NestJS backend
   src/erp/drivers/mock.driver.ts        fixture จาก design
   db/schema.sql                         Postgres schema 13 ตาราง + view v_variance
   docker-compose.yml · Dockerfile · Caddyfile
-  test/erp-read-only.spec.ts            24 เทสต์กฎเหล็ก
+  src/auth/pin-policy.ts                ⭐ กติกา PIN ที่เดาง่าย — แหล่งความจริงเดียว
+  test/erp-read-only.spec.ts            24 เทสต์กฎเหล็ก read-only
+  test/pin-policy.spec.ts               31 เทสต์กติกา PIN
+  test/auth-crypto.spec.ts              23 เทสต์ argon2 + pepper + sha256 + TTL
+  test/variance-csv.spec.ts             26 เทสต์ CSV ไทย (BOM, null≠0, formula injection)
+  test/auth-integration.spec.ts         36 เทสต์ login/refresh/throttle/audit (ต้องมี Postgres)
+  test/count-cycle.spec.ts              41 เทสต์วงจรนับเต็มวงจร (ต้องมี Postgres)
 
 docs/                     เอกสารออกแบบ (อ่าน erp-tcl-findings.md ก่อน)
 Mobile Stock Check System/  design ต้นแบบ (authoritative)
@@ -172,7 +178,15 @@ npm run db:schema          # สร้างตารางใน Postgres
 npm run create-admin -- --emp-id 52104 --name "ชื่อ ผู้ดูแล"
 npm run build
 npm run start:dev          # ERP_DRIVER=mock ใช้ได้เลยไม่ต้องต่อ ERP
-npx jest                   # 24 เทสต์กฎเหล็ก read-only
+npm run test:unit          # 104 เทสต์ ไม่ต้องมี DB
+npx jest                   # ทั้งหมด — ข้าม integration อัตโนมัติถ้าไม่มี DB
+
+# ── เทสต์ที่ต้องใช้ Postgres จริง (trigger append-only, advisory lock, v_variance) ──
+docker run -d --name kittikhun-test-pg \
+  -e POSTGRES_PASSWORD=testpw -e POSTGRES_USER=kittikhun \
+  -e POSTGRES_DB=kittikhun_test -p 55432:5432 postgres:16-alpine
+export TEST_DATABASE_URL='postgres://kittikhun:testpw@localhost:55432/kittikhun_test'
+npx jest                   # 181 เทสต์ครบทุกชุด
 
 # ── แอปต่อ backend จริง ──
 cd app

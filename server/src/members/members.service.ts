@@ -18,6 +18,7 @@ import {
   RoleSchema,
   type Role,
 } from '../auth/auth.types';
+import { isWeakPin } from '../auth/pin-policy';
 import type { AppConfig } from '../config/env.config';
 import { PostgresService } from '../db/postgres.service';
 
@@ -101,8 +102,6 @@ export class MembersService {
   private readonly logger = new Logger(MembersService.name);
   private readonly warehouseCode: string;
 
-  /** PIN ที่เดาง่ายเกินไป — กติกาเดียวกับ AuthService.changePin */
-  private static readonly WEAK_PINS: ReadonlySet<string> = new Set(['123456', '654321']);
 
   constructor(
     private readonly db: PostgresService,
@@ -313,13 +312,8 @@ export class MembersService {
   private static randomPin(): string {
     for (;;) {
       const pin = String(randomInt(0, 1_000_000)).padStart(6, '0');
-      if (!MembersService.isWeakPin(pin)) return pin;
+      if (!isWeakPin(pin)) return pin;
     }
-  }
-
-  /** เลขซ้ำทั้งหมด (000000–999999 แบบ dddddd) และเรียงเป็นชุด */
-  private static isWeakPin(pin: string): boolean {
-    return /^(\d)\1{5}$/.test(pin) || MembersService.WEAK_PINS.has(pin);
   }
 
   private static toDto(row: MemberRow): MemberDto {

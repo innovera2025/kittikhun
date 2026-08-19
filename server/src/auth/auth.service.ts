@@ -7,6 +7,7 @@ import * as argon2 from 'argon2';
 
 import type { AppConfig } from '../config/env.config';
 import { PostgresService } from '../db/postgres.service';
+import { WEAK_PIN_MESSAGE_TH, isWeakPin } from './pin-policy';
 import {
   AuthErrorCode,
   type ChangePinRequest,
@@ -324,8 +325,9 @@ export class AuthService {
     if (req.newPin === req.currentPin) {
       throw new AuthError(AuthErrorCode.INVALID_PIN, 'PIN ใหม่ต้องไม่ซ้ำกับ PIN เดิม');
     }
-    if (/^(\d)\1{5}$/.test(req.newPin) || req.newPin === '123456') {
-      throw new AuthError(AuthErrorCode.INVALID_PIN, 'PIN นี้เดาง่ายเกินไป');
+    // กติกาเดียวกับตัวสุ่ม PIN เริ่มต้นของ MembersService — นิยามอยู่ที่ pin-policy.ts ที่เดียว
+    if (isWeakPin(req.newPin)) {
+      throw new AuthError(AuthErrorCode.INVALID_PIN, WEAK_PIN_MESSAGE_TH);
     }
 
     const hash = await this.hashPin(req.newPin);

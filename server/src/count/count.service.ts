@@ -531,10 +531,17 @@ export class CountService {
     const rows =
       session.status === 'open'
         ? await this.db.query<VarianceViewRow>(
+            // ⚠️ คำตัดสิน conflict ของ admin ถูกเขียนลง closed_variance ทันทีที่ตัดสิน
+            //    (ไม่ต้องรอปิดรอบ) → รายงานสดต้องใช้ค่าที่ถูกตัดสินแล้ว ไม่ใช่ submission
+            //    ที่มาถึงล่าสุด มิฉะนั้น admin ตัดสินเลือก 98 แต่จอ/CSV ยังโชว์ 95
             `SELECT v.sku, i.name,
-                    v.frozen_on_hand, v.counted_qty, v.diff, v.status,
+                    v.frozen_on_hand,
+                    COALESCE(c.final_counted_qty, v.counted_qty) AS counted_qty,
+                    COALESCE(c.diff, v.diff) AS diff,
+                    v.status,
                     COALESCE(v.unit, i.unit) AS unit, v.zone, v.warehouse_code,
-                    v.counted_by, v.counted_device_id, v.device_count,
+                    COALESCE(c.counted_by, v.counted_by) AS counted_by,
+                    v.counted_device_id, v.device_count,
                     v.submission_count, v.superseded_count, v.is_conflict,
                     v.counted_at, v.received_at, v.latest_submission,
                     c.chosen_submission, c.resolved_by
