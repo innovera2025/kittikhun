@@ -1,0 +1,29 @@
+# ความลับ — ห้าม commit เด็ดขาด (ค่าจริงต้องอยู่ในเครื่อง local เท่านั้น)
+# รวม .env.example ด้วย ตามคำสั่งเจ้าของโปรเจค
+.env
+.env.*
+*.env
+
+# ไฟล์ script/config ที่อาจมีข้อมูล ERP จริง
+config/
+*.local.sql
+
+# ระบบปฏิบัติการ
+.DS_Store
+
+# Flutter
+app/.dart_tool/
+app/build/
+app/.flutter-plugins
+app/.flutter-plugins-dependencies
+app/ios/Pods/
+app/android/.gradle/
+app/android/local.properties
+
+# Node / NestJS
+node_modules/
+dist/
+coverage/
+
+# ไฟล์ thumbnail ที่ design tool สร้าง
+.thumbnail/
