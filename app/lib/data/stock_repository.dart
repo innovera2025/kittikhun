@@ -422,21 +422,7 @@ class CountRepository {
     final id = _asString(json['id']).trim();
     if (id.isEmpty) return null;
 
-    final warehouseCode = _asString(json['warehouseCode']).trim();
-    return ActiveSession(
-      id: id,
-      voucherNo: _asOptString(json['erpVoucherNo']),
-      zone: _asOptString(json['zone']),
-      warehouseCode: warehouseCode,
-      openedAt: _requireDate(json['openedAt'], 'openedAt'),
-      dataAsOf: _asDate(json['erpDataAsOf']),
-      staleCache: _asBool(json['openedOnStaleCache']),
-      rows: _mapList(
-        json['rows'],
-        '/count-sessions/active.rows',
-        (row) => _countRowFromJson(row, warehouseCode),
-      ),
-    );
+    return _activeSessionFromJson(json, '/count-sessions/active');
   }
 
   /// ส่งผลนับจากคิว — คืนผลรายบรรทัดตามลำดับที่ backend ตอบ
@@ -473,6 +459,136 @@ class CountRepository {
     final path = '/count-sessions/${Uri.encodeComponent(sessionId)}/variance';
     return _mapList(await api.get(path), path, _varianceRowFromJson);
   }
+
+  // ── งานของ admin (ต้องออนไลน์เสมอ — ไม่มี offline path โดยตั้งใจ) ──────
+  //
+  // เปิด/ปิดรอบและตัดสิน conflict เป็นการตัดสินใจระดับรอบที่กระทบทุกเครื่อง
+  // การคิวไว้ทำทีหลังจะทำให้ 2 admin ตัดสินคนละอย่างบนข้อมูลคนละชุด
+  // → ให้ล้มไปเลยเมื่อไม่มีเน็ต ดีกว่าให้ผลลัพธ์ที่เชื่อไม่ได้
+
+  /// เปิดรอบนับใหม่ — server freeze ยอดระบบ ณ ตอนนี้ลง `count_snapshot`
+  ///
+  /// [allowStaleCache] `false` = ให้ server ปฏิเสธถ้า cache เก่ากว่า 6 ชม.
+  /// `true` = admin เห็นอายุ cache แล้วยืนยันว่าเปิดได้ (ERP ล่ม)
+  Future<ActiveSession> openSession({
+    String? zone,
+    bool? allowStaleCache,
+  }) async {
+    final body = <String, dynamic>{
+      if (zone != null && zone.trim().isNotEmpty) 'zone': zone.trim(),
+      if (allowStaleCache case final bool v) 'allowStaleCache': v,
+    };
+    final json = _asMap(await api.post('/count-sessions', body: body),
+        '/count-sessions');
+    return _activeSessionFromJson(json, '/count-sessions');
+  }
+
+  /// ปิดรอบ — server materialize `closed_variance` (ตัวเลขไม่เปลี่ยนย้อนหลัง)
+  ///
+  /// ⚠️ ยังมี conflict ที่ยังไม่ตัดสินค้างอยู่ → server ปฏิเสธ (ข้อมูลไม่หายเงียบ)
+  Future<CloseSessionResult> closeSession(String sessionId) async {
+    final path = '/count-sessions/${Uri.encodeComponent(sessionId)}/close';
+    final json = _asMap(await api.post(path), path);
+    return CloseSessionResult(
+      materialized: _asInt(json['materialized']),
+      conflicts: _asInt(json['conflicts']),
+    );
+  }
+
+  /// SKU ที่หลายเครื่องนับไม่ตรงกัน พร้อมทุกตัวเลือกให้ admin ตัดสิน
+  Future<List<ConflictRow>> fetchConflicts(String sessionId) async {
+    final path = '/count-sessions/${Uri.encodeComponent(sessionId)}/conflicts';
+    return _mapList(await api.get(path), path, _conflictRowFromJson);
+  }
+
+  /// admin เลือกว่าเชื่อผลนับของเครื่องไหน — บันทึก `resolved_by` ไว้ตรวจย้อนได้
+  Future<void> resolveConflict({
+    required String sessionId,
+    required String sku,
+    required String chosenSubmission,
+  }) async {
+    final path = '/count-sessions/${Uri.encodeComponent(sessionId)}'
+        '/conflicts/${Uri.encodeComponent(sku)}/resolve';
+    await api.post(path, body: <String, dynamic>{
+      'chosenSubmission': chosenSubmission,
+    });
+  }
+}
+
+/// ผลการปิดรอบ — จำนวนแถวที่ถูกแช่แข็ง และจำนวน conflict ที่ admin ตัดสินไปแล้ว
+@immutable
+class CloseSessionResult {
+  const CloseSessionResult({
+    required this.materialized,
+    required this.conflicts,
+  });
+
+  final int materialized;
+  final int conflicts;
+}
+
+/// ผลนับ 1 ครั้งจากเครื่องหนึ่ง — ตัวเลือกที่ admin เลือกได้ตอนตัดสิน conflict
+@immutable
+class ConflictSubmission {
+  const ConflictSubmission({
+    required this.idempotencyKey,
+    required this.empId,
+    required this.deviceId,
+    required this.deviceSeq,
+    required this.countedQty,
+    required this.isLatest,
+    this.countedAt,
+    this.receivedAt,
+  });
+
+  final String idempotencyKey;
+  final String empId;
+  final String deviceId;
+  final int deviceSeq;
+  final num countedQty;
+
+  /// เวลาที่เครื่องบอกว่านับ — **แสดงผลเท่านั้น** นาฬิกาเครื่องเชื่อไม่ได้
+  final DateTime? countedAt;
+
+  /// เวลาที่ server รับ — ลำดับการซิงค์ ไม่ใช่ลำดับการนับจริง
+  final DateTime? receivedAt;
+
+  /// แถวที่ `v_variance` เลือกเป็น "ล่าสุด" ตอนนี้ (ถ้า admin ไม่ตัดสินจะใช้ตัวนี้)
+  final bool isLatest;
+}
+
+/// SKU หนึ่งที่หลายเครื่องนับไม่ตรงกัน
+@immutable
+class ConflictRow {
+  const ConflictRow({
+    required this.sku,
+    required this.deviceCount,
+    required this.submissionCount,
+    required this.submissions,
+    required this.resolved,
+    this.name,
+    this.frozenOnHand,
+    this.unit,
+    this.zone,
+    this.chosenSubmission,
+    this.resolvedBy,
+  });
+
+  final String sku;
+  final String? name;
+
+  /// ยอดระบบที่ freeze — null เมื่อของนี้อยู่นอกรายการของรอบ
+  final num? frozenOnHand;
+  final String? unit;
+  final String? zone;
+  final int deviceCount;
+  final int submissionCount;
+  final List<ConflictSubmission> submissions;
+
+  /// admin ตัดสินไปแล้ว — ยังแสดงอยู่ในลิสต์เพื่อให้ตรวจย้อนได้
+  final bool resolved;
+  final String? chosenSubmission;
+  final String? resolvedBy;
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -549,6 +665,72 @@ CountRow _countRowFromJson(Map<String, dynamic> json, String warehouseCode) =>
       unit: _asString(json['unit']),
       loc: _asOptString(json['loc']),
       warehouse: warehouseCode.isEmpty ? null : warehouseCode,
+    );
+
+/// รอบนับ + รายการที่ freeze — ใช้ร่วมกันระหว่าง `GET active` และ `POST` เปิดรอบ
+/// (สองเส้นทางนี้ตอบสัญญาเดียวกัน `CountSessionDto` — parse ต่างกันแล้วจะ drift)
+ActiveSession _activeSessionFromJson(Map<String, dynamic> json, String where) {
+  final warehouseCode = _asString(json['warehouseCode']).trim();
+
+  // สัญญาของ backend คือ `items` (CountSessionDto) — `rows` เป็นชื่อเก่าที่ยังรับไว้
+  final rows = _mapList(
+    json['items'] ?? json['rows'],
+    '$where.items',
+    (row) => _countRowFromJson(row, warehouseCode),
+  );
+
+  // ⚠️ กันบั๊กเงียบ: เคยอ่านคีย์ผิด (`rows` แทน `items`) แล้วได้ลิสต์ว่าง
+  //    ไม่มี error → จอนับโชว์ 'นับแล้ว 0/0' ทั้งที่รอบมีของอยู่จริง
+  //    backend ส่ง itemCount มาด้วย จึงเทียบไว้ให้พังดัง ๆ แทนที่จะเงียบ
+  final declared = json['itemCount'];
+  if (declared != null && _asInt(declared, -1) != rows.length) {
+    throw FormatException(
+      'จำนวนรายการในรอบไม่ตรงกับที่ server แจ้ง '
+      '(itemCount=${_asInt(declared, -1)} แต่อ่านได้ ${rows.length}) ที่ $where',
+    );
+  }
+
+  return ActiveSession(
+    id: _requireString(json['id'], '$where.id'),
+    voucherNo: _asOptString(json['erpVoucherNo']),
+    zone: _asOptString(json['zone']),
+    warehouseCode: warehouseCode,
+    openedAt: _requireDate(json['openedAt'], '$where.openedAt'),
+    dataAsOf: _asDate(json['erpDataAsOf']),
+    staleCache: _asBool(json['openedOnStaleCache']),
+    rows: rows,
+  );
+}
+
+ConflictSubmission _conflictSubmissionFromJson(Map<String, dynamic> json) =>
+    ConflictSubmission(
+      idempotencyKey:
+          _requireString(json['idempotencyKey'], 'submissions[].idempotencyKey'),
+      empId: _asString(json['empId']),
+      deviceId: _asString(json['deviceId']),
+      deviceSeq: _asInt(json['deviceSeq']),
+      countedQty: _requireNum(json['countedQty'], 'submissions[].countedQty'),
+      countedAt: _asDate(json['countedAt']),
+      receivedAt: _asDate(json['receivedAt']),
+      isLatest: _asBool(json['isLatest']),
+    );
+
+ConflictRow _conflictRowFromJson(Map<String, dynamic> json) => ConflictRow(
+      sku: _requireString(json['sku'], 'conflicts[].sku'),
+      name: _asOptString(json['name']),
+      frozenOnHand: _asNum(json['frozenOnHand']),
+      unit: _asOptString(json['unit']),
+      zone: _asOptString(json['zone']),
+      deviceCount: _asInt(json['deviceCount']),
+      submissionCount: _asInt(json['submissionCount']),
+      resolved: _asBool(json['resolved']),
+      chosenSubmission: _asOptString(json['chosenSubmission']),
+      resolvedBy: _asOptString(json['resolvedBy']),
+      submissions: _mapList(
+        json['submissions'],
+        'conflicts[].submissions',
+        _conflictSubmissionFromJson,
+      ),
     );
 
 SubmitResult _submitResultFromJson(Map<String, dynamic> json) => SubmitResult(

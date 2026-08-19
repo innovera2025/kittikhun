@@ -7,6 +7,7 @@ import '../../core/widgets/common.dart';
 import '../../data/fixtures.dart';
 import '../../data/models.dart';
 import '../../state/app_state.dart';
+import '../admin/admin_screen.dart';
 
 /// ยอดระบบคั่นหลักพันตาม design (`onHand.toLocaleString()`)
 final NumberFormat _qtyFormat = NumberFormat('#,##0.##');
@@ -68,7 +69,15 @@ class _CountScreenState extends ConsumerState<CountScreen> {
           padding: const EdgeInsets.symmetric(
             horizontal: KittikhunTokens.gutterTab,
           ),
-          child: _SessionCard(done: done, total: rows.length),
+          child: _SessionCard(
+            done: done,
+            total: rows.length,
+            // ทางเข้าจอผู้ดูแล — ไม่เพิ่มแท็บที่ 5 (design กำหนดไว้ 4 ช่อง)
+            // staff/viewer ไม่เห็นปุ่มนี้เลย จอจึงเหมือนเดิมทุกพิกเซล
+            onManage: state.me.role.isAdmin
+                ? () => ref.read(showAdminProvider.notifier).show()
+                : null,
+          ),
         ),
         Expanded(
           child: ListView.separated(
@@ -127,10 +136,17 @@ class _CountScreenState extends ConsumerState<CountScreen> {
 
 /// การ์ดหัวรอบนับ — โซน/เลขรอบ + ความคืบหน้า
 class _SessionCard extends StatelessWidget {
-  const _SessionCard({required this.done, required this.total});
+  const _SessionCard({
+    required this.done,
+    required this.total,
+    this.onManage,
+  });
 
   final int done;
   final int total;
+
+  /// null = ผู้ใช้ไม่ใช่ผู้ดูแล → ไม่แสดงปุ่มจัดการรอบนับ
+  final VoidCallback? onManage;
 
   @override
   Widget build(BuildContext context) {
@@ -169,6 +185,15 @@ class _SessionCard extends StatelessWidget {
             fraction: total == 0 ? 0 : done / total,
             gradient: KittikhunTokens.countProgressGradient,
           ),
+          if (onManage case final VoidCallback open) ...[
+            const SizedBox(height: 12),
+            SecondaryButton(
+              label: 'จัดการรอบนับ',
+              height: 38,
+              radius: KittikhunTokens.rTeamAction,
+              onPressed: open,
+            ),
+          ],
         ],
       ),
     );

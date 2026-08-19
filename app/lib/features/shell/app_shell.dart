@@ -5,14 +5,15 @@ import '../../core/theme/kittikhun_tokens.dart';
 import '../../core/widgets/common.dart';
 import '../../data/fixtures.dart';
 import '../../state/app_state.dart';
+import '../admin/admin_screen.dart';
 import '../count/count_screen.dart';
+import '../pending/pending_review_screen.dart';
 import '../scan/scan_screen.dart';
 import '../search/search_screen.dart';
 import '../team/add_member_sheet.dart';
-import '../pending/pending_review_screen.dart';
 import '../team/initial_pin_sheet.dart';
-import 'sync_status_bar.dart';
 import '../team/team_screen.dart';
+import 'sync_status_bar.dart';
 
 /// ระยะยกตัวของ keyframe `rise` ใน design (translateY 26px → 0)
 const double _riseFrom = 26;
@@ -70,14 +71,21 @@ class AppShell extends ConsumerWidget {
                   ref.read(showPendingProvider.notifier).show(),
             ),
             Expanded(
-              child: ref.watch(showPendingProvider)
-                  ? const PendingReviewScreen()
-                  : _screenFor(state.tab),
+              child: switch ((
+                ref.watch(showPendingProvider),
+                ref.watch(showAdminProvider),
+              )) {
+                (true, _) => const PendingReviewScreen(),
+                (_, true) => const AdminScreen(),
+                _ => _screenFor(state.tab),
+              },
             ),
             _TabBar(
               current: state.tab,
               onSelect: (tab) {
+                // แตะแท็บ = ออกจากจอชั่วคราวทุกจอ กลับสู่แท็บของ design
                 ref.read(showPendingProvider.notifier).hide();
+                ref.read(showAdminProvider.notifier).hide();
                 controller.goTab(tab);
               },
             ),

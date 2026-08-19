@@ -23,7 +23,7 @@ ERP (`db_TCL` / SQL Server 2019) เป็นแหล่ง **อ่านอ�
 |---|---|
 | ออกแบบสถาปัตยกรรม | ✅ เสร็จ ผ่านการตรวจเชิงปฏิปักษ์ 3 มุมมอง |
 | ทดสอบเชื่อมต่อ ERP จริง | ✅ เชื่อมได้ สำรวจข้อมูลครบ (อ่านอย่างเดียว) |
-| **UI (Flutter) — 5 หน้าจอครบ** | ✅ `flutter analyze` สะอาด · `flutter test` **22/22 ผ่าน** |
+| **UI (Flutter) — 8 หน้าจอ** | ✅ `flutter analyze` สะอาด · `flutter test` **59/59 ผ่าน** |
 | **Backend (NestJS) — โครงครบ** | ✅ `tsc` สะอาด · boot ได้จริง · เทสต์ **181/181 ผ่าน** (104 unit + 77 integration) |
 | **ระบบผู้ใช้/login (ของเราเอง ไม่ดึงจาก ERP)** | ✅ **ใช้งานได้จริง** — `test/auth-integration.spec.ts` **36/36 ผ่าน** กับ Postgres จริง |
 | ต่อ UI เข้ากับ backend (auth + members) | ✅ ตั้ง `API_BASE_URL` = ใช้ backend · ไม่ตั้ง = fixture สำหรับดู UI |
@@ -32,6 +32,7 @@ ERP (`db_TCL` / SQL Server 2019) เป็นแหล่ง **อ่านอ�
 | **Offline-first layer (drift + outbox + SyncEngine)** | ✅ **ใช้งานได้จริง** — เทสต์ **19/19 ผ่าน** |
 | ต่อหน้าจอ scan/search/count เข้า replica ในเครื่อง | ✅ สแกน/ค้นหา/นับ ทำงานได้แม้ออฟไลน์ |
 | จอ pending-review + แถบสถานะซิงค์ | ✅ |
+| **จอผู้ดูแล: เปิด/ปิดรอบ · ตัดสิน conflict · รายงานส่วนต่าง** | ✅ **ใช้งานได้จริง** — ทดสอบกับ backend ที่รันจริงครบวงจร |
 
 ## วงจรนับสต็อก (ทดสอบจริงแล้ว)
 
@@ -127,10 +128,12 @@ app/                      Flutter app
     data/models.dart · fixtures.dart    โมเดล + ข้อมูลตัวอย่างจาก design
     state/app_state.dart                Riverpod controller (พฤติกรรมทุกอย่างตาม design)
     features/login · shell · scan · search · count · team · pending
+    features/admin/admin_screen.dart    ⭐ จอผู้ดูแล (design extension — ไม่มีใน design ต้นแบบ)
     local/local_db.dart                 ⭐ drift: replica + outbox (คิวผลนับออฟไลน์)
     local/sync_engine.dart              pull delta / drain outbox / probe server จริง
   test/widget_test.dart                 22 เทสต์ (ข้อความไทย, สิทธิ์, สแกน, ส่วนต่าง)
   test/offline_test.dart                19 เทสต์ (replica, outbox, รอบนับออฟไลน์)
+  test/admin_test.dart                  18 เทสต์ (จอผู้ดูแล, null≠0, ตัวเลือก conflict)
 
 server/                   NestJS backend
   src/config/env.config.ts              zod ตรวจ .env ตอน boot (fail fast บอกชื่อตัวแปร)
@@ -167,7 +170,7 @@ Mobile Stock Check System/  design ต้นแบบ (authoritative)
 cd app
 flutter pub get
 flutter run                # ใช้ข้อมูลตัวอย่างจาก design ได้ทันที ไม่ต้องมี backend
-flutter test               # 41 เทสต์ (UI + offline)
+flutter test               # 59 เทสต์ (UI + offline + จอผู้ดูแล)
 flutter analyze
 
 # ── Backend ──
@@ -208,6 +211,7 @@ docker compose up -d
 **ฝั่งพัฒนา**
 4. ตัดสินกติกา **ItemCode ซ้ำ 85 รหัส** (ตอนนี้ driver ใช้ "Roworder สูงสุดชนะ")
 5. ฟีเจอร์พิมพ์ฉลาก **Code128 จาก ItemCode** (บาร์โค้ดเดิมมีแค่ 1.9%)
-6. หน้าจอ admin: เปิด/ปิดรอบนับ · ตัดสิน conflict · ดูรายงานส่วนต่าง (API พร้อมแล้ว)
+6. ~~หน้าจอ admin~~ ✅ เสร็จแล้ว — เข้าผ่านปุ่ม **จัดการรอบนับ** ในจอนับ (เห็นเฉพาะผู้ดูแล)
+   ⚠️ จอนี้ไม่มีใน design ต้นแบบ สร้างจาก token/pattern เดิมทั้งหมด — ถ้ามี design ทีหลังให้ปรับตาม
 7. ทดสอบบนเครื่องจริง: กล้อง/สแกน/ฟอนต์ไทย + acceptance gate ≥95% first-pass EAN-13
 8. TLS บน LAN: bundle root CA ของ Caddy เข้าแอป + pin (ดู architecture.md §8.2)
