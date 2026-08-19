@@ -2,6 +2,20 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- กล้อง: ไม่มีคีย์นี้ = iOS kill แอปทันทีตอนเปิดกล้องสแกน -->
+	<key>NSCameraUsageDescription</key>
+	<string>ใช้กล้องเพื่อสแกนบาร์โค้ดสินค้าตอนนับสต็อก</string>
+	<!-- backend รันบน LAN ของคลัง (private IP + http) — iOS 14+ ต้องขออนุญาต local network -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>เชื่อมต่อเซิร์ฟเวอร์นับสต็อกภายในคลัง เพื่อซิงค์รายการสินค้าและผลการนับ</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<!-- อนุญาต http เฉพาะเครือข่ายภายใน (private IP / .local) เท่านั้น
+		     ไม่ได้เปิด NSAllowsArbitraryLoads — อินเทอร์เน็ตสาธารณะยังบังคับ TLS
+		     งานที่รออยู่ข้อ 8 ใน README: ย้าย LAN ไป TLS ผ่าน Caddy แล้วถอดคีย์นี้ -->
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>CFBundleDevelopmentRegion</key>

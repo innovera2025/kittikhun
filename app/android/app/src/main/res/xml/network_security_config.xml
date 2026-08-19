@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  นโยบายเครือข่ายของแอป KITTIKHUN
+
+  ปัจจุบัน backend รันบน LAN ของคลังด้วย http:// (ตาม README: API_BASE_URL=http://192.168.x.x:8080)
+  Android 9+ บล็อก cleartext เป็นค่าเริ่มต้น → ถ้าไม่มีไฟล์นี้ build release จะต่อ backend ไม่ได้เลย
+
+  ⚠️ นี่คือสถานะชั่วคราว — งานที่รออยู่ข้อ 8 ใน README คือย้ายไป TLS ผ่าน Caddy บน LAN
+  เมื่อ Caddy root CA พร้อม:
+    1. วางไฟล์ CA ที่ res/raw/kittikhun_lan_ca.pem
+    2. ปลดคอมเมนต์ trust-anchors ด้านล่าง
+    3. เปลี่ยน cleartextTrafficPermitted เป็น false
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+            <!-- root CA ของ Caddy บน LAN (เปิดใช้พร้อมกับปิด cleartext ข้างบน)
+            <certificates src="@raw/kittikhun_lan_ca" />
+            -->
+        </trust-anchors>
+    </base-config>
+</network-security-config>
