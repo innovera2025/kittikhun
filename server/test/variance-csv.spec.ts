@@ -55,7 +55,7 @@ const csvOf = (rows: VarianceRow[]) => makeService(rows).varianceCsv('sess-1');
 describe('export CSV ส่วนต่าง', () => {
   describe('Excel ไทยต้องอ่านออก', () => {
     it('ขึ้นต้นด้วย BOM UTF-8', async () => {
-      expect(await csvOf([baseRow()])).toMatch(/^﻿/);
+      expect(await csvOf([baseRow()])).toMatch(/^\uFEFF/);
     });
 
     it('ขึ้นบรรทัดใหม่ด้วย CRLF และปิดท้ายไฟล์ด้วย CRLF', async () => {
@@ -119,7 +119,7 @@ describe('export CSV ส่วนต่าง', () => {
       [20, '20'],
       [0.125, '0.125'],
     ])('%p → %p (ตัดศูนย์ท้ายแต่ไม่กินหลักจริง)', async (value, expected) => {
-      const csv = await csvOf([baseRow({ countedQty: value as number })]);
+      const csv = await csvOf([baseRow({ countedQty: value })]);
       expect(csv.slice(1).split('\r\n')[1].split(',')[5]).toBe(expected);
     });
 

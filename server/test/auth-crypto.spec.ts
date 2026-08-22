@@ -119,7 +119,7 @@ describe('AuthService — ชั้นเข้ารหัส', () => {
       ['1d', 86_400_000],
       [' 15m ', 15 * 60_000],
     ])('%s → %d ms', (input, expected) => {
-      expect(AuthService.parseDuration(input as string)).toBe(expected);
+      expect(AuthService.parseDuration(input)).toBe(expected);
     });
 
     it('ตัวเลขล้วนถือเป็นวินาที', () => {

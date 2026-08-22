@@ -1,0 +1,113 @@
+name: CI
+
+# รันทุกครั้งที่ push และทุก PR — เทสต์ 265 ตัวจะได้ไม่รอให้คนนึกได้
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (NestJS)
+    runs-on: ubuntu-latest
+
+    # integration test ต้องใช้ Postgres จริง — trigger append-only, advisory lock
+    # และ view v_variance พิสูจน์ด้วย mock ไม่ได้
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: kittikhun
+          POSTGRES_PASSWORD: testpw
+          POSTGRES_DB: kittikhun_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U kittikhun -d kittikhun_test"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+
+    defaults:
+      run:
+        working-directory: server
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - run: npm ci
+
+      - name: ตรวจชนิดข้อมูล (tsc)
+        run: npx tsc --noEmit -p tsconfig.json
+
+      - name: Lint
+        run: npm run lint
+
+      - name: เทสต์ทั้งหมด (unit + integration)
+        run: npx jest
+        env:
+          TEST_DATABASE_URL: postgres://kittikhun:testpw@localhost:5432/kittikhun_test
+
+      - name: คอมไพล์
+        run: npm run build
+
+  app:
+    name: Mobile app (Flutter)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - run: flutter pub get
+
+      - name: วิเคราะห์โค้ด
+        run: flutter analyze
+
+      - name: เทสต์ (UI + offline + จอผู้ดูแล)
+        run: flutter test
+
+  erp-read-only-gate:
+    name: กฎเหล็ก ERP อ่านอย่างเดียว
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - run: npm ci
+
+      # ด่านสุดท้าย: เทสต์ชุดนี้แดง = ระบบมีช่องเขียนกลับ ERP ได้ = ห้าม merge
+      - name: statement guard + สัญญาสูตรยอดคงเหลือ
+        run: npx jest test/erp-read-only.spec.ts test/erp-items-script.spec.ts
+
+      # กันคนเผลอ commit ไฟล์ความลับขึ้น repo สาธารณะ
+      - name: ตรวจว่าไม่มีไฟล์ความลับถูก track
+        working-directory: .
+        run: |
+          if git ls-files | grep -iE '(^|/)[.]env($|[.])|[.]pem$|[.]p12$|[.]keystore$|[.]jks$'; then
+            echo "::error::พบไฟล์ความลับถูก track ใน git"
+            exit 1
+          fi
+          echo "ไม่พบไฟล์ความลับที่ถูก track"

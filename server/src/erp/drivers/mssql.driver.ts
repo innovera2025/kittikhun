@@ -388,6 +388,19 @@ function rowGetter(row: Record<string, unknown>): (...names: string[]) => unknow
   };
 }
 
+/**
+ * แปลงค่าจาก ERP เป็น string เฉพาะเมื่อเป็น scalar จริง ๆ
+ *
+ * ⚠️ `String(unknown)` กับ object จะได้ `'[object Object]'` ซึ่งดู "มีค่า" ทั้งที่ไม่มี
+ *    ถ้าปล่อยให้ค่านั้นกลายเป็นรหัสสินค้า จะมีสินค้าผีไหลเข้า items_cache
+ *    → คืน '' เพื่อให้ผู้เรียกถือว่า "ไม่มีค่า" แล้วข้ามแถวไป
+ */
+function asScalarString(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'bigint') return String(value);
+  return '';
+}
+
 function pickItemFields(row: Record<string, unknown>): Record<string, unknown> {
   const get = rowGetter(row);
   return {
@@ -1179,7 +1192,9 @@ export class MssqlDriver extends BaseErpDriver {
 
     for (const row of rows) {
       const get = rowGetter(row);
-      const sku = String(get('ItemCode', 'sku', 'item_code') ?? '').trim();
+      // ⚠️ ค่าจาก ERP เป็น unknown — ถ้าเป็น object แล้วเผลอ String() จะได้ '[object Object]'
+      //    กลายเป็น "รหัสสินค้า" ปลอมที่ไหลเข้า items_cache → ข้ามแถวไปเลยปลอดภัยกว่า
+      const sku = asScalarString(get('ItemCode', 'sku', 'item_code')).trim();
       if (sku.length === 0) {
         withoutSku += 1;
         continue;

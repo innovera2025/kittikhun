@@ -17,6 +17,7 @@
     "test": "jest",
     "test:unit": "jest --testPathIgnorePatterns '/test/(auth-integration|count-cycle)\\.spec\\.ts$'",
     "test:integration": "jest test/auth-integration.spec.ts test/count-cycle.spec.ts",
+    "verify:erp": "ts-node scripts/verify-erp.ts",
     "create-admin": "ts-node src/cli/create-admin.ts",
     "db:schema": "psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -f db/schema.sql"
   },
@@ -53,7 +54,8 @@
     "ts-jest": "^29.4.1",
     "ts-loader": "^9.5.2",
     "ts-node": "^10.9.2",
-    "typescript": "^5.9.2"
+    "typescript": "^5.9.2",
+    "typescript-eslint": "^8.67.0"
   },
   "jest": {
     "moduleFileExtensions": [

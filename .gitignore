@@ -5,7 +5,12 @@
 *.env
 
 # ไฟล์ script/config ที่อาจมีข้อมูล ERP จริง
-config/
+#
+# ⚠️ ต้องขึ้นต้นด้วย / เพื่อผูกกับ path จากรากโปรเจคเท่านั้น
+#    เดิมเขียนเป็น `config/` เฉย ๆ ซึ่ง git ตีความว่า "โฟลเดอร์ชื่อ config ที่ระดับไหนก็ได้"
+#    → server/src/config/env.config.ts (ไฟล์ source หลัก) ถูกกันออกจาก repo โดยไม่มีใครรู้
+/config/
+/server/config/
 *.local.sql
 
 # ระบบปฏิบัติการ

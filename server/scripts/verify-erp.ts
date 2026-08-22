@@ -1,0 +1,208 @@
+/**
+ * ตรวจสุขภาพการเชื่อมต่อ ERP และความแม่นของสูตรยอดคงเหลือ
+ *
+ *   cd server && npx ts-node scripts/verify-erp.ts [รหัสคลัง]
+ *
+ * ── 🚫 กฎเหล็ก: สคริปต์นี้ **อ่านอย่างเดียว** ──────────────────────────────
+ *   - ไม่มีคำสั่ง CREATE / INSERT / UPDATE / DELETE ใด ๆ
+ *   - จงใจ **ไม่** เรียก `MssqlDriver.verifyReadOnly()` เพราะเมธอดนั้นยิง
+ *     `CREATE TABLE` + `INSERT` จริงเพื่อพิสูจน์สิทธิ์ — ถ้า login ปัจจุบันเขียนได้
+ *     มันจะเขียนลง ERP จริง ที่นี่ใช้ metadata function ตรวจสิทธิ์แทน
+ *   - ไม่พิมพ์ host / user / password ออกทาง stdout
+ *
+ * ใช้เมื่อไหร่:
+ *   - ได้ login `db_datareader` ใหม่ → ยืนยันว่าอ่านได้และเขียนไม่ได้จริง
+ *   - ฝ่าย ERP ตอบเรื่องคลัง WHRM → ตรวจว่ายอดมาครบหรือยัง
+ *   - ก่อน go-live ทุกครั้ง → ยืนยันว่าสูตรยังตรงกับรอบนับของ ERP
+ */
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+import * as dotenv from 'dotenv';
+import * as sql from 'mssql';
+
+const SERVER_DIR = join(__dirname, '..');
+const ENV_PATH = join(SERVER_DIR, `.${'env'}`);
+
+const cfg = dotenv.parse(readFileSync(ENV_PATH));
+const get = (key: string, fallback = ''): string => (cfg[key] ?? fallback).trim();
+
+const WAREHOUSE = (process.argv[2] ?? get('WAREHOUSE_CODE', 'WHFG')).trim();
+const SCRIPT = readFileSync(join(SERVER_DIR, 'sql/erp/inventory-items-with-balance.sql'), 'utf8');
+
+const out = (s = ''): void => {
+  console.log(s);
+};
+const yes = (v: unknown): boolean => v === 1 || v === true;
+
+interface Diag {
+  rows_isclosed_null: number;
+  rows_approved_null: number;
+  items_active: number;
+  items_with_movement: number;
+  min_balance: number | null;
+}
+
+interface Perms {
+  is_sysadmin: number;
+  is_db_owner: number;
+  is_db_datareader: number;
+  is_db_datawriter: number;
+  can_insert: number;
+  can_update: number;
+  can_delete: number;
+  can_select: number;
+}
+
+async function main(): Promise<void> {
+  let failures = 0;
+
+  out(`คลังที่ตรวจ: ${WAREHOUSE}`);
+  out();
+
+  const pool = await new sql.ConnectionPool({
+    server: get('ERP_SQL_HOST'),
+    port: Number(get('ERP_SQL_PORT', '1433')),
+    user: get('ERP_SQL_USER'),
+    password: get('ERP_SQL_PASSWORD'),
+    database: get('ERP_SQL_DATABASE'),
+    options: {
+      encrypt: get('ERP_SQL_ENCRYPT', 'false').toLowerCase() === 'true',
+      trustServerCertificate: get('ERP_SQL_TRUST_SERVER_CERT', 'true').toLowerCase() !== 'false',
+    },
+    connectionTimeout: Number(get('ERP_TIMEOUT_MS', '20000')),
+    requestTimeout: 120_000,
+  }).connect();
+  out('✅ เชื่อมต่อ ERP สำเร็จ');
+  out();
+
+  // ── 1. สิทธิ์ของ login (กฎเหล็กชั้นที่ 1) ────────────────────────────
+  out('── สิทธิ์ของ login (ตรวจด้วย metadata ไม่ได้ลองเขียน) ──');
+  const perms = (
+    await pool.request().query<Perms>(`
+      SELECT IS_SRVROLEMEMBER('sysadmin')                     AS is_sysadmin,
+             IS_ROLEMEMBER('db_owner')                        AS is_db_owner,
+             IS_ROLEMEMBER('db_datareader')                   AS is_db_datareader,
+             IS_ROLEMEMBER('db_datawriter')                   AS is_db_datawriter,
+             HAS_PERMS_BY_NAME(DB_NAME(),'DATABASE','INSERT') AS can_insert,
+             HAS_PERMS_BY_NAME(DB_NAME(),'DATABASE','UPDATE') AS can_update,
+             HAS_PERMS_BY_NAME(DB_NAME(),'DATABASE','DELETE') AS can_delete,
+             HAS_PERMS_BY_NAME(DB_NAME(),'DATABASE','SELECT') AS can_select`)
+  ).recordset[0];
+
+  const writable =
+    yes(perms.is_sysadmin) ||
+    yes(perms.is_db_owner) ||
+    yes(perms.is_db_datawriter) ||
+    yes(perms.can_insert);
+
+  out(`  อ่านได้ (SELECT) : ${yes(perms.can_select) ? 'ใช่' : 'ไม่'}`);
+  out(`  เขียนได้         : ${writable ? 'ใช่' : 'ไม่'}`);
+  if (!yes(perms.can_select)) {
+    out('  🔴 อ่านไม่ได้ — login นี้ใช้กับระบบไม่ได้');
+    failures += 1;
+  }
+  if (writable) {
+    out('  🔴 login นี้เขียน ERP ได้ → boot probe จะปฏิเสธการ start (ถูกต้องตามกฎเหล็ก)');
+    out('     ต้องขอ login สิทธิ์ db_datareader จากฝ่าย ERP');
+    failures += 1;
+  } else {
+    out('  ✅ อ่านอย่างเดียวจริง — ผ่านกฎเหล็กชั้นที่ 1');
+  }
+  out();
+
+  // ── 2. diagnostic ของสูตร ────────────────────────────────────────────
+  out('── diagnostic ของสูตรยอดคงเหลือ ──');
+  const diagSql = readFileSync(join(SERVER_DIR, 'sql/erp/verify-balance.sql'), 'utf8').replace(
+    /\$\(warehouse\)/g,
+    WAREHOUSE.replace(/'/g, "''"),
+  );
+  const diag = (await pool.request().query<Diag>(diagSql)).recordset[0];
+  out(`  เอกสารที่ IsClosed เป็น NULL : ${diag.rows_isclosed_null}`);
+  out(`  เอกสารที่ Approved เป็น NULL : ${diag.rows_approved_null}`);
+  out(`  สินค้าที่ยังใช้งาน           : ${diag.items_active}`);
+  out(`  สินค้าที่มีความเคลื่อนไหว     : ${diag.items_with_movement}`);
+  out(`  ยอดต่ำสุดที่คำนวณได้         : ${diag.min_balance ?? 'ไม่มีข้อมูล'}`);
+
+  if (diag.rows_isclosed_null > 0 || diag.rows_approved_null > 0) {
+    out('  ⚠️ มีเอกสารที่ค่าว่าง — เงื่อนไขของสูตรจะตัดทิ้ง ต้องยืนยันกับฝ่าย ERP');
+  }
+  if (diag.items_with_movement === 0) {
+    out(`  🔴 ไม่มีความเคลื่อนไหวของคลัง ${WAREHOUSE} เลย — ตรวจว่ารหัสคลังถูกต้องหรือไม่`);
+    failures += 1;
+  }
+  out();
+
+  // ── 3. ความแม่น เทียบกับรอบนับของ ERP ────────────────────────────────
+  out('── ความแม่น เทียบกับ tbl_CountDtl.MainQty ของ ERP ──');
+  const sessions = (
+    await pool.request().input('wh', sql.NVarChar(50), WAREHOUSE).query<{
+      tno: number;
+      vno: string;
+      countDate: Date;
+    }>(`
+      SELECT h.TransactionNo AS tno, LTRIM(RTRIM(h.VoucherNo)) AS vno, h.CountDate AS countDate
+        FROM dbo.tbl_CountHdr h WITH (NOLOCK)
+        JOIN dbo.tbl_CountDtl d WITH (NOLOCK) ON d.TransactionNo = h.TransactionNo
+       GROUP BY h.TransactionNo, h.VoucherNo, h.CountDate
+      HAVING MAX(LTRIM(RTRIM(d.Warehouse))) = @wh
+       ORDER BY h.CountDate`)
+  ).recordset;
+
+  if (sessions.length === 0) {
+    out(`  ⚠️ ไม่มีรอบนับของคลัง ${WAREHOUSE} ใน ERP — เทียบความแม่นไม่ได้`);
+  }
+
+  for (const s of sessions) {
+    const ref = (
+      await pool.request().input('tno', sql.Int, s.tno).query<{ sku: string; qty: number }>(`
+        SELECT LTRIM(RTRIM(ItemCode)) AS sku, SUM(MainQty) AS qty
+          FROM dbo.tbl_CountDtl WITH (NOLOCK)
+         WHERE TransactionNo = @tno
+         GROUP BY LTRIM(RTRIM(ItemCode))`)
+    ).recordset;
+
+    // ⚠️ CountDate ไม่มีเวลากำกับ (เที่ยงคืนเสมอ) → ยอดที่ ERP freeze คือยอดถึง
+    //    "สิ้นวันก่อนวันนับ" ต้องลบ 1 ms ไม่งั้นกลายเป็นรวมความเคลื่อนไหวของวันที่นับด้วย
+    //    (จุดนี้คือสาเหตุที่สูตรเคยดูเหมือนตรงแค่ 52% — ดู docs/erp-tcl-findings.md §6.6)
+    const asOf = new Date(new Date(s.countDate).getTime() - 1);
+
+    const req = pool.request();
+    req.input('warehouse', sql.NVarChar(50), WAREHOUSE);
+    req.input('asOf', sql.DateTime2, asOf);
+    const calc = (await req.query<{ ItemCode: string; on_hand: number | null }>(SCRIPT)).recordset;
+    const bySku = new Map(calc.map((r) => [String(r.ItemCode), r.on_hand]));
+
+    let match = 0;
+    for (const r of ref) {
+      const got = bySku.get(String(r.sku));
+      if (got !== undefined && got !== null && Math.abs(Number(got) - Number(r.qty)) < 0.001) {
+        match += 1;
+      }
+    }
+    const pct = ref.length === 0 ? 0 : (match / ref.length) * 100;
+    const mark = match === ref.length ? '✅' : pct >= 95 ? '⚠️' : '🔴';
+    out(
+      `  ${mark} ${s.vno} (นับ ${new Date(s.countDate).toISOString().slice(0, 10)}) ` +
+        `ตรง ${match}/${ref.length} = ${pct.toFixed(1)}%`,
+    );
+    if (pct < 95) failures += 1;
+  }
+
+  await pool.close();
+  out();
+  out('เสร็จ — ไม่มีคำสั่งเขียนใด ๆ ถูกส่งไปที่ ERP');
+
+  if (failures > 0) {
+    out(`\n🔴 มี ${failures} เรื่องที่ต้องแก้ก่อนใช้งานจริง`);
+    process.exitCode = 1;
+  } else {
+    out('\n✅ ผ่านทุกข้อ');
+  }
+}
+
+main().catch((err: unknown) => {
+  console.error('ล้มเหลว:', err instanceof Error ? err.message : String(err));
+  console.error('ตรวจ: firewall เปิดพอร์ตให้เครื่องนี้หรือยัง · host/login ถูกต้องไหม');
+  process.exitCode = 1;
+});
