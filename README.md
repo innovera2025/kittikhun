@@ -170,6 +170,7 @@ Mobile Stock Check System/  design ต้นแบบ (authoritative)
 | [`docs/architecture.md`](docs/architecture.md) | สถาปัตยกรรมเต็ม: data flow, DB schema, API, offline sync, auth, deployment |
 | [`docs/design-fidelity.md`](docs/design-fidelity.md) | สัญญาความตรงกับ design: token ทุกตัว, ทุกจอ/สถานะ, ข้อความไทยทุกข้อความ |
 | [`docs/erp-integration.md`](docs/erp-integration.md) | สัญญา ERP adapter + กฎเหล็ก 5 ชั้น + โหมดล้มเหลว |
+| [`docs/deploy-vps.md`](docs/deploy-vps.md) | **ติดตั้งบน VPS** ที่มีหลายโปรเจค — โครงโฟลเดอร์, กันพอร์ตชน, secret, backup |
 
 ## เริ่มพัฒนา
 

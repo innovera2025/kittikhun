@@ -15,6 +15,10 @@ ENV NODE_ENV=production
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/package.json ./
+# ⚠️ script ดึงข้อมูลจาก ERP ต้องอยู่ใน image — เป็น "สัญญา" กับฝ่าย ERP ที่ต้องมี
+#    version control ไม่ใช่ไฟล์ที่วางมือบนเครื่อง server (เคยพลาดตรงนี้: ตั้ง
+#    ERP_SQL_ITEMS_SQL_FILE แล้ว container หาไฟล์ไม่เจอเพราะไม่ได้ COPY เข้ามา)
+COPY sql ./sql
 # db/schema.sql ถูก mount โดย compose สำหรับ init ครั้งแรก
 USER node
 EXPOSE 8080
