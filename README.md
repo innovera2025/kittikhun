@@ -24,7 +24,7 @@ ERP (`db_TCL` / SQL Server 2019) เป็นแหล่ง **อ่านอ�
 | ออกแบบสถาปัตยกรรม | ✅ เสร็จ ผ่านการตรวจเชิงปฏิปักษ์ 3 มุมมอง |
 | ทดสอบเชื่อมต่อ ERP จริง | ✅ เชื่อมได้ สำรวจข้อมูลครบ (อ่านอย่างเดียว) |
 | **UI (Flutter) — 8 หน้าจอ** | ✅ `flutter analyze` สะอาด · `flutter test` **59/59 ผ่าน** |
-| **Backend (NestJS) — โครงครบ** | ✅ `tsc` สะอาด · boot ได้จริง · เทสต์ **181/181 ผ่าน** (104 unit + 77 integration) |
+| **Backend (NestJS) — โครงครบ** | ✅ `tsc` สะอาด · boot ได้จริง · เทสต์ **206/206 ผ่าน** (129 unit + 77 integration) |
 | **ระบบผู้ใช้/login (ของเราเอง ไม่ดึงจาก ERP)** | ✅ **ใช้งานได้จริง** — `test/auth-integration.spec.ts` **36/36 ผ่าน** กับ Postgres จริง |
 | ต่อ UI เข้ากับ backend (auth + members) | ✅ ตั้ง `API_BASE_URL` = ใช้ backend · ไม่ตั้ง = fixture สำหรับดู UI |
 | **โมดูล Catalog / Count / Sync** | ✅ **ใช้งานได้จริง** — `test/count-cycle.spec.ts` **41/41 ผ่าน** กับ Postgres จริง |
@@ -136,6 +136,8 @@ app/                      Flutter app
   test/admin_test.dart                  18 เทสต์ (จอผู้ดูแล, null≠0, ตัวเลือก conflict)
 
 server/                   NestJS backend
+  sql/erp/inventory-items-with-balance.sql  ⭐ item master + ยอดคงเหลือ (สูตรจากฝ่าย ERP)
+  sql/erp/verify-balance.sql            diagnostic ตรวจสูตรก่อนเชื่อตัวเลข (อ่านอย่างเดียว)
   src/config/env.config.ts              zod ตรวจ .env ตอน boot (fail fast บอกชื่อตัวแปร)
   src/erp/erp-adapter.ts                ⭐ สัญญา read-only + statement guard + compile guard
   src/erp/drivers/mssql.driver.ts       SQL Server driver + boot write-probe + charset ไทย
@@ -144,6 +146,7 @@ server/                   NestJS backend
   docker-compose.yml · Dockerfile · Caddyfile
   src/auth/pin-policy.ts                ⭐ กติกา PIN ที่เดาง่าย — แหล่งความจริงเดียว
   test/erp-read-only.spec.ts            24 เทสต์กฎเหล็ก read-only
+  test/erp-items-script.spec.ts         25 เทสต์ล็อกเงื่อนไขสูตรยอดคงเหลือ
   test/pin-policy.spec.ts               31 เทสต์กติกา PIN
   test/auth-crypto.spec.ts              23 เทสต์ argon2 + pepper + sha256 + TTL
   test/variance-csv.spec.ts             26 เทสต์ CSV ไทย (BOM, null≠0, formula injection)
@@ -206,7 +209,10 @@ docker compose up -d
 **รอจากฝ่าย ERP**
 1. **login สิทธิ์ `db_datareader`** สำหรับต่อ ERP — จำเป็นก่อนใช้งานจริง
    (boot probe ปฏิเสธการ start ถ้า login เขียน ERP ได้)
-2. **script/query ยอดคงเหลือ** → วางเป็น `.sql` ใน `server/config/` แล้วชี้ด้วย `ERP_SQL_ITEMS_SQL_FILE`
+2. ~~script/query ยอดคงเหลือ~~ ✅ **ได้แล้ว 22 ส.ค. 2569** — รวมเข้ากับ query item master ที่
+   `server/sql/erp/inventory-items-with-balance.sql` (ชี้ด้วย `ERP_SQL_ITEMS_SQL_FILE`)
+   ⚠️ **ยังไม่ได้เทียบกับข้อมูลจริง** — ต้องรัน `server/sql/erp/verify-balance.sql` แล้วสุ่มเทียบ
+   ~20 รหัสกับหน้าจอ ERP ก่อนเชื่อตัวเลข (ดู `docs/erp-tcl-findings.md` §6.6)
 3. จำกัดการเข้าถึงพอร์ต ERP ให้เฉพาะเซิร์ฟเวอร์แอป (firewall/VPN) + ตั้ง `ERP_SQL_ENCRYPT=true`
 
 **ฝั่งพัฒนา**

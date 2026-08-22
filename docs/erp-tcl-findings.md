@@ -151,6 +151,45 @@
 → `InventoryFlowDtl` มีแค่ 406 แถว / 101 สินค้า **ไม่ครอบคลุมยอดยกมา (opening balance)** จึงคำนวณยอดจริงไม่ได้
 → **ยังต้องได้ query/สูตรจากฝั่ง ERP** ถ้าต้องการ qty ครบทุกรายการ
 
+---
+
+## 6.6 ✅ ได้สูตรยอดคงเหลือจากฝ่าย ERP แล้ว (22 ส.ค. 2569)
+
+ฝ่าย ERP ส่ง query ที่ **ตัว ERP ใช้เอง** มาให้ — เป็นสูตรที่ 8 ต่อจาก 7 สูตรที่ลองเองใน §6.5
+
+```
+SUM(InventoryFlowDtl.InOut × InventoryFlowDtl.MainQuantity)
+FROM InventoryFlowHdr LEFT OUTER JOIN InventoryFlowDtl
+  ON Hdr.TranSactionno = Dtl.Transactionno AND Hdr.VoucherNo = Dtl.VoucherNo
+WHERE Dtl.ItemCode = ? AND Hdr.InOutDate <= ? AND Hdr.Approved = 1
+  AND Hdr.IsClosed <> 1 AND Dtl.Warehouse = ?
+```
+
+**ต่างจากสูตรที่ลองเองอย่างไร** — สูตรเดิมที่ได้ 52.1% ขาด 3 อย่างนี้:
+`IsClosed <> 1` · join ด้วย **ทั้ง** `TranSactionno` และ `VoucherNo` (เดิมใช้คีย์เดียว) · กรองคลังที่ระดับ `Dtl`
+
+**นำเข้าระบบแล้ว:** แปลงเป็น T-SQL แบบ set-based (ทุกรหัสในครั้งเดียว) รวมกับ query item master
+ที่ [`server/sql/erp/inventory-items-with-balance.sql`](../server/sql/erp/inventory-items-with-balance.sql)
+→ ไหลเข้า `CanonicalItem.onHand` ผ่าน `fetchItems()` · ล็อกเงื่อนไขไว้ด้วยเทสต์ 25 เคส
+(`server/test/erp-items-script.spec.ts`) — แก้เงื่อนไขโดยไม่คุยกับฝ่าย ERP = เทสต์แดงทันที
+
+### ⚠️ ยังไม่ได้เทียบกับ ERP จริง — ห้ามเชื่อตัวเลขจนกว่าจะตรวจ
+
+พิสูจน์แล้วบน **SQL Server 2019 จริง** (schema จำลอง) ว่า query รันได้ พารามิเตอร์ผูกถูก
+กรองครบทุกเงื่อนไข ภาษาไทยไม่เพี้ยน และสินค้าที่ไม่มี movement คืน **NULL ไม่ใช่ 0**
+แต่ยัง **ไม่เคยรันกับข้อมูลจริงของ `db_TCL`** เพราะยังไม่มี login `db_datareader`
+
+**ประเด็นที่ต้องถามฝ่าย ERP ก่อนใช้จริง:**
+
+| ประเด็น | ผลที่พิสูจน์แล้ว | ต้องถาม |
+|---|---|---|
+| `IsClosed <> 1` เมื่อค่าเป็น `NULL` | `NULL <> 1` = UNKNOWN → **แถวนั้นถูกตัดทิ้งเงียบ ๆ** (ทดสอบจริง: ยอด 60 แทนที่จะเป็น 67) | ใน `db_TCL` มีแถวที่ `IsClosed` เป็น NULL ไหม · ถ้ามี ตั้งใจให้ตัดทิ้งหรือไม่ |
+| ยอดยกมา (opening balance) | §6.5 พบว่า ledger ไม่มียอดยกมา — สูตรนี้ก็ไม่ได้บวกเพิ่ม | ERP เก็บยอดยกมาไว้ที่ไหน หรือถือว่าอยู่ใน ledger แล้ว |
+| สินค้าที่ไม่มี movement | ได้ยอด `NULL` (เราไม่แปลงเป็น 0 โดยตั้งใจ) | ควรถือเป็น "ยอด 0" หรือ "ไม่มีข้อมูล" |
+
+**วิธีตรวจเมื่อมี login แล้ว:** รัน [`server/sql/erp/verify-balance.sql`](../server/sql/erp/verify-balance.sql)
+(อ่านอย่างเดียว) แล้วสุ่มเทียบยอดสัก 20 รหัสกับหน้าจอ ERP — ต้องตรงก่อนจึงเปิดใช้จริง
+
 ### 🔴 ปัญหาใหม่ที่ต้องตัดสิน: `ItemCode` ซ้ำ 85 รหัส (172 แถว)
 
 `InventoryItem` PK = `(Roworder, ItemCode)` → **ItemCode ไม่ unique** · 620 แถว แต่ ItemCode ไม่ซ้ำแค่ **533**

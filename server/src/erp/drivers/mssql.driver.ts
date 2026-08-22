@@ -399,8 +399,9 @@ function pickItemFields(row: Record<string, unknown>): Record<string, unknown> {
     lot: get('LotNumber', 'lot', 'lot_number'),
     rop: get('MinStock', 'rop', 'min_stock', 'reorder_point'),
     // ยอดคงเหลือ: `dbo.InventoryItem` ไม่มีค่าที่ใช้ได้ (BalStock ตรงกับ ledger 0/56)
-    // → มีค่าเฉพาะกรณี script ของเจ้าของโปรเจคคำนวณ on_hand มาให้
-    onHand: get('on_hand', 'onHand'),
+    // → มาจาก script ของฝ่าย ERP ที่ SUM(InOut × MainQuantity) จาก InventoryFlowDtl
+    // 'Balqty' คือชื่อคอลัมน์ในสูตรต้นฉบับ — รับไว้ด้วยเผื่อ script ไม่ได้ alias เป็น on_hand
+    onHand: get('on_hand', 'onHand', 'Balqty', 'BalQty'),
     barcodeUnits: get('BarCodeUnits', 'barcode', 'bar_code_units'),
     barcodePack: get('BarCodePack', 'barcode_pack', 'bar_code_pack'),
     roworder: get('Roworder', 'roworder'),
@@ -865,10 +866,14 @@ export class MssqlDriver extends BaseErpDriver {
   }
 
   /**
-   * db_TCL **ไม่มีตารางยอดคงเหลือสำเร็จรูป** (findings §5: BalStock ตรง 0/56, tbl_STOCKSTD
-   * เป็นรหัสคนละระบบ, InventoryFlowDtl ขาดยอดยกมา) → ไม่มี stock snapshot ให้ดึงในเฟสนี้
-   * ยอดระบบที่เชื่อถือได้มาจากรอบนับ: ใช้ fetchCountSession() แทน
-   * เมื่อได้ script ยอดคงเหลือจากเจ้าของโปรเจค (ERP_SQL_STOCK_SQL_FILE) ให้ต่อที่เมธอดนี้
+   * db_TCL **ไม่มีตารางยอดคงเหลือสำเร็จรูป** (findings §5: BalStock ตรง 0/56,
+   * tbl_STOCKSTD เป็นรหัสคนละระบบ) → ไม่มี snapshot สำเร็จรูปให้ดึง
+   *
+   * ตั้งแต่ 22 ส.ค. 2569 ฝ่าย ERP ส่งสูตรคำนวณยอดจาก ledger มาให้แล้ว
+   * (`SUM(InOut × MainQuantity)` จาก InventoryFlowHdr/Dtl) — สูตรนั้นถูกรวมเข้ากับ
+   * **query item master** ที่ `sql/erp/inventory-items-with-balance.sql` และไหลเข้าระบบ
+   * ทาง `fetchItems()` → `CanonicalItem.onHand` แทน จึงไม่ต้องมีเส้นทาง snapshot แยก
+   * (ดึงครั้งเดียวได้ทั้ง master + ยอด = ไม่มีช่วงที่สองแหล่งไม่ตรงกัน)
    *
    * ตั้งใจให้ throw ไม่ใช่คืน list ว่าง: list ว่างจะถูกตีความว่า "ของหมดทุกรายการ"
    * แล้วไป tombstone/ล้างยอดใน items_cache ได้ — รอบ sync ที่ล้มเหลวปลอดภัยกว่าข้อมูลผิด
@@ -877,8 +882,8 @@ export class MssqlDriver extends BaseErpDriver {
     throw new MssqlDriverError(
       'ERP_CONFIG',
       `ERP db_TCL ไม่มีแหล่งยอดคงเหลือสำเร็จรูปสำหรับคลัง ${warehouseCode} — ` +
-        'ยอดระบบต้องใช้จากรอบนับ (fetchCountSession → tbl_CountDtl.MainQty) ' +
-        'หรือรอ script ยอดคงเหลือจากเจ้าของโปรเจคมาต่อที่ ERP_SQL_STOCK_SQL_FILE',
+        'ยอดคงเหลือมาพร้อม item master แล้ว ตั้ง ERP_SQL_ITEMS_SQL_FILE ให้ชี้ไปที่ ' +
+        'sql/erp/inventory-items-with-balance.sql (สูตรจากฝ่าย ERP)',
     );
   }
 
@@ -1115,12 +1120,20 @@ export class MssqlDriver extends BaseErpDriver {
    * อ่าน item master จาก script .sql ที่เจ้าของโปรเจคส่งมอบ (สัญญาของ driver)
    * script คุม ORDER BY/สูตรเอง จึงไม่แบ่งหน้าใน SQL — รันครั้งเดียวแล้วซอยเป็น batch 500
    * (item master ของ ERP นี้อยู่ระดับหลายร้อยแถว จึงยังรับได้ในหน่วยความจำ)
+   *
+   * พารามิเตอร์ที่ผูกให้เสมอ (script จะใช้หรือไม่ใช้ก็ได้ — T-SQL ยอมให้ประกาศแล้วไม่อ้างถึง):
+   *   `@warehouse` = WAREHOUSE_CODE ของ deployment นี้
+   *   `@asOf`      = เวลาที่เริ่มรอบ sync (ยอดคงเหลือ ณ เวลานี้)
+   * มีไว้เพื่อให้ script เดียวใช้ได้ทุกคลังโดยไม่ต้องแก้ไฟล์ต่อ deployment
    */
   private async *readItemRowsFromScript(
     path: string,
   ): AsyncIterableIterator<Record<string, unknown>[]> {
     const text = this.loadItemsSqlFile(path);
-    const rows = await this.runQuery('items-script', text);
+    const rows = await this.runQuery('items-script', text, {
+      warehouse: this.sqlCfg.warehouseCode,
+      asOf: new Date(),
+    });
     for (const batch of chunk(this.dedupeItemRows(rows), ITEM_BATCH_SIZE)) yield batch;
   }
 
