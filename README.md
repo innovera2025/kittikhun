@@ -209,10 +209,11 @@ docker compose up -d
 **รอจากฝ่าย ERP**
 1. **login สิทธิ์ `db_datareader`** สำหรับต่อ ERP — จำเป็นก่อนใช้งานจริง
    (boot probe ปฏิเสธการ start ถ้า login เขียน ERP ได้)
-2. ~~script/query ยอดคงเหลือ~~ ✅ **ได้แล้ว 22 ส.ค. 2569** — รวมเข้ากับ query item master ที่
+2. ~~script/query ยอดคงเหลือ~~ ✅ **เสร็จและตรวจกับข้อมูลจริงแล้ว 22 ส.ค. 2569**
    `server/sql/erp/inventory-items-with-balance.sql` (ชี้ด้วย `ERP_SQL_ITEMS_SQL_FILE`)
-   ⚠️ **ยังไม่ได้เทียบกับข้อมูลจริง** — ต้องรัน `server/sql/erp/verify-balance.sql` แล้วสุ่มเทียบ
-   ~20 รหัสกับหน้าจอ ERP ก่อนเชื่อตัวเลข (ดู `docs/erp-tcl-findings.md` §6.6)
+   เทียบกับ `tbl_CountDtl.MainQty` ของ ERP: **100% ตรง** 2 รอบนับ (93/93 และ 96/96)
+   ปริศนา "52.1%" เดิมคือจุดตัดวันที่ ไม่ใช่สูตรผิด (ดู `docs/erp-tcl-findings.md` §6.6)
+   🔴 ใช้ได้เฉพาะคลัง **WHFG** — `WHRM` ไม่มีข้อมูลใน ledger ต้องถามฝ่าย ERP
 3. จำกัดการเข้าถึงพอร์ต ERP ให้เฉพาะเซิร์ฟเวอร์แอป (firewall/VPN) + ตั้ง `ERP_SQL_ENCRYPT=true`
 
 **ฝั่งพัฒนา**
