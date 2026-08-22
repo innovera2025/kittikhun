@@ -601,12 +601,13 @@ class SyncStatus {
   const SyncStatus({
     required this.erpOk,
     this.itemsStockAsOf,
-    this.countSessionsAsOf,
   });
 
   /// เวลาที่ยอดสินค้าถูก sync จาก ERP ล่าสุด — null = ยังไม่เคย sync
+  ///
+  /// ⚠️ เคยมี `countSessionsAsOf` คู่กัน — ตัดออก 22 ส.ค. 2569 พร้อมกับการเลิก
+  /// mirror รอบนับจาก ERP (ระบบดึงจาก ERP แค่จำนวนคงเหลือเท่านั้น)
   final DateTime? itemsStockAsOf;
-  final DateTime? countSessionsAsOf;
 
   /// false = ต่อ ERP (SQL Server) ไม่ได้ → ยอดที่เห็นเป็นของ cache
   final bool erpOk;
@@ -631,7 +632,6 @@ class SyncRepository {
     final json = _asMap(await api.get('/sync/status'), '/sync/status');
     return SyncStatus(
       itemsStockAsOf: _asDate(json['itemsStockAsOf']),
-      countSessionsAsOf: _asDate(json['countSessionsAsOf']),
       erpOk: _asBool(json['erpOk']),
     );
   }

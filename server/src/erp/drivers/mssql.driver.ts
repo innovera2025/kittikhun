@@ -11,9 +11,6 @@ import {
   BaseErpDriver,
   type CanonicalItem,
   type Cursor,
-  type ErpCountRow,
-  type ErpCountSession,
-  type ErpCountSessionSummary,
 } from '../erp-adapter';
 
 /**
@@ -43,11 +40,6 @@ const ITEM_BATCH_SIZE = 500;
 const MAX_ITEM_PAGES = 2000;
 
 const DEFAULT_ITEMS_TABLE = 'dbo.InventoryItem';
-const COUNT_HDR_TABLE = 'dbo.tbl_CountHdr';
-const COUNT_DTL_TABLE = 'dbo.tbl_CountDtl';
-
-/** ตารางชั่วคราวของ write-probe (ชั้นที่ 2 ของกฎเหล็ก) — ต้องไม่มีอยู่จริงใน ERP */
-const PROBE_TABLE = 'dbo.__kittikhun_probe';
 
 /** คลังที่พบจริงใน db_TCL — ใช้เตือน schema/config drift เท่านั้น ไม่ใช่ตัวกรองข้อมูล */
 const KNOWN_WAREHOUSES: readonly string[] = ['WHRM', 'WHFG', 'WHWIP', 'WHNG'];
@@ -109,29 +101,6 @@ const zNumOpt = z
     return num;
   });
 
-const zNumReq = z.union([z.number(), z.string()]).transform((value, ctx) => {
-  const num = typeof value === 'number' ? value : Number(value.trim());
-  if (!Number.isFinite(num)) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'ไม่ใช่ตัวเลข' });
-    return z.NEVER;
-  }
-  return num;
-});
-
-/** วันที่จาก ERP เป็น ค.ศ. (ยืนยันแล้ว: CountDate 17/08/2026) → ไม่ต้องแปลง พ.ศ. */
-const zDateOpt = z
-  .union([z.date(), z.string(), z.number(), z.null(), z.undefined()])
-  .transform((value, ctx) => {
-    if (value === null || value === undefined) return undefined;
-    if (typeof value === 'string' && value.trim().length === 0) return undefined;
-    const date = value instanceof Date ? value : new Date(value);
-    if (Number.isNaN(date.getTime())) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'วันที่ไม่ถูกต้อง' });
-      return z.NEVER;
-    }
-    return date.toISOString();
-  });
-
 /** ฟิลด์สินค้าหลัง pick ชื่อคอลัมน์แล้ว (รองรับทั้งชื่อ ERP และ snake_case จาก script) */
 const ItemFieldsSchema = z.object({
   sku: zTextReq,
@@ -148,111 +117,10 @@ const ItemFieldsSchema = z.object({
   warehouse: zTextOpt,
 });
 
-/** หัวรอบนับจาก dbo.tbl_CountHdr (alias ตาม SQL ในไฟล์นี้) */
-const CountHeaderRowSchema = z.object({
-  TransactionNo: zTextReq,
-  VoucherNo: zTextOpt,
-  CountDate: zDateOpt,
-  EmpId: zTextOpt,
-  CountNo: zTextOpt,
-  CountYear: zTextOpt,
-  Roworder: zNumOpt,
-  LineCount: zNumOpt,
-});
-
-/** รายการนับจาก dbo.tbl_CountDtl */
-const CountLineRowSchema = z.object({
-  ItemCode: zTextReq,
-  Description: zTextOpt,
-  Warehouse: zTextOpt,
-  MainQty: zNumReq, // ยอดระบบที่ ERP freeze ไว้ — ไม่มี NULL (ยืนยันจากข้อมูลจริง)
-  MainUnits: zTextOpt,
-  ErpCountQty: zNumOpt,
-  ErpDifQty: zNumOpt,
-});
-
 // ---------------------------------------------------------------------------
-// รูปร่างข้อมูลรอบนับที่ driver ส่งออก (canonical types อยู่ที่ ../erp-adapter)
+// ⚠️ เคยมี type/mapper ของ "รอบนับจาก ERP" อยู่ตรงนี้ — ตัดออกถาวร 22 ส.ค. 2569
+//    ระบบนี้ดึงจาก ERP แค่จำนวนคงเหลือเท่านั้น (ดูคอมเมนต์ที่คลาส MssqlDriver)
 // ---------------------------------------------------------------------------
-
-interface MssqlSessionSummary {
-  /** คีย์ที่ใช้ join กับ tbl_CountDtl */
-  readonly transactionNo: string;
-  readonly voucherNo?: string;
-  /** ISO 8601 (ค.ศ.) */
-  readonly countDate?: string;
-  readonly countNo?: string;
-  readonly countYear?: string;
-  readonly empId?: string;
-  /** Roworder ที่ชนะการ dedupe — เก็บไว้ตรวจย้อนหลัง */
-  readonly erpRoworder?: number;
-  readonly lineCount?: number;
-}
-
-interface MssqlCountLine {
-  readonly sku: string;
-  readonly description?: string;
-  readonly warehouseCode?: string;
-  readonly unit?: string;
-  /** ยอดระบบจาก tbl_CountDtl.MainQty (freeze แล้วฝั่ง ERP) */
-  readonly systemQty: number;
-  /**
-   * ⚠️ ค่าที่ ERP เคยนับไว้ — **ห้ามใช้เป็นผลนับของระบบเรา** ระบบนี้เก็บผลนับเอง
-   * (count_submissions → closed_variance) ค่าสองตัวนี้อ่านมาเป็นข้อมูลอ้างอิง/ประวัติเท่านั้น
-   */
-  readonly erpReferenceCountQty?: number;
-  readonly erpReferenceDifQty?: number;
-}
-
-interface MssqlCountSession extends MssqlSessionSummary {
-  readonly rows: readonly MssqlCountLine[];
-  /** คลังที่พบในรายการนับรอบนี้ (ERP เก็บคลังที่ระดับรายการ ไม่ใช่ที่หัวเอกสาร) */
-  readonly warehouseCodes: readonly string[];
-}
-
-
-// ---------------------------------------------------------------------------
-// map internal (ละเอียดตาม ERP) → canonical ที่ domain เห็น
-// ---------------------------------------------------------------------------
-
-/** ISO string ของ ERP → Date; ไม่มีค่า = epoch 0 เพื่อคง contract ว่า countDate ต้องมี */
-function toCanonicalDate(iso?: string): Date {
-  if (!iso) return new Date(0);
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? new Date(0) : d;
-}
-
-function toCanonicalSummary(s: MssqlSessionSummary): ErpCountSessionSummary {
-  return {
-    transactionNo: s.transactionNo,
-    voucherNo: s.voucherNo,
-    countDate: toCanonicalDate(s.countDate),
-    employeeId: s.empId,
-    rowCount: s.lineCount,
-  };
-}
-
-function toCanonicalRow(l: MssqlCountLine, fallbackWarehouse: string): ErpCountRow {
-  return {
-    sku: l.sku,
-    description: l.description ?? '',
-    warehouse: l.warehouseCode ?? fallbackWarehouse,
-    systemQty: l.systemQty,
-    unit: l.unit ?? '',
-  };
-}
-
-function toCanonicalSession(
-  s: MssqlCountSession,
-  fallbackWarehouse: string,
-): ErpCountSession {
-  return {
-    ...toCanonicalSummary(s),
-    // ERP เก็บคลังที่ระดับรายการ — ถ้ารอบนับใช้คลังเดียว ประทับที่หัวเอกสารด้วย
-    warehouse: s.warehouseCodes.length === 1 ? s.warehouseCodes[0] : undefined,
-    rows: s.rows.map((l) => toCanonicalRow(l, fallbackWarehouse)),
-  };
-}
 
 // ---------------------------------------------------------------------------
 // charset ไทย
@@ -323,15 +191,6 @@ function readProp(err: unknown, key: string): unknown {
   return (err as Record<string, unknown>)[key];
 }
 
-/** ข้อความของ error ทั้งชั้นนอกและ originalError ของ tedious */
-function allMessages(err: unknown): string {
-  const inner = readProp(err, 'originalError');
-  return `${errMessage(err)} ${inner ? errMessage(inner) : ''}`;
-}
-
-const PERMISSION_DENIED_NUMBERS = new Set([229, 230, 262, 297, 300, 3906, 15247]);
-const PERMISSION_DENIED_RE =
-  /permission (?:was )?denied|permission to perform|does not have permission|read[- ]only|ไม่มีสิทธิ/i;
 const CONNECTION_ERROR_CODES = new Set([
   'ELOGIN',
   'ESOCKET',
@@ -347,21 +206,7 @@ function isConnectionError(err: unknown): boolean {
   return typeof code === 'string' && CONNECTION_ERROR_CODES.has(code);
 }
 
-/** ตารางทดสอบค้างจากรอบก่อน (error 2714) — ไม่ใช่คำตอบเรื่องสิทธิ์ ต้องลอง INSERT ต่อ */
-function isAlreadyExists(err: unknown): boolean {
-  const num = readProp(err, 'number');
-  if (typeof num === 'number' && num === 2714) return true;
-  return /already an object named|already exists/i.test(allMessages(err));
-}
 
-/** SQL Server ปฏิเสธสิทธิ์ = สิ่งที่ write-probe ต้องการเห็น */
-function isPermissionDenied(err: unknown): boolean {
-  const num = readProp(err, 'number');
-  if (typeof num === 'number' && PERMISSION_DENIED_NUMBERS.has(num)) return true;
-  const innerNum = readProp(readProp(err, 'originalError'), 'number');
-  if (typeof innerNum === 'number' && PERMISSION_DENIED_NUMBERS.has(innerNum)) return true;
-  return PERMISSION_DENIED_RE.test(allMessages(err));
-}
 
 function* chunk<T>(items: readonly T[], size: number): Generator<T[]> {
   for (let i = 0; i < items.length; i += size) yield items.slice(i, i + size);
@@ -570,49 +415,41 @@ OFFSET @offset ROWS FETCH NEXT @batch ROWS ONLY`;
  * ⚠️ tbl_CountHdr PK = (Roworder, TransactionNo) → TransactionNo/VoucherNo ซ้ำได้
  *    → เอา Roworder สูงสุดต่อ TransactionNo
  */
-const COUNT_HEADER_CTE = `WITH ranked AS (
-  SELECT
-    LTRIM(RTRIM(h.TransactionNo)) AS TransactionNo,
-    LTRIM(RTRIM(h.VoucherNo))     AS VoucherNo,
-    h.CountDate                   AS CountDate,
-    LTRIM(RTRIM(h.Emp_ID))        AS EmpId,
-    h.CountNo                     AS CountNo,
-    h.CountYear                   AS CountYear,
-    h.Roworder                    AS Roworder,
-    ROW_NUMBER() OVER (PARTITION BY LTRIM(RTRIM(h.TransactionNo)) ORDER BY h.Roworder DESC) AS rn
-  FROM ${COUNT_HDR_TABLE} AS h
-)`;
-
-const COUNT_SESSIONS_SQL = `${COUNT_HEADER_CTE}
-SELECT
-  r.TransactionNo, r.VoucherNo, r.CountDate, r.EmpId, r.CountNo, r.CountYear, r.Roworder,
-  (SELECT COUNT(*) FROM ${COUNT_DTL_TABLE} AS d
-    WHERE LTRIM(RTRIM(d.TransactionNo)) = r.TransactionNo) AS LineCount
-FROM ranked AS r
-WHERE r.rn = 1
-ORDER BY r.CountDate DESC, r.VoucherNo DESC`;
-
-const COUNT_SESSION_SQL = `${COUNT_HEADER_CTE}
-SELECT r.TransactionNo, r.VoucherNo, r.CountDate, r.EmpId, r.CountNo, r.CountYear, r.Roworder
-FROM ranked AS r
-WHERE r.rn = 1 AND r.TransactionNo = @transactionNo`;
-
 /**
- * รายการนับของรอบหนึ่ง
- * systemQty = MainQty (ยอดระบบที่ ERP freeze ไว้ ไม่มี NULL)
- * ⚠️ CountQty/DifQty ดึงมาเป็น "ข้อมูลอ้างอิง" เท่านั้น — ผลนับของระบบเราเก็บใน Postgres ของเราเอง
+ * ตรวจสิทธิ์ของ login ที่ใช้ต่อ ERP — **SELECT ล้วน ไม่แตะข้อมูล**
+ *
+ * ใช้แทน write-probe เดิมที่ยิง CREATE TABLE + INSERT จริง (ดู MssqlDriver.verifyReadOnly)
+ * ทุกคอลัมน์คืน 1 = มี · 0 = ไม่มี · NULL = ตอบไม่ได้ (ต้องถือว่าสรุปไม่ได้ ห้ามปล่อยผ่าน)
  */
-const COUNT_LINES_SQL = `SELECT
-  LTRIM(RTRIM(d.ItemCode))    AS ItemCode,
-  LTRIM(RTRIM(d.Description)) AS Description,
-  LTRIM(RTRIM(d.Warehouse))   AS Warehouse,
-  d.MainQty                   AS MainQty,
-  LTRIM(RTRIM(d.MainUnits))   AS MainUnits,
-  d.CountQty                  AS ErpCountQty,
-  d.DifQty                    AS ErpDifQty
-FROM ${COUNT_DTL_TABLE} AS d
-WHERE LTRIM(RTRIM(d.TransactionNo)) = @transactionNo
-ORDER BY LTRIM(RTRIM(d.ItemCode))`;
+const PERMISSION_PROBE_SQL = `SELECT
+  IS_SRVROLEMEMBER('sysadmin')                           AS is_sysadmin,
+  IS_ROLEMEMBER('db_owner')                              AS is_db_owner,
+  IS_ROLEMEMBER('db_ddladmin')                           AS is_db_ddladmin,
+  IS_ROLEMEMBER('db_datawriter')                         AS is_db_datawriter,
+  HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'INSERT')     AS can_insert,
+  HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'UPDATE')     AS can_update,
+  HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'DELETE')     AS can_delete,
+  HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'ALTER')      AS can_alter,
+  HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'CREATE TABLE') AS can_create_table,
+  HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'SELECT')     AS can_select`;
+
+interface PermissionRow {
+  is_sysadmin: number | null;
+  is_db_owner: number | null;
+  is_db_ddladmin: number | null;
+  is_db_datawriter: number | null;
+  can_insert: number | null;
+  can_update: number | null;
+  can_delete: number | null;
+  can_alter: number | null;
+  can_create_table: number | null;
+  can_select: number | null;
+}
+
+/*
+ * ⚠️ เคยมี COUNT_HEADER_CTE / COUNT_SESSIONS_SQL / COUNT_SESSION_SQL / COUNT_LINES_SQL
+ *    สำหรับดึงรอบนับของ ERP — ตัดออกถาวร 22 ส.ค. 2569
+ */
 
 /** smoke test ภาษาไทย — อ่านจากตาราง item master จริงของ db_TCL */
 const THAI_SAMPLE_SQL = `SELECT TOP (1) LTRIM(RTRIM(ItemName)) AS SampleText
@@ -673,99 +510,93 @@ export class MssqlDriver extends BaseErpDriver {
   }
 
   /**
-   * 🚨 ชั้นที่ 2 ของกฎเหล็ก — **write-probe: จุดเดียวในระบบที่ยอมให้ "พยายามเขียน" ERP**
+   * ชั้นที่ 2 ของกฎเหล็ก — พิสูจน์ว่า login ที่คอนฟิกไว้ **เขียน ERP ไม่ได้**
    *
-   * เจตนาของ probe นี้คือ **กัน** การเขียน ไม่ใช่การเขียน: ถ้า SQL Server ยอมให้สร้าง
-   * ตาราง/INSERT ได้ แปลว่า login ที่คอนฟิกไว้มีสิทธิ์เขียน ERP (เช่นเผลอใส่ `sa`) ซึ่งขัด
-   * หลักการของโปรเจค → ปฏิเสธการ start ทันที เพื่อไม่ให้ระบบวิ่งอยู่บนสิทธิ์ที่ทำลาย ERP ได้
+   * ⚠️ เดิมทำด้วย write-probe: ยิง `CREATE TABLE` + `INSERT` จริงลง ERP แล้วดูว่าถูกปฏิเสธไหม
+   *    วิธีนั้นมีข้อเสียร้ายแรง — ถ้า login **เขียนได้จริง** (เช่นเผลอใส่บัญชีผู้ดูแล)
+   *    probe จะ **เขียนลง ERP สำเร็จ** ก่อนที่จะรู้ตัว ซึ่งขัดกับกฎ "ห้ามเขียน ERP ทุกกรณี"
+   *    การลบตารางคืนทีหลังไม่ได้ทำให้การเขียนนั้นไม่เคยเกิดขึ้น
    *
-   * ด้วยเหตุนี้ statement ในเมธอดนี้จึง **ไม่** ผ่าน assertReadOnlySql() (guard นั้นจะปฏิเสธ
-   * มันแน่นอน) — และเป็นข้อยกเว้นที่อนุญาตเฉพาะที่นี่ ห้ามคัดลอกรูปแบบนี้ไปใช้ที่อื่น
-   *
-   * ผลลัพธ์: ถูกปฏิเสธสิทธิ์ = ✅ ผ่าน · เขียนได้ = 🚨 throw · สรุปไม่ได้ = throw ให้ผู้ดูแลตรวจ
+   *    เปลี่ยนมาถามสิทธิ์จาก metadata แทน (22 ส.ค. 2569) — ได้คำตอบเดียวกัน
+   *    โดย **ไม่แตะข้อมูลใน ERP เลยแม้แต่ไบต์เดียว** ทุก statement เป็น SELECT ล้วน
    */
   async verifyReadOnly(): Promise<void> {
     const pool = await this.getPool();
 
-    let tableCreated = false;
-    let tableExisted = false;
-    let rowInserted = false;
-    let refusal: unknown;
-
+    let row: PermissionRow | undefined;
     try {
-      await pool.request().batch(`CREATE TABLE ${PROBE_TABLE} (probed_at DATETIME2 NOT NULL)`);
-      tableCreated = true;
+      const result = await pool.request().query<PermissionRow>(PERMISSION_PROBE_SQL);
+      row = result.recordset[0];
     } catch (err) {
-      // ตารางค้างจากรอบก่อน: ยังต้องลอง INSERT เพื่อรู้ว่า login ปัจจุบันเขียนได้จริงไหม
-      if (isAlreadyExists(err)) tableExisted = true;
-      else refusal = err;
-    }
-
-    if (tableCreated || tableExisted) {
-      try {
-        await pool
-          .request()
-          .batch(`INSERT INTO ${PROBE_TABLE} (probed_at) VALUES (SYSUTCDATETIME())`);
-        rowInserted = true;
-      } catch (err) {
-        refusal = err;
+      if (isConnectionError(err)) {
+        throw new MssqlDriverError(
+          'ERP_UNREACHABLE',
+          `ต่อ ERP (${this.sqlCfg.host}:${this.sqlCfg.port}/${this.sqlCfg.database}) ไม่ได้ ` +
+            `จึงยังพิสูจน์สิทธิ์ read-only ไม่ได้: ${errMessage(err)}`,
+        );
       }
+      throw new MssqlDriverError(
+        'ERP_PROBE_INCONCLUSIVE',
+        'อ่านสิทธิ์ของ login จาก ERP ไม่ได้ จึงสรุปไม่ได้ว่าเขียนไม่ได้จริง: ' +
+          `${errMessage(err)} · ตรวจสิทธิ์ของ ERP_SQL_USER (ต้องเป็น db_datareader) แล้วลองใหม่`,
+      );
     }
 
-    // ถ้าเผลอสร้างได้/มีตารางค้าง ต้องพยายามเก็บกวาดคืนให้สะอาดก่อนตัดสินผล — ห้ามทิ้งขยะไว้ใน ERP
-    let cleanupError: string | undefined;
-    if (tableCreated || tableExisted) {
-      try {
-        await pool.request().batch(`DROP TABLE IF EXISTS ${PROBE_TABLE}`);
-      } catch (err) {
-        cleanupError = errMessage(err);
-      }
+    if (!row) {
+      throw new MssqlDriverError(
+        'ERP_PROBE_INCONCLUSIVE',
+        'query ตรวจสิทธิ์ไม่คืนผลลัพธ์ — สรุปไม่ได้ว่า login เขียน ERP ไม่ได้',
+      );
     }
 
-    if (tableCreated || rowInserted) {
-      const leftover = cleanupError
-        ? ` ⚠️ ลบตารางทดสอบ ${PROBE_TABLE} คืนไม่สำเร็จ (${cleanupError}) — ต้องลบด้วยมือ`
-        : ` (ลบตารางทดสอบ ${PROBE_TABLE} คืนแล้ว)`;
+    // ⚠️ ค่า NULL แปลว่า "ตอบไม่ได้" ไม่ใช่ "ไม่มีสิทธิ์" → ต้องถือว่าสรุปไม่ได้ ห้ามปล่อยผ่าน
+    const unknown = Object.entries(row)
+      .filter(([, value]) => value === null || value === undefined)
+      .map(([key]) => key);
+    if (unknown.length > 0) {
+      throw new MssqlDriverError(
+        'ERP_PROBE_INCONCLUSIVE',
+        `ตรวจสิทธิ์ได้ไม่ครบ (${unknown.join(', ')} ตอบเป็น NULL) — สรุปไม่ได้ว่าเขียน ERP ไม่ได้`,
+      );
+    }
+
+    const granted = ([
+      ['เป็นสมาชิก sysadmin', row.is_sysadmin],
+      ['เป็นสมาชิก db_owner', row.is_db_owner],
+      ['เป็นสมาชิก db_ddladmin', row.is_db_ddladmin],
+      ['เป็นสมาชิก db_datawriter', row.is_db_datawriter],
+      ['มีสิทธิ์ INSERT', row.can_insert],
+      ['มีสิทธิ์ UPDATE', row.can_update],
+      ['มีสิทธิ์ DELETE', row.can_delete],
+      ['มีสิทธิ์ ALTER', row.can_alter],
+      ['มีสิทธิ์ CREATE TABLE', row.can_create_table],
+    ] as const)
+      .filter(([, value]) => value === 1)
+      .map(([label]) => label);
+
+    if (granted.length > 0) {
       throw new MssqlDriverError(
         'ERP_WRITE_ALLOWED',
         `🚨 ปฏิเสธการ start: login ERP_SQL_USER="${this.sqlCfg.user}" **เขียนฐานข้อมูล ERP ` +
-          `${this.sqlCfg.database} ได้** (${tableCreated ? 'CREATE TABLE' : 'INSERT'} สำเร็จ)` +
-          `${leftover}\n` +
+          `${this.sqlCfg.database} ได้** (${granted.join(' · ')})\n` +
           'ระบบนี้อ่าน ERP อย่างเดียวเท่านั้น — ให้สร้าง login ใหม่ที่มีสิทธิ์เฉพาะ ' +
           '`db_datareader` (หรือ GRANT SELECT เฉพาะ object ที่ใช้) แล้วแก้ ERP_SQL_USER / ' +
-          'ERP_SQL_PASSWORD ใน .env · ห้ามใช้ `sa`',
+          'ERP_SQL_PASSWORD ในไฟล์ตั้งค่า · ห้ามใช้ `sa`',
       );
     }
 
-    if (isConnectionError(refusal)) {
+    if (row.can_select !== 1) {
       throw new MssqlDriverError(
-        'ERP_UNREACHABLE',
-        `ต่อ ERP (${this.sqlCfg.host}:${this.sqlCfg.port}/${this.sqlCfg.database}) ไม่ได้ ` +
-          `จึงยังพิสูจน์สิทธิ์ read-only ไม่ได้: ${errMessage(refusal)}`,
-      );
-    }
-
-    if (!isPermissionDenied(refusal)) {
-      throw new MssqlDriverError(
-        'ERP_PROBE_INCONCLUSIVE',
-        'write-probe ไม่สามารถสรุปได้ว่า login เขียน ERP ไม่ได้ — การเขียนล้มเหลวด้วยเหตุอื่น ' +
-          `ที่ไม่ใช่ "permission denied": ${errMessage(refusal)} · ` +
-          'ตรวจสิทธิ์ของ ERP_SQL_USER (ต้องเป็น db_datareader) แล้วลองใหม่',
-      );
-    }
-
-    if (tableExisted) {
-      logger.warn(
-        `พบตารางทดสอบค้างอยู่ใน ERP: ${PROBE_TABLE} ` +
-          `(${cleanupError ? `ลบคืนไม่สำเร็จ: ${cleanupError}` : 'ลบคืนแล้ว'}) — ` +
-          'แปลว่าเคยมี login ที่เขียนได้ ควรตรวจสิทธิ์ย้อนหลัง',
+        'ERP_CONFIG',
+        `login ERP_SQL_USER="${this.sqlCfg.user}" ไม่มีสิทธิ์ SELECT บน ${this.sqlCfg.database} — ` +
+          'ต้องเป็น db_datareader (หรือ GRANT SELECT เฉพาะ object ที่ใช้)',
       );
     }
 
     this.readOnlyVerified = true;
     logger.log(
-      `✅ พิสูจน์แล้ว: login "${this.sqlCfg.user}" เขียน ${this.sqlCfg.database} ไม่ได้ ` +
-        `(SQL Server ปฏิเสธสิทธิ์) — ERP อ่านอย่างเดียว`,
+      `✅ พิสูจน์แล้ว: login "${this.sqlCfg.user}" อ่าน ${this.sqlCfg.database} ได้และเขียนไม่ได้ ` +
+        '(ตรวจจาก metadata — ไม่มีการเขียนใด ๆ ลง ERP)',
     );
   }
 
@@ -900,106 +731,16 @@ export class MssqlDriver extends BaseErpDriver {
     );
   }
 
-  /** รายการรอบนับทั้งหมด (dedupe แล้ว) พร้อมจำนวนรายการต่อรอบ */
-  async fetchCountSessions(): Promise<ErpCountSessionSummary[]> {
-    const rows = await this.runQuery('count-sessions', COUNT_SESSIONS_SQL);
-    const sessions: MssqlSessionSummary[] = [];
-
-    for (const row of rows) {
-      const parsed = CountHeaderRowSchema.safeParse(row);
-      if (!parsed.success) {
-        logger.warn(`ข้ามหัวรอบนับที่ไม่ผ่าน validation — ${firstIssue(parsed.error)}`);
-        continue;
-      }
-      sessions.push(toSessionSummary(parsed.data));
-    }
-
-    // map internal → canonical ที่ขอบของ adapter
-    return sessions.map(toCanonicalSummary);
-  }
-
-  /** รอบนับหนึ่งรอบ + รายการนับ (systemQty = MainQty) — ไม่พบ = null */
-  async fetchCountSession(transactionNo: string): Promise<ErpCountSession | null> {
-    const key = transactionNo.trim();
-    if (key.length === 0) return null;
-
-    const headerRows = await this.runQuery('count-session', COUNT_SESSION_SQL, {
-      transactionNo: key,
-    });
-    const headerRow = headerRows[0];
-    if (!headerRow) return null;
-
-    const header = CountHeaderRowSchema.safeParse(headerRow);
-    if (!header.success) {
-      throw new MssqlDriverError(
-        'ERP_SCHEMA_DRIFT',
-        `หัวรอบนับ ${key} ไม่ผ่าน validation — ${firstIssue(header.error)}`,
-      );
-    }
-
-    const lineRows = await this.runQuery('count-session-lines', COUNT_LINES_SQL, {
-      transactionNo: key,
-    });
-
-    const bySku = new Map<string, MssqlCountLine>();
-    const warehouses: string[] = [];
-    const unknownWarehouses = new Set<string>();
-    let duplicates = 0;
-    let skipped = 0;
-
-    for (const row of lineRows) {
-      const parsed = CountLineRowSchema.safeParse(row);
-      if (!parsed.success) {
-        skipped += 1;
-        if (skipped <= 3) {
-          logger.warn(`ข้ามรายการนับที่ไม่ผ่าน validation (${key}) — ${firstIssue(parsed.error)}`);
-        }
-        continue;
-      }
-
-      const data = parsed.data;
-      if (bySku.has(data.ItemCode)) {
-        duplicates += 1; // รายการเดิมชนะ (เรียงตาม ItemCode แล้ว) — ระบบเราเก็บผลนับต่อ (session, sku)
-        continue;
-      }
-
-      if (data.Warehouse) {
-        if (!warehouses.includes(data.Warehouse)) warehouses.push(data.Warehouse);
-        if (!KNOWN_WAREHOUSES.includes(data.Warehouse)) unknownWarehouses.add(data.Warehouse);
-      }
-
-      bySku.set(data.ItemCode, {
-        sku: data.ItemCode,
-        description: data.Description,
-        warehouseCode: data.Warehouse,
-        unit: data.MainUnits,
-        systemQty: data.MainQty,
-        // ⚠️ อ้างอิงเท่านั้น — ผลนับจริงของระบบนี้มาจากพนักงานผ่าน count_submissions
-        erpReferenceCountQty: data.ErpCountQty,
-        erpReferenceDifQty: data.ErpDifQty,
-      });
-    }
-
-    if (duplicates > 0) {
-      logger.warn(`รอบนับ ${key}: ItemCode ซ้ำใน tbl_CountDtl ${duplicates} แถว — ใช้แถวแรกต่อรหัส`);
-    }
-    if (unknownWarehouses.size > 0) {
-      logger.warn(
-        `รอบนับ ${key}: พบรหัสคลังที่ไม่รู้จัก ${[...unknownWarehouses].join(', ')} ` +
-          `(คลังที่คาด: ${KNOWN_WAREHOUSES.join(' / ')})`,
-      );
-    }
-
-    const internal: MssqlCountSession = {
-      ...toSessionSummary(header.data),
-      lineCount: bySku.size,
-      rows: [...bySku.values()],
-      warehouseCodes: warehouses,
-    };
-
-    // map internal → canonical ที่ขอบของ adapter
-    return toCanonicalSession(internal, this.sqlCfg.warehouseCode);
-  }
+  /*
+   * ⚠️ เคยมี fetchCountSessions() / fetchCountSession() อยู่ตรงนี้ — ดึง "รอบนับที่ทำใน ERP
+   *    อยู่แล้ว" (tbl_CountHdr / tbl_CountDtl) มา mirror เป็นรอบนับของระบบเรา
+   *
+   *    ตัดออกถาวร 22 ส.ค. 2569 ตามขอบเขตที่เจ้าของโปรเจคยืนยัน:
+   *    ระบบนี้ดึงจาก ERP แค่ **จำนวนคงเหลือ** เท่านั้น ไม่เอาข้อมูลอื่น
+   *    เดิมจำเป็นเพราะยังไม่มีสูตรคำนวณยอด ต้องยืมยอดจากรอบนับของ ERP
+   *    ตอนนี้สูตรจากฝ่าย ERP แม่น 100% แล้ว (docs/erp-tcl-findings.md §6.6)
+   *    รอบนับทั้งหมดเปิดจากแอปเราเอง แล้ว freeze ยอดจาก items_cache
+   */
 
   // -------------------------------------------------------------------------
   // ภายใน
@@ -1261,17 +1002,3 @@ export class MssqlDriver extends BaseErpDriver {
   }
 }
 
-function toSessionSummary(
-  header: z.infer<typeof CountHeaderRowSchema>,
-): MssqlSessionSummary {
-  return {
-    transactionNo: header.TransactionNo,
-    voucherNo: header.VoucherNo,
-    countDate: header.CountDate,
-    countNo: header.CountNo,
-    countYear: header.CountYear,
-    empId: header.EmpId,
-    erpRoworder: header.Roworder,
-    lineCount: header.LineCount,
-  };
-}

@@ -51,39 +51,17 @@ export interface CanonicalItem {
   warehouseCode?: string;
 }
 
-/** 1 บรรทัดในรอบนับของ ERP (`dbo.tbl_CountDtl`) — `systemQty` = `MainQty` (ยอดระบบ ไม่มี NULL) */
-export interface ErpCountRow {
-  sku: string;
-  description: string;
-  warehouse: string;
-  systemQty: number;
-  unit: string;
-}
-
-/**
- * รอบนับของ ERP (`dbo.tbl_CountHdr` join `tbl_CountDtl` ด้วย `TransactionNo`)
+/*
+ * ⚠️ เคยมี ErpCountRow / ErpCountSessionSummary / ErpCountSession อยู่ตรงนี้
+ *    สำหรับ mirror "รอบนับที่ทำใน ERP อยู่แล้ว" (tbl_CountHdr/tbl_CountDtl) เข้ามาในระบบเรา
  *
- * ⚠️ `tbl_CountHdr` PK = (Roworder, TransactionNo) → **VoucherNo และ TransactionNo ซ้ำได้**
- *    driver ต้อง dedupe เอาแถว `Roworder` สูงสุด ก่อนคืนค่า
- * ระบบเรา mirror รอบนับนี้เป็น `count_sessions` + `count_snapshot` (frozen qty = systemQty ณ เวลาที่ดึง)
+ *    ตัดออกถาวร 22 ส.ค. 2569 ตามขอบเขตที่เจ้าของโปรเจคยืนยัน:
+ *    **ระบบนี้ดึงจาก ERP แค่ "จำนวนคงเหลือ" เท่านั้น ไม่เอาข้อมูลอื่น**
+ *    เดิมจำเป็นเพราะยังไม่มีสูตรคำนวณยอด ต้องยืมยอดจากรอบนับของ ERP มาใช้
+ *    ตอนนี้สูตรจากฝ่าย ERP แม่น 100% แล้ว (docs/erp-tcl-findings.md §6.6) จึงไม่ต้องใช้อีก
+ *
+ *    รอบนับทั้งหมด **เปิดจากแอปเราเอง** → freeze ยอดจาก items_cache
  */
-export interface ErpCountSessionSummary {
-  transactionNo: string;
-
-  /** ⚠️ nullable ใน ERP จริง (nvarchar(20) NULL) — ห้ามใช้เป็นคีย์ เพราะซ้ำได้ด้วย */
-  voucherNo?: string;
-  countDate: Date;
-  employeeId?: string;
-  warehouse?: string;
-
-  /** จำนวนรายการในรอบ (นับจาก tbl_CountDtl โดยไม่ต้องโหลดทุกแถว) */
-  rowCount?: number;
-}
-
-/** รอบนับพร้อมรายการทั้งหมด — ใช้ `fetchCountSession(transactionNo)` */
-export interface ErpCountSession extends ErpCountSessionSummary {
-  rows: ErpCountRow[];
-}
 
 /** สถานะ ERP สำหรับ `GET /healthz/erp` — ERP ล่มห้ามทำให้ container unhealthy */
 export interface ErpHealth {
@@ -127,12 +105,6 @@ export interface ErpAdapter {
 
   /** อ่าน item master แบบ stream เป็น batch (ห้ามโหลดทั้งก้อนเข้า memory) */
   fetchItems(since?: ErpCursor): AsyncIterable<CanonicalItem[]>;
-
-  /** อ่านรายการรอบนับทั้งหมดที่ ERP มี (header + rows, dedupe แล้ว) */
-  fetchCountSessions(): Promise<ErpCountSessionSummary[]>;
-
-  /** อ่านรอบนับเดียวตาม TransactionNo — ไม่พบ = null (ไม่ throw) */
-  fetchCountSession(transactionNo: string): Promise<ErpCountSession | null>;
 
   healthCheck(): Promise<ErpHealth>;
 }
@@ -409,8 +381,6 @@ export abstract class BaseErpDriver implements ErpAdapter {
 
   abstract capabilities(): ErpCapabilities;
   abstract fetchItems(since?: ErpCursor): AsyncIterable<CanonicalItem[]>;
-  abstract fetchCountSessions(): Promise<ErpCountSessionSummary[]>;
-  abstract fetchCountSession(transactionNo: string): Promise<ErpCountSession | null>;
   abstract healthCheck(): Promise<ErpHealth>;
 
   /**
@@ -493,23 +463,6 @@ export const canonicalItemSchema = z.object({
   warehouseCode: z.string().optional(),
 });
 
-export const erpCountRowSchema = z.object({
-  sku: nonEmptyString,
-  description: z.string(),
-  warehouse: z.string(),
-  systemQty: z.number().finite(),
-  unit: z.string(),
-});
-
-export const erpCountSessionSchema = z.object({
-  transactionNo: nonEmptyString,
-  voucherNo: z.string().optional(),
-  countDate: z.date(),
-  employeeId: z.string().optional(),
-  warehouse: z.string().optional(),
-  rows: z.array(erpCountRowSchema),
-});
-
 /** true เมื่อ schema กับ interface ตรงกันทั้งสองทาง ไม่ตรง = never */
 type SchemaMatchesType<TSchema extends z.ZodTypeAny, TType> = [z.infer<TSchema>] extends [TType]
   ? [TType] extends [z.infer<TSchema>]
@@ -520,6 +473,4 @@ type SchemaMatchesType<TSchema extends z.ZodTypeAny, TType> = [z.infer<TSchema>]
 /** ตัวจับ drift ตอน compile: แก้ interface แล้วลืมแก้ schema (หรือกลับกัน) = compile ไม่ผ่าน */
 export const ERP_SCHEMAS_IN_SYNC: [
   SchemaMatchesType<typeof canonicalItemSchema, CanonicalItem>,
-  SchemaMatchesType<typeof erpCountRowSchema, ErpCountRow>,
-  SchemaMatchesType<typeof erpCountSessionSchema, ErpCountSession>,
-] = [true, true, true];
+] = [true];

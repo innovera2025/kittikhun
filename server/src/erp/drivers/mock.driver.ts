@@ -16,9 +16,6 @@ import type { ErpAdapter, ErpHealth } from '../erp-adapter';
 type ItemBatch =
   ReturnType<ErpAdapter['fetchItems']> extends AsyncIterable<infer TBatch> ? TBatch : never;
 type CanonicalItem = ItemBatch[number];
-type CountSession = NonNullable<Awaited<ReturnType<ErpAdapter['fetchCountSession']>>>;
-type CountRow = CountSession['rows'][number];
-type CountSessionKey = Parameters<ErpAdapter['fetchCountSession']>[0];
 type ErpCapabilities = ReturnType<ErpAdapter['capabilities']>;
 
 /**
@@ -26,13 +23,6 @@ type ErpCapabilities = ReturnType<ErpAdapter['capabilities']>;
  * ⚠️ คลังจริงใน db_TCL คือ WHRM / WHFG / WHWIP / WHNG — ค่านี้เป็นของ fixture เท่านั้น
  */
 const WAREHOUSE_CODE = 'WH-BKK-02';
-
-/** รอบนับตัวอย่าง — tbl_CountHdr: TransactionNo (ตัวเลข) + VoucherNo (รหัสที่คนอ่าน) */
-const MOCK_TRANSACTION_NO = '2408';
-const MOCK_VOUCHER_NO = 'CC-2408';
-
-/** จำนวนรายการในรอบนับตัวอย่าง (4 รายการแรกตาม design — โซน A) */
-const SESSION_ROW_COUNT = 4;
 
 interface ItemSeed {
   readonly sku: string;
@@ -178,28 +168,6 @@ function toCanonicalItem(seed: ItemSeed): CanonicalItem {
   };
 }
 
-/**
- * รอบนับตัวอย่าง 1 รอบ — mirror รูปแบบ tbl_CountHdr + tbl_CountDtl
- * systemQty = ยอดระบบ ณ เวลาดึง (ของจริงคือ `tbl_CountDtl.MainQty`)
- */
-function buildCountSession(): CountSession {
-  const rows: CountRow[] = ITEM_SEEDS.slice(0, SESSION_ROW_COUNT).map((seed) => ({
-    sku: seed.sku,
-    description: seed.name,
-    warehouse: WAREHOUSE_CODE,
-    systemQty: seed.onHand,
-    unit: seed.unit,
-  }));
-
-  return {
-    transactionNo: MOCK_TRANSACTION_NO,
-    voucherNo: MOCK_VOUCHER_NO,
-    countDate: relativeDate(0, 0, 0),
-    warehouse: WAREHOUSE_CODE,
-    rows,
-  };
-}
-
 export class MockDriver implements ErpAdapter {
   /** fixture ไม่มี updated-at ที่เชื่อถือได้ → server ใช้ full snapshot + diff */
   capabilities(): ErpCapabilities {
@@ -209,17 +177,6 @@ export class MockDriver implements ErpAdapter {
   /** ชุดเล็ก 5 รายการ → ส่งเป็น batch เดียว (ไม่มี pagination ให้จำลอง) */
   async *fetchItems(): AsyncGenerator<CanonicalItem[]> {
     yield ITEM_SEEDS.map(toCanonicalItem);
-  }
-
-  fetchCountSessions(): Promise<CountSession[]> {
-    return Promise.resolve([buildCountSession()]);
-  }
-
-  fetchCountSession(no: CountSessionKey): Promise<CountSession | null> {
-    const session = buildCountSession();
-    // เทียบแบบ string กัน caller ส่ง '2408' มาแทนตัวเลข 2408
-    const found = String(no) === String(session.transactionNo) ? session : null;
-    return Promise.resolve(found);
   }
 
   /** mock พร้อมใช้เสมอ — ไม่มีอะไรให้ล่ม */

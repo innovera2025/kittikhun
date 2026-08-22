@@ -10,12 +10,15 @@ ERP (`db_TCL` / SQL Server 2019) เป็นแหล่ง **อ่านอ�
 | ชั้น | กลไก | สถานะ |
 |---|---|---|
 | 1 | สิทธิ์ระดับ DB — login ต้องเป็น `db_datareader` | ⏳ รอฝ่าย ERP จัดเตรียม login |
-| 2 | Boot probe — ยิง INSERT ทดสอบ ถ้าสำเร็จ = ปฏิเสธ start | ✅ อยู่ใน `MssqlDriver.verifyReadOnly()` |
+| 2 | Boot probe — ถามสิทธิ์จาก metadata ถ้าเขียนได้ = ปฏิเสธ start | ✅ `MssqlDriver.verifyReadOnly()` · **ไม่เขียนอะไรลง ERP เลย** |
 | 3 | Statement guard — รับเฉพาะ `SELECT`/`WITH` | ✅ `assertReadOnlySql()` · **เทสต์ 24 เคสผ่าน** |
 | 4 | Interface ไม่มี method เขียน + compile-time guard | ✅ เพิ่ม method เขียน = **build พังทันที** (ทดสอบแล้ว) |
 | 5 | Read-only connection option | ✅ |
 
 ผลการนับและส่วนต่างเก็บใน PostgreSQL ของระบบนี้เท่านั้น
+
+**ขอบเขตข้อมูลที่ดึงจาก ERP** (ยืนยัน 22 ส.ค. 2569): ดึง **item master + จำนวนคงเหลือ** เท่านั้น
+ผู้ใช้/สิทธิ์/PIN เป็นของระบบเราล้วน · **ไม่** mirror รอบนับของ ERP อีกต่อไป — รอบนับทุกรอบเปิดจากแอปเราเอง
 
 ## สถานะโปรเจค
 

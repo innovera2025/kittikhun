@@ -217,8 +217,6 @@ export type DeviceHeartbeat = z.input<typeof DeviceHeartbeatSchema>;
 export const OpenSessionSchema = z.object({
   /** ตั้งรหัสรอบเองได้ (ไม่ส่ง = ระบบสร้างให้) */
   id: z.string().trim().min(1).max(64).optional(),
-  /** มีค่า = mirror รอบจาก ERP (SyncService เตรียม snapshot ให้) */
-  erpTransactionNo: z.string().trim().min(1).max(64).optional(),
   zone: z.string().trim().min(1).max(64).optional(),
   /** ไม่ส่ง = ใช้ `WAREHOUSE_CODE` จาก .env */
   warehouseCode: z.string().trim().min(1).max(32).optional(),
@@ -620,7 +618,6 @@ export class CountService {
 
   /**
    * เปิดรอบใหม่ + **freeze `count_snapshot`** จาก `items_cache.on_hand` ณ ตอนนี้
-   * - `erpTransactionNo` ที่ SyncService mirror ไว้แล้ว → ใช้รอบนั้นเลย (idempotent)
    * - cache เก่ากว่า 6 ชม. → `opened_on_stale_cache = true`
    *   (ส่ง `allowStaleCache: false` มาด้วย = ให้ปฏิเสธไปเลยจนกว่า admin จะยืนยัน)
    * - มีรอบ open อยู่แล้วในคลังนั้น → ปฏิเสธ (`SESSION_ALREADY_OPEN`)
@@ -634,7 +631,7 @@ export class CountService {
         message: parsed.error.issues[0]?.message ?? 'ข้อมูลเปิดรอบไม่ถูกต้อง',
       });
     }
-    const { erpTransactionNo, zone, skus, allowStaleCache } = parsed.data;
+    const { zone, skus, allowStaleCache } = parsed.data;
     const warehouseCode = parsed.data.warehouseCode ?? this.defaultWarehouseCode;
     const requested = skus ? [...new Set(skus)] : undefined;
 
@@ -643,31 +640,6 @@ export class CountService {
       await client.query(`SELECT pg_advisory_xact_lock(hashtext('count_open:' || $1)::bigint)`, [
         warehouseCode,
       ]);
-
-      if (erpTransactionNo) {
-        const mirrored = await client.query<{ id: string; status: CountSessionStatus }>(
-          `SELECT id, status FROM count_sessions WHERE erp_transaction_no = $1`,
-          [erpTransactionNo],
-        );
-        const existing = mirrored.rows[0];
-        if (existing) {
-          if (existing.status === 'closed') {
-            throw new ConflictException({
-              code: 'SESSION_ALREADY_CLOSED',
-              message: 'รอบนับของ ERP นี้ถูกปิดแล้ว',
-              sessionId: existing.id,
-            });
-          }
-          // SyncService เตรียม snapshot ไว้แล้ว — ไม่ freeze ซ้ำ (จะทำให้ baseline เปลี่ยน)
-          await this.audit(
-            empId,
-            'count.session_opened',
-            { sessionId: existing.id, erpTransactionNo, warehouseCode, zone: zone ?? null, reused: true },
-            client,
-          );
-          return existing.id;
-        }
-      }
 
       const open = await client.query<{ id: string }>(
         `SELECT id FROM count_sessions WHERE warehouse_code = $1 AND status = 'open' LIMIT 1`,
@@ -706,14 +678,14 @@ export class CountService {
         });
       }
 
-      const id = parsed.data.id ?? CountService.newSessionId(erpTransactionNo);
+      const id = parsed.data.id ?? CountService.newSessionId();
       try {
         await client.query(
           `INSERT INTO count_sessions
              (id, erp_transaction_no, zone, warehouse_code, status,
               erp_data_as_of, opened_on_stale_cache)
            VALUES ($1, $2, $3, $4, 'open', $5::timestamptz, $6)`,
-          [id, erpTransactionNo ?? null, zone ?? null, warehouseCode, erpDataAsOf, stale],
+          [id, null, zone ?? null, warehouseCode, erpDataAsOf, stale],
         );
       } catch (err) {
         if (CountService.pgCode(err) === '23505') {
@@ -764,7 +736,6 @@ export class CountService {
           sessionId: id,
           warehouseCode,
           zone: zone ?? null,
-          erpTransactionNo: erpTransactionNo ?? null,
           itemCount: frozenCount,
           skippedNoOnHand: skipped,
           erpDataAsOf: erpDataAsOf?.toISOString() ?? null,
@@ -1351,11 +1322,7 @@ export class CountService {
     return createHash('sha256').update(canonical, 'utf8').digest('hex');
   }
 
-  private static newSessionId(erpTransactionNo?: string): string {
-    if (erpTransactionNo) {
-      const safe = erpTransactionNo.replace(/[^A-Za-z0-9._-]/g, '');
-      if (safe.length > 0) return `CS-${safe}`.slice(0, 64);
-    }
+  private static newSessionId(): string {
     const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+$/, '');
     return `CS-${stamp}-${randomUUID().slice(0, 4)}`;
   }
