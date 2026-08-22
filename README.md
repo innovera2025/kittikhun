@@ -24,7 +24,7 @@ ERP (`db_TCL` / SQL Server 2019) เป็นแหล่ง **อ่านอ�
 | ออกแบบสถาปัตยกรรม | ✅ เสร็จ ผ่านการตรวจเชิงปฏิปักษ์ 3 มุมมอง |
 | ทดสอบเชื่อมต่อ ERP จริง | ✅ เชื่อมได้ สำรวจข้อมูลครบ (อ่านอย่างเดียว) |
 | **UI (Flutter) — 8 หน้าจอ** | ✅ `flutter analyze` สะอาด · `flutter test` **59/59 ผ่าน** |
-| **Backend (NestJS) — โครงครบ** | ✅ `tsc` สะอาด · boot ได้จริง · เทสต์ **206/206 ผ่าน** (129 unit + 77 integration) |
+| **Backend (NestJS) — โครงครบ** | ✅ `tsc` สะอาด · boot ได้จริง · เทสต์ **235/235 ผ่าน** (129 unit + 106 integration) · CI รันทุก push |
 | **ระบบผู้ใช้/login (ของเราเอง ไม่ดึงจาก ERP)** | ✅ **ใช้งานได้จริง** — `test/auth-integration.spec.ts` **36/36 ผ่าน** กับ Postgres จริง |
 | ต่อ UI เข้ากับ backend (auth + members) | ✅ ตั้ง `API_BASE_URL` = ใช้ backend · ไม่ตั้ง = fixture สำหรับดู UI |
 | **โมดูล Catalog / Count / Sync** | ✅ **ใช้งานได้จริง** — `test/count-cycle.spec.ts` **41/41 ผ่าน** กับ Postgres จริง |
@@ -138,6 +138,7 @@ app/                      Flutter app
 server/                   NestJS backend
   sql/erp/inventory-items-with-balance.sql  ⭐ item master + ยอดคงเหลือ (สูตรจากฝ่าย ERP)
   sql/erp/verify-balance.sql            diagnostic ตรวจสูตรก่อนเชื่อตัวเลข (อ่านอย่างเดียว)
+  scripts/verify-erp.ts                 `npm run verify:erp` ตรวจสิทธิ์ + ความแม่นของยอด
   src/config/env.config.ts              zod ตรวจ .env ตอน boot (fail fast บอกชื่อตัวแปร)
   src/erp/erp-adapter.ts                ⭐ สัญญา read-only + statement guard + compile guard
   src/erp/drivers/mssql.driver.ts       SQL Server driver + boot write-probe + charset ไทย
@@ -147,6 +148,7 @@ server/                   NestJS backend
   src/auth/pin-policy.ts                ⭐ กติกา PIN ที่เดาง่าย — แหล่งความจริงเดียว
   test/erp-read-only.spec.ts            24 เทสต์กฎเหล็ก read-only
   test/erp-items-script.spec.ts         25 เทสต์ล็อกเงื่อนไขสูตรยอดคงเหลือ
+  test/catalog-sync.spec.ts             29 เทสต์ tombstone guardrail + delta feed (ต้องมี Postgres)
   test/pin-policy.spec.ts               31 เทสต์กติกา PIN
   test/auth-crypto.spec.ts              23 เทสต์ argon2 + pepper + sha256 + TTL
   test/variance-csv.spec.ts             26 เทสต์ CSV ไทย (BOM, null≠0, formula injection)
