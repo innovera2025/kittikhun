@@ -82,7 +82,7 @@ chmod 700 secrets secrets/ssh
 | ชื่อ volume | `kittikhun_pgdata`, `kittikhun_caddy_data`, … | ✅ ไม่ชน (มี prefix อัตโนมัติ) |
 | ชื่อ network | `kittikhun_default` | ✅ ไม่ชน |
 | ชื่อ container | `kittikhun-api-1`, `kittikhun-postgres-1`, … | ✅ ไม่ชน |
-| **พอร์ต 80 / 443** | Caddy จองไว้ | 🔴 **ชนแน่ถ้ามี reverse proxy อื่นอยู่** |
+| **พอร์ต 80 / 443** | ปิด Caddy ของเราด้วย override | ✅ ไม่ชน (ใช้ caddy-gen-proxy แทน) |
 | พอร์ต Postgres | ไม่ publish ออก host | ✅ ไม่ชน |
 | พอร์ต API | `expose` เท่านั้น ไม่ publish | ✅ ไม่ชน |
 
@@ -143,47 +143,66 @@ ERP_DRIVER=mock                # ⚠️ ดูหัวข้อ 5 ก่อน�
 
 ---
 
-## 4. เลือกวิธีรับ traffic — ตัดสินจากผลข้อ 0
+## 4. รับ traffic ผ่าน caddy-gen-proxy ที่มีอยู่แล้ว
 
-### แบบ A — ยังไม่มีอะไรใช้ 80/443
+**ผลสำรวจของ VPS เครื่องนี้ (23 ส.ค. 2569):**
 
-ใช้ Caddy ของโปรเจคนี้ได้เลย ไม่ต้องแก้อะไร แค่แก้ `Caddyfile` บรรทัดแรกให้ใช้ TLS จริง:
+| พอร์ต | ใครจอง |
+|---|---|
+| 80 / 443 | `caddy-gen-proxy` |
+| 8080 | `qtso-backend-app-php-restserver-1` |
+| 3000 · 8081 · 9000 · 14339 | qtso-app · code-server · portainer · mssql |
 
-```caddyfile
-{$CADDY_SITE} {
-	# ลบ `tls internal` ออก → Caddy ขอใบรับรอง Let's Encrypt อัตโนมัติ
-	handle /api/* {
-		uri strip_prefix /api
-		reverse_proxy api:8080
-	}
-	...
-}
-```
+→ **ห้ามใช้ Caddy ของโปรเจคนี้** และ **ห้าม publish พอร์ตใด ๆ ออก host**
 
-> `tls internal` มีไว้สำหรับ LAN ที่ไม่มีโดเมนจริง — บน VPS ที่มีโดเมนต้องเอาออก
-> ไม่งั้นมือถือจะไม่เชื่อใบรับรอง
+`caddy-gen-proxy` เป็น caddy-gen: มันอ่าน **label ของ container** แล้วสร้าง Caddy config
+พร้อมขอใบรับรอง Let's Encrypt ให้เองอัตโนมัติ ทางเข้าที่ถูกต้องคือเข้า network `proxy-network`
+แล้วติด label — ไม่ต้องแก้อะไรที่ proxy เลย
 
-### แบบ B — มี reverse proxy อื่นอยู่แล้ว (พบบ่อยที่สุด)
-
-ให้ proxy เดิมเป็นทางเข้า แล้วปิด Caddy ของเรา — สร้างไฟล์ override:
+### ก่อนใช้ — ตรวจรูปแบบ label ที่เครื่องนี้ใช้จริง
 
 ```bash
-cat > docker-compose.override.yml <<'EOF'
-# VPS นี้มี reverse proxy อยู่แล้ว → ไม่ใช้ Caddy ของโปรเจคนี้
-# และเปิด API ที่ 127.0.0.1 เท่านั้นให้ proxy เดิมต่อเข้ามา (ไม่โผล่ออกอินเทอร์เน็ต)
-services:
-  caddy:
-    profiles: ["ไม่ใช้"]
-  api:
-    ports:
-      - "127.0.0.1:18080:8080"
-EOF
+docker inspect qtso-app --format '{{json .Config.Labels}}' | python3 -m json.tool
 ```
 
-แล้วชี้ proxy เดิมมาที่ `http://127.0.0.1:18080`
-(nginx: `proxy_pass http://127.0.0.1:18080;` · Caddy: `reverse_proxy 127.0.0.1:18080`)
+ถ้าเห็น `virtual.host` / `virtual.port` / `virtual.tls-email` = ตรงกับไฟล์ที่เตรียมไว้
+ถ้าเป็นคีย์อื่น ให้แก้ 3 บรรทัดใน `deploy/vps.override.yml` ให้ตรง
 
-> เลือกเลข 18080 ให้ไม่ชนของเดิม — เช็คด้วย `ss -tlnp | grep 18080`
+### ใช้งาน
+
+`deploy/vps.override.yml` มีมากับ repo แล้ว — เพิ่ม 2 บรรทัดนี้ในไฟล์ตั้งค่า:
+
+```bash
+PUBLIC_HOST=stock.example.com     # โดเมนที่ชี้ A record มาที่ VPS แล้ว
+TLS_EMAIL=you@example.com         # อีเมลสำหรับ Let's Encrypt
+```
+
+แล้วรันด้วย override เสมอ:
+
+```bash
+docker compose -f docker-compose.yml -f deploy/vps.override.yml up -d
+```
+
+> เช็คว่าถูกต้อง: `... config` แล้วต้องเห็น **ไม่มี service ไหน publish พอร์ตออก host เลย**
+> และ `api` อยู่ทั้ง `default` (คุยกับ postgres) และ `proxy-network` (ให้ proxy เห็น)
+
+### ⚠️ `docker compose` ยังไม่มีในเครื่อง
+
+`docker compose version` ตอบว่า `unknown command` — มีแต่ Docker engine ยังไม่มี compose v2
+
+```bash
+apt-get update
+apt-get install -y docker-compose-v2     # Ubuntu 24.04
+# ถ้าไม่มี package นี้ ให้ใช้: apt-get install -y docker-compose-plugin
+docker compose version                   # ต้องขึ้น v2.x
+```
+
+> ⚠️ `docker-compose` (v1, ขีดกลาง) ใช้ไม่ได้กับไฟล์นี้ — ไม่รองรับ `name:` และ `profiles:`
+
+### ⚠️ RAM เหลือ 1.3 GB
+
+stack นี้ใช้เพิ่มราว 400–500 MB (postgres + api + backup sidecar) — พอ แต่ไม่เหลือมาก
+ถ้าตึงให้ปิด backup sidecar ชั่วคราวด้วย `--scale backup=0` แล้วค่อยเปิดเมื่อจัด backup จริง
 
 ---
 
@@ -232,17 +251,20 @@ VPS อยู่นอกองค์กร → ต้องให้ ERP ยอ
 ```bash
 cd /opt/kittikhun/server
 
-docker compose build            # ครั้งแรกเท่านั้น (~2 นาที)
-docker compose up -d
+# ตั้ง alias ให้พิมพ์สั้นลง (ต้องใช้ override ทุกครั้ง)
+alias kk='docker compose -f docker-compose.yml -f deploy/vps.override.yml'
 
-docker compose ps               # ต้องเห็น api/postgres เป็น healthy
-docker compose logs -f api      # ดูว่ามีอะไรผิดไหม
+kk build            # ครั้งแรกเท่านั้น (~2 นาที)
+kk up -d
+
+kk ps               # ต้องเห็น api/postgres เป็น healthy
+kk logs -f api      # ดูว่ามีอะไรผิดไหม
 ```
 
 ### สร้าง admin คนแรก
 
 ```bash
-docker compose exec api node dist/cli/create-admin.js \
+kk exec api node dist/cli/create-admin.js \
   --emp-id 52104 --name "ชื่อ ผู้ดูแล" --shift "กะเช้า · A"
 # → พิมพ์ PIN เริ่มต้นครั้งเดียว · login แล้วระบบบังคับตั้ง PIN ใหม่
 ```
@@ -250,8 +272,12 @@ docker compose exec api node dist/cli/create-admin.js \
 ### ตรวจว่าขึ้นจริง
 
 ```bash
-curl -s http://127.0.0.1:18080/healthz          # แบบ B
-curl -s https://stock.example.com/healthz       # แบบ A
+# จากในเครื่อง (ผ่าน network ภายใน)
+docker compose -f docker-compose.yml -f deploy/vps.override.yml exec api \
+  node -e "fetch('http://127.0.0.1:8080/healthz').then(r=>r.text()).then(console.log)"
+
+# จากภายนอก (ผ่าน caddy-gen-proxy)
+curl -s https://stock.example.com/healthz
 ```
 
 ---
@@ -288,7 +314,7 @@ flutter build apk --release \
 
 ```bash
 cd /opt/kittikhun && git pull
-cd server && docker compose build api && docker compose up -d api
+cd server && kk build api && kk up -d api
 ```
 
 ข้อมูลอยู่ใน volume ไม่หายไปกับการ rebuild

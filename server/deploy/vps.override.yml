@@ -1,0 +1,38 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# override สำหรับ VPS ที่มี caddy-gen-proxy อยู่แล้ว
+#
+#   docker compose -f docker-compose.yml -f deploy/vps.override.yml up -d
+#
+# ทำไมต้องมีไฟล์นี้:
+#   docker-compose.yml หลักออกแบบมาสำหรับ "เครื่องเดียวทั้งระบบ" ใน LAN → มี Caddy
+#   ของตัวเองที่จอง 80/443 แต่บน VPS นี้ caddy-gen-proxy จองไปแล้ว และมันทำหน้าที่
+#   reverse proxy + ออกใบรับรองให้ทุกโปรเจคในเครื่องอยู่แล้ว
+#
+#   → ปิด Caddy ของเรา แล้วให้ api เข้า proxy-network พร้อม label ให้ caddy-gen เห็น
+#   → ไม่ publish พอร์ตออก host เลยแม้แต่ตัวเดียว (ไม่มีอะไรให้ชนกับโปรเจคอื่น)
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  # Caddy ของโปรเจคนี้ไม่ใช้บน VPS — caddy-gen-proxy ทำหน้าที่แทน
+  # ใช้ profile ที่ไม่มีใครเปิด = ไม่ถูกสร้างขึ้นมาเลย
+  caddy:
+    profiles: ["lan-only"]
+
+  api:
+    networks:
+      # เครือข่ายภายในของโปรเจค (คุยกับ postgres)
+      - default
+      # เครือข่ายของ caddy-gen-proxy
+      - proxy-network
+    labels:
+      # ⚠️ ตรวจรูปแบบ label ให้ตรงกับที่ caddy-gen ในเครื่องนี้ใช้จริงก่อน:
+      #      docker inspect qtso-app --format '{{json .Config.Labels}}'
+      #    ถ้าของเดิมใช้คีย์อื่น ให้แก้ 3 บรรทัดล่างให้ตรงกัน
+      virtual.host: "${PUBLIC_HOST:?ต้องตั้ง PUBLIC_HOST เช่น stock.example.com}"
+      virtual.port: "8080"
+      virtual.tls-email: "${TLS_EMAIL:?ต้องตั้ง TLS_EMAIL สำหรับ Let's Encrypt}"
+
+networks:
+  proxy-network:
+    # network นี้มีอยู่แล้วในเครื่อง — ห้ามให้ compose สร้างใหม่
+    external: true
