@@ -1,25 +1,34 @@
 # คู่มือติดตั้งบน VPS (หลายโปรเจคในเครื่องเดียว)
 
-> เขียนสำหรับ VPS ที่**มีโปรเจคอื่นรันอยู่แล้ว** — ทุกอย่างในนี้ตั้งใจให้ไม่ชนกับของเดิม
-> ตรวจแล้วกับ image ที่ build จริง (`kittikhun/stock-api:4.0.0`) เมื่อ 22 ส.ค. 2569
+> เขียนสำหรับ VPS จริงของโปรเจคนี้: **Ubuntu · รันเป็น root · โปรเจคอยู่ใต้ `/opt/`**
+> ของเดิมในเครื่อง: `api-pueanphet` · `orderstock`
+> (`containerd` เป็นของ Docker ไม่ใช่โปรเจค — ห้ามแตะ)
+>
+> ตรวจแล้วกับ image ที่ build จริง (`kittikhun/stock-api:4.0.0`)
 
 ---
 
 ## 0. ก่อนเริ่ม — เช็ค 3 อย่างบน VPS
 
+รันชุดนี้ทีเดียวแล้วเก็บผลไว้ — **ผลของข้อ 1 เป็นตัวกำหนดว่าจะใช้แบบ A หรือ B ในหัวข้อ 4**
+
 ```bash
-# 1) มีอะไรจอง 80/443 อยู่แล้วไหม  ← สำคัญที่สุด
-sudo ss -tlnp | grep -E ':(80|443)\s'
+echo '── 1) พอร์ตที่ถูกจองแล้ว (สำคัญสุด) ──'
+ss -tlnp | grep -E ':(80|443|5432|8080|18080)\s' || echo '  ว่างทั้งหมด'
 
-# 2) docker + compose plugin
-docker --version && docker compose version
+echo '── 2) docker ──'
+docker --version; docker compose version
 
-# 3) ชื่อที่ถูกใช้ไปแล้ว (กันชน)
-docker ps -a --format '{{.Names}}'
-docker volume ls --format '{{.Name}}'
+echo '── 3) ของเดิมที่รันอยู่ ──'
+docker ps --format 'table {{.Names}}\t{{.Ports}}'
+
+echo '── 4) ชื่อที่ถูกใช้แล้ว (ต้องไม่มีคำว่า kittikhun) ──'
+docker network ls --format '{{.Name}}'
+docker volume ls --format '{{.Name}}' | head -20
+
+echo '── 5) ทรัพยากรพอไหม (ต้องการดิสก์ว่าง ~3GB, RAM 1GB+) ──'
+df -h /opt | tail -1; free -h | head -2
 ```
-
-**ผลของข้อ 1 เป็นตัวกำหนดว่าจะใช้แบบ A หรือ B ในหัวข้อ 4**
 
 ---
 
@@ -28,16 +37,20 @@ docker volume ls --format '{{.Name}}'
 โปรเจคนี้ใช้ `build:` จาก source จึงต้องมีทั้ง repo ไม่ใช่แค่ compose file
 
 ```
-/srv/kittikhun/                     ← โฟลเดอร์โปรเจค (ชื่ออะไรก็ได้)
-└── server/                         ← ทำงานทุกคำสั่งจากในนี้
-    ├── docker-compose.yml          (มากับ repo)
-    ├── Dockerfile                  (มากับ repo)
-    ├── Caddyfile                   (มากับ repo)
-    ├── src/  db/  sql/             (มากับ repo)
-    ├── .env                        ⚠️ สร้างเอง — ไม่มีใน repo
-    ├── config/                     ⚠️ สร้างเอง — ว่างไว้ก็ได้
-    ├── public/                     ⚠️ สร้างเอง — ไฟล์แจก (APK, root CA)
-    └── secrets/ssh/                (สร้างเมื่อจะส่ง backup ออกนอกเครื่อง)
+/opt/
+├── api-pueanphet/              ← ของเดิม ห้ามแตะ
+├── orderstock/                 ← ของเดิม ห้ามแตะ
+├── containerd/                 ← ของ Docker ห้ามแตะ
+└── kittikhun/                  ★ สร้างใหม่
+    └── server/                 ← ทำงานทุกคำสั่งจากในนี้
+        ├── docker-compose.yml  (มากับ repo)
+        ├── Dockerfile          (มากับ repo)
+        ├── Caddyfile           (มากับ repo)
+        ├── src/  db/  sql/     (มากับ repo)
+        ├── (ไฟล์ตั้งค่า)        ⚠️ สร้างเอง — ไม่มีใน repo
+        ├── config/             ⚠️ สร้างเอง — ว่างไว้ก็ได้
+        ├── public/             ⚠️ สร้างเอง — ไฟล์แจก (APK, root CA)
+        └── secrets/ssh/        (สร้างเมื่อจะส่ง backup ออกนอกเครื่อง)
 ```
 
 `config/` `public/` `secrets/` ไม่มีใน git โดยตั้งใจ (กันไฟล์ความลับหลุด)
@@ -46,9 +59,8 @@ docker volume ls --format '{{.Name}}'
 ### คำสั่ง
 
 ```bash
-sudo mkdir -p /srv/kittikhun
-sudo chown "$USER":"$USER" /srv/kittikhun
-cd /srv/kittikhun
+mkdir -p /opt/kittikhun
+cd /opt/kittikhun
 
 git clone https://github.com/innovera2025/kittikhun.git .
 cd server
@@ -56,6 +68,9 @@ cd server
 mkdir -p config public secrets/ssh
 chmod 700 secrets secrets/ssh
 ```
+
+> รันเป็น root อยู่แล้วจึงไม่ต้อง `sudo` / `chown`
+> แต่ `chmod 700 secrets` ยังจำเป็น — กันคีย์ backup ถูกอ่านจาก process อื่นในเครื่อง
 
 ---
 
@@ -78,7 +93,7 @@ chmod 700 secrets secrets/ssh
 ## 3. สร้างไฟล์ `.env`
 
 ```bash
-cd /srv/kittikhun/server
+cd /opt/kittikhun/server
 cp ../.env.example .env    # ถ้าไม่มีให้เขียนใหม่ตามด้านล่าง
 chmod 600 .env
 ```
@@ -215,7 +230,7 @@ VPS อยู่นอกองค์กร → ต้องให้ ERP ยอ
 ## 6. คำสั่งขึ้นระบบ
 
 ```bash
-cd /srv/kittikhun/server
+cd /opt/kittikhun/server
 
 docker compose build            # ครั้งแรกเท่านั้น (~2 นาที)
 docker compose up -d
@@ -272,7 +287,7 @@ flutter build apk --release \
 ## 9. อัปเดตเวอร์ชันใหม่
 
 ```bash
-cd /srv/kittikhun && git pull
+cd /opt/kittikhun && git pull
 cd server && docker compose build api && docker compose up -d api
 ```
 
