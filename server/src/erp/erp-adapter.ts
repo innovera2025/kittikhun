@@ -103,6 +103,18 @@ export type ErpDriverKind = 'sql' | 'rest' | 'mock';
 export interface ErpAdapter {
   capabilities(): ErpCapabilities;
 
+  /**
+   * ตรวจตอน boot ก่อนรับ traffic — ต่อ pool + พิสูจน์ว่าเขียนไม่ได้ + สมอกทดสอบภาษาไทย
+   *
+   * ⚠️ อยู่ใน interface โดยตั้งใจ: `ErpModule.onModuleInit()` เรียกผ่าน token
+   *    ที่มีชนิดเป็น `ErpAdapter` — ถ้าไม่ประกาศไว้ที่นี่ ชั้นที่ 2 ของกฎเหล็ก
+   *    จะถูกลืมเรียกได้อีก (เคยเกิดขึ้นมาแล้ว)
+   */
+  init(): Promise<void>;
+
+  /** ปิด connection ตอน shutdown */
+  close(): Promise<void>;
+
   /** อ่าน item master แบบ stream เป็น batch (ห้ามโหลดทั้งก้อนเข้า memory) */
   fetchItems(since?: ErpCursor): AsyncIterable<CanonicalItem[]>;
 

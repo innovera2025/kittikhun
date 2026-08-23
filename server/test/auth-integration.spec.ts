@@ -206,6 +206,89 @@ describeWithDb('auth — วงจรจริงกับ Postgres', () => {
     });
   });
 
+  // ── ช่องโหว่ที่ปิดไปแล้ว (regression guard) ──────────────────────────
+
+  describe('⭐ changePin ต้องมีด่านกัน brute force เหมือน login', () => {
+    it('PIN เดิมผิด → นับเป็นความล้มเหลวและตั้งเวลาหน่วง', async () => {
+      await seedUser();
+      await codeOf(auth.changePin('52104', { currentPin: '111112', newPin: '839204' }));
+
+      const row = await db.one<{ failed_attempts: number; throttle_until: Date | null }>(
+        `SELECT failed_attempts, throttle_until FROM users WHERE emp_id = '52104'`,
+      );
+      expect(row?.failed_attempts).toBe(1);
+      expect(row?.throttle_until).not.toBeNull();
+    });
+
+    it('🔴 อยู่ในช่วงหน่วง → ปฏิเสธก่อนตรวจ PIN (ปิดช่องเดา PIN ไม่จำกัดครั้ง)', async () => {
+      await seedUser();
+      await db.query(
+        `UPDATE users SET throttle_until = now() + interval '5 minutes' WHERE emp_id = '52104'`,
+      );
+      expect(
+        await codeOf(auth.changePin('52104', { currentPin: PIN, newPin: '839204' })),
+      ).toBe(AuthErrorCode.THROTTLED);
+    });
+
+    it('⭐ ใช้ตัวนับเดียวกับ login — เดาสลับสองทางก็ยังสะสม', async () => {
+      // ไม่วัดจาก THROTTLED เพราะ config เทสต์ตั้งหน่วงไว้ 1ms ซึ่งหมดอายุ
+      // ก่อน argon2 รอบถัดไปจะทำงานเสร็จ (~300ms) — วัดที่ตัวนับซึ่ง deterministic
+      await seedUser();
+      await codeOf(auth.changePin('52104', { currentPin: '111112', newPin: '839204' }));
+      await db.query(`UPDATE users SET throttle_until = NULL WHERE emp_id = '52104'`);
+      await codeOf(auth.login({ empId: '52104', pin: '111112', deviceId: DEVICE }));
+
+      const row = await db.one<{ failed_attempts: number }>(
+        `SELECT failed_attempts FROM users WHERE emp_id = '52104'`,
+      );
+      // 1 จาก changePin + 1 จาก login = 2 → ยืนยันว่าใช้ตัวนับร่วมกัน
+      expect(row?.failed_attempts).toBe(2);
+    });
+
+    it('บันทึกลง audit_log แยก action ให้ตรวจย้อนได้', async () => {
+      await seedUser();
+      await codeOf(auth.changePin('52104', { currentPin: '111112', newPin: '839204' }));
+      const row = await db.one<{ action: string }>(
+        `SELECT action FROM audit_log WHERE actor = '52104' ORDER BY id DESC LIMIT 1`,
+      );
+      expect(row?.action).toBe('auth.change_pin_failed');
+    });
+  });
+
+  describe('⭐ ตัวนับความล้มเหลวต้อง atomic (กันยิงพร้อมกันแล้วตัวนับค้าง)', () => {
+    it('🔴 ยิง PIN ผิดพร้อมกัน 10 ครั้ง → ตัวนับต้องเป็น 10 ไม่ใช่ 1', async () => {
+      await seedUser();
+      // ปลดหน่วงเวลาออกเพื่อให้ทุก request ผ่านด่าน throttle พร้อมกัน (จำลอง race จริง)
+      await db.query(`UPDATE users SET throttle_until = NULL WHERE emp_id = '52104'`);
+
+      await Promise.all(
+        Array.from({ length: 10 }, () =>
+          auth.login({ empId: '52104', pin: '111112', deviceId: DEVICE }).catch(() => undefined),
+        ),
+      );
+
+      const row = await db.one<{ failed_attempts: number }>(
+        `SELECT failed_attempts FROM users WHERE emp_id = '52104'`,
+      );
+      expect(row?.failed_attempts).toBe(10);
+    });
+
+    it('หน่วงเวลาทวีคูณจริงตามจำนวนครั้งที่สะสม', async () => {
+      await seedUser();
+      const delays: number[] = [];
+      for (let i = 0; i < 4; i++) {
+        await db.query(`UPDATE users SET throttle_until = NULL WHERE emp_id = '52104'`);
+        try {
+          await auth.login({ empId: '52104', pin: '111112', deviceId: DEVICE });
+        } catch (e) {
+          delays.push((e as AuthError).retryAfterMs ?? 0);
+        }
+      }
+      // base=1ms · เพดาน=4ms → 1, 2, 4, 4
+      expect(delays).toEqual([1, 2, 4, 4]);
+    });
+  });
+
   // ── refresh ──────────────────────────────────────────────────────────
 
   describe('refresh token — rotate ทุกครั้ง + ผูกเครื่อง', () => {

@@ -131,6 +131,39 @@ describeWithDb('วงจรนับสต็อก — Postgres จริง',
       expect(s.items.map((i) => i.sku)).toEqual(['A-001']);
     });
 
+    it('🔴 ระบุโซนแต่ไม่ระบุ skus → ปฏิเสธ (ระบบไม่รู้ว่าสินค้าใดอยู่โซนใด)', async () => {
+      await seedItems([
+        { sku: 'A-001', name: 'น็อต', onHand: 100 },
+        { sku: 'B-001', name: 'ของโซนอื่น', onHand: 50 },
+      ]);
+      await expect(count.openSession({ zone: 'A-01' }, ADMIN)).rejects.toMatchObject({
+        response: { code: 'ZONE_REQUIRES_SKUS' },
+      });
+
+      // ต้องไม่มีอะไรถูกสร้างค้างไว้
+      const n = await db.one<{ n: number }>(`SELECT count(*)::int AS n FROM count_sessions`);
+      expect(n?.n).toBe(0);
+    });
+
+    it('ระบุโซนพร้อม skus → เปิดได้ และ freeze เฉพาะที่ระบุ', async () => {
+      await seedItems([
+        { sku: 'A-001', name: 'น็อต', onHand: 100 },
+        { sku: 'B-001', name: 'ของโซนอื่น', onHand: 50 },
+      ]);
+      const s = await count.openSession({ zone: 'A-01', skus: ['A-001'] }, ADMIN);
+      expect(s.items.map((i) => i.sku)).toEqual(['A-001']);
+      expect(s.zone).toBe('A-01');
+    });
+
+    it('ไม่ระบุโซน → นับทั้งคลังได้ตามเดิม', async () => {
+      await seedItems([
+        { sku: 'A-001', name: 'น็อต', onHand: 100 },
+        { sku: 'B-001', name: 'สกรู', onHand: 50 },
+      ]);
+      const s = await count.openSession({}, ADMIN);
+      expect(s.items).toHaveLength(2);
+    });
+
     it('มีรอบเปิดอยู่แล้วในคลังเดียวกัน → ปฏิเสธ (กัน admin 2 คนเปิดชนกัน)', async () => {
       await seedItems([{ sku: 'A-001', name: 'น็อต', onHand: 10 }]);
       await count.openSession({}, ADMIN);
@@ -549,6 +582,76 @@ describeWithDb('วงจรนับสต็อก — Postgres จริง',
       );
       expect(row?.closed_by).toBe(ADMIN);
       expect(row?.closed_at).not.toBeNull();
+    });
+  });
+
+  // ── race: ส่งผลนับชนกับการปิดรอบ ─────────────────────────────────────
+
+  describe('⭐ TOCTOU: ส่งผลนับพร้อมกับที่ admin ปิดรอบ', () => {
+    async function openWith() {
+      await seedItems([
+        { sku: 'A-001', name: 'น็อต', onHand: 100 },
+        { sku: 'A-002', name: 'สกรู', onHand: 50 },
+      ]);
+      return count.openSession({}, ADMIN);
+    }
+
+    it('🔴 ผลนับที่ชนกับการปิดรอบต้องไม่ "accepted" แล้วหายจากรายงาน', async () => {
+      const s = await openWith();
+
+      // ยิงพร้อมกัน: ปิดรอบ + ส่งผลนับ 20 บรรทัด
+      const keys = Array.from({ length: 20 }, () => randomUUID());
+      const [closeResult, submitResult] = await Promise.allSettled([
+        count.closeSession(s.id, ADMIN),
+        Promise.all(
+          keys.map((k, i) =>
+            count.submit(s.id, [line('A-001', 90 + i, i + 1, k)], STAFF_A, DEV_A),
+          ),
+        ),
+      ]);
+
+      if (closeResult.status !== 'fulfilled') return; // ปิดไม่สำเร็จ = ไม่มี race ให้ตรวจ
+
+      const results = submitResult.status === 'fulfilled' ? submitResult.value.flat() : [];
+      const accepted = results.filter((r) => r.status === 'accepted');
+
+      // ⭐ กติกา: ทุกบรรทัดที่ตอบ accepted ต้องอยู่ใน closed_variance จริง
+      //    (เครื่องลบออกจากคิวไปแล้วตามผลลัพธ์นี้ — หายไม่ได้)
+      const frozen = await db.one<{ n: number }>(
+        `SELECT count(*)::int AS n FROM closed_variance WHERE session_id = $1 AND sku = 'A-001'`,
+        [s.id],
+      );
+
+      if (accepted.length > 0) {
+        expect(frozen?.n).toBe(1);
+        const row = (await varianceBySku(s.id)).get('A-001');
+        expect(row?.countedQty).not.toBeNull();
+      }
+
+      // และบรรทัดที่ถูกปฏิเสธต้องบอกเหตุผลชัด ไม่ใช่ 'duplicate' ที่ทำให้เครื่องลบทิ้ง
+      for (const r of results.filter((x) => x.status === 'rejected')) {
+        expect(r.code).toBe('SESSION_CLOSED');
+      }
+      expect(results.filter((r) => r.status === 'duplicate')).toHaveLength(0);
+    });
+
+    it('ปิดรอบเสร็จแล้วส่งต่อ → SESSION_CLOSED ทุกบรรทัด (ไม่ใช่ duplicate)', async () => {
+      const s = await openWith();
+      await count.closeSession(s.id, ADMIN);
+
+      const res = await count.submit(
+        s.id,
+        [line('A-001', 98, 1), line('A-002', 50, 2)],
+        STAFF_A,
+        DEV_A,
+      );
+      expect(res.every((r) => r.status === 'rejected' && r.code === 'SESSION_CLOSED')).toBe(true);
+
+      const n = await db.one<{ n: number }>(
+        `SELECT count(*)::int AS n FROM count_submissions WHERE session_id = $1`,
+        [s.id],
+      );
+      expect(n?.n).toBe(0);
     });
   });
 

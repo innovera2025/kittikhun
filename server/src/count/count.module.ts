@@ -74,8 +74,8 @@ const SubmitBatchSchema = z.object({
 export type SubmitBatchInput = z.infer<typeof SubmitBatchSchema>;
 
 /**
- * เปิดรอบนับ — รอบนับเป็น mirror ของ ERP (`tbl_CountHdr`) จึงอ้างด้วย `erpTransactionNo`
- * (`erpVoucherNo` ซ้ำได้จริง ห้ามใช้เป็นคีย์)
+ * เปิดรอบนับ — **รอบนับทุกรอบเปิดจากระบบเราเอง** แล้ว freeze ยอดจาก `items_cache`
+ * (เลิก mirror รอบนับจาก ERP ตั้งแต่ 22 ส.ค. 2569 — ดึงจาก ERP แค่จำนวนคงเหลือ)
  *
  * `allowStaleCache` = admin เห็นอายุ cache แล้วยืนยันเปิดรอบตอน ERP ล่ม
  * (erp-integration.md §5 → ประทับ `count_sessions.opened_on_stale_cache`)
@@ -87,7 +87,9 @@ export type SubmitBatchInput = z.infer<typeof SubmitBatchSchema>;
  */
 const OpenSessionSchema = z.object({
   id: SessionIdSchema.optional(),
-  erpTransactionNo: z.string().trim().min(1).max(64).optional(),
+  // ⚠️ เคยมี `erpTransactionNo` ตรงนี้หลังจากที่ service เลิกรับไปแล้ว → controller
+  //    รับเข้ามาแล้ว zod ของ service strip ทิ้งเงียบ ๆ ผู้เรียกไม่มีทางรู้ว่าค่าหาย
+  //    ตัดออกให้ตรงกันทั้งสองชั้น (ฟิลด์ที่ไม่มีในสัญญา zod จะถูกปฏิเสธที่นี่แทน)
   zone: z.string().trim().min(1).max(64).optional(),
   warehouseCode: z.string().trim().min(1).max(32).optional(),
   /** จำกัดรายการที่จะ freeze — ไม่ส่ง = ทั้งคลัง */

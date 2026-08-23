@@ -635,6 +635,21 @@ export class CountService {
     const warehouseCode = parsed.data.warehouseCode ?? this.defaultWarehouseCode;
     const requested = skus ? [...new Set(skus)] : undefined;
 
+    // ⚠️ `items_cache` **ไม่มีคอลัมน์โซน** (ERP เก็บโซนที่ระดับเอกสาร ไม่ใช่ที่ตัวสินค้า)
+    //    ระบบจึงไม่มีทางรู้ว่า SKU ไหนอยู่โซนไหน
+    //    เดิมถ้าระบุ zone แต่ไม่ระบุ skus จะ freeze **ทั้งคลัง** แล้วแปะป้ายโซนนั้นลงทุกแถว
+    //    → ของนอกโซนกลายเป็น "ยังไม่ได้นับ" ทั้งหมด และโซนที่แอปเห็นเป็นข้อมูลที่แต่งขึ้น
+    //    ปฏิเสธไปเลยดีกว่าปล่อยให้ได้รายงานที่ดูสมเหตุสมผลแต่ผิด
+    if (zone !== undefined && requested === undefined) {
+      throw new BadRequestException({
+        code: 'ZONE_REQUIRES_SKUS',
+        message:
+          `เปิดรอบเฉพาะโซน "${zone}" ต้องระบุรายการสินค้า (skus) มาด้วย — ` +
+          'ระบบไม่มีข้อมูลว่าสินค้าใดอยู่โซนใด (ERP เก็บโซนที่ระดับเอกสารเท่านั้น) ' +
+          'ถ้าต้องการนับทั้งคลังให้เปิดรอบโดยไม่ระบุโซน',
+      });
+    }
+
     const sessionId = await this.db.transaction(async (client) => {
       // กัน admin 2 คนเปิดรอบพร้อมกันในคลังเดียว (ล็อกหลุดเองตอน commit/rollback)
       await client.query(`SELECT pg_advisory_xact_lock(hashtext('count_open:' || $1)::bigint)`, [
@@ -1042,16 +1057,15 @@ export class CountService {
     }));
   }
 
-  // ── 8. alias ตามชื่อที่ CountController เรียก (สัญญาเดียวกัน คนละชื่อ) ──
-
-  /** = `activeSession()` */
-  getActiveSession(warehouseCode?: string): Promise<CountSessionDto | null> {
-    return this.activeSession(warehouseCode);
-  }
+  // ── 8. รับซองจาก controller ────────────────────────────────────────────
 
   /**
    * = `submit()` แต่รับซองเดียวจาก controller: `{deviceId, queueDepth?, lines}`
    * (deviceId มาในบอดี้ไม่ใช่พารามิเตอร์แยก)
+   *
+   * ⚠️ เคยมี alias เปล่า ๆ อีก 4 ตัวข้างเมธอดนี้ (getActiveSession/getVariance/
+   *    getVarianceCsv/getConflicts) ที่ไม่มีใครเรียก — controller ใช้ชื่อจริงหมดแล้ว
+   *    ตัดออกเพื่อไม่ให้เหลือ "ทางเข้าที่สอง" ที่แก้ที่เดียวแล้วลืมอีกที่
    */
   async submitBatch(
     sessionId: string,
@@ -1069,21 +1083,6 @@ export class CountService {
     return this.submit(sessionId, lines, actor, deviceId, beat);
   }
 
-  /** = `variance()` */
-  getVariance(sessionId: string): Promise<VarianceRow[]> {
-    return this.variance(sessionId);
-  }
-
-  /** = `varianceCsv()` */
-  getVarianceCsv(sessionId: string): Promise<string> {
-    return this.varianceCsv(sessionId);
-  }
-
-  /** = `conflicts()` */
-  getConflicts(sessionId: string): Promise<ConflictRow[]> {
-    return this.conflicts(sessionId);
-  }
-
   // ── 9. ภายใน ──────────────────────────────────────────────────────────
 
   /** เขียน 1 บรรทัดแบบ idempotent — duplicate ที่ payload ต่าง = anomaly (ห้ามทับ) */
@@ -1096,11 +1095,23 @@ export class CountService {
   ): Promise<SubmissionResult> {
     const hash = CountService.payloadHash(sessionId, line);
     try {
+      // ⚠️ กัน TOCTOU กับการปิดรอบ: การตรวจ `status = 'open'` ก่อนหน้านี้ (ข้อ 2.3) อยู่
+      //    คนละ statement กับ INSERT นี้ ระหว่างกลาง admin ปิดรอบได้ ผลคือบรรทัดถูก
+      //    เขียนลงหลัง closed_variance ถูก materialize แล้ว → เครื่องได้ 'accepted'
+      //    แล้วลบออกจากคิว แต่ตัวเลขไม่โผล่ในรายงานที่แช่แข็งไว้ = **ผลนับหายถาวร**
+      //
+      //    แก้ด้วยการย้ายเงื่อนไขเข้ามาใน INSERT เอง พร้อม `FOR SHARE` เพื่อ:
+      //      - ถ้าปิดรอบไปแล้ว → EXISTS เป็นเท็จ ไม่มีแถวถูกเขียน
+      //      - ถ้าปิดรอบ *กำลัง* ทำอยู่ (ถือ FOR UPDATE) → INSERT นี้จะรอจนกว่าจะ commit
+      //        แล้วค่อยประเมินใหม่ เห็น 'closed' → ไม่เขียน (ไม่มีช่องว่างให้แทรก)
       const inserted = await this.db.query<{ idempotency_key: string }>(
         `INSERT INTO count_submissions
            (idempotency_key, session_id, sku, counted_qty, emp_id, device_id,
             device_seq, counted_at, payload_hash)
-         VALUES ($1::uuid, $2, $3, $4::numeric, $5, $6, $7::bigint, $8::timestamptz, $9)
+         SELECT $1::uuid, $2, $3, $4::numeric, $5, $6, $7::bigint, $8::timestamptz, $9
+          WHERE EXISTS (
+            SELECT 1 FROM count_sessions WHERE id = $2 AND status = 'open' FOR SHARE
+          )
          ON CONFLICT (idempotency_key) DO NOTHING
          RETURNING idempotency_key`,
         [
@@ -1128,7 +1139,26 @@ export class CountService {
         `SELECT payload_hash FROM count_submissions WHERE idempotency_key = $1::uuid`,
         [line.idempotencyKey],
       );
-      if (existing && existing.payload_hash !== hash) {
+
+      // ไม่ได้เขียน และไม่มีแถวเดิมอยู่ → แปลว่า EXISTS เป็นเท็จ = รอบถูกปิดไปแล้ว
+      // (ไม่ใช่ duplicate) ต้องตอบ SESSION_CLOSED ให้เครื่องเก็บงานไว้ในจอค้างตรวจ
+      // ห้ามตอบ 'duplicate' เด็ดขาด เพราะเครื่องจะลบออกจากคิวแล้วผลนับหายจริง
+      if (!existing) {
+        await this.audit(empId, 'count.submissions_rejected', {
+          sessionId,
+          deviceId,
+          sku: line.sku,
+          code: SubmissionCode.SESSION_CLOSED,
+          reason: 'รอบถูกปิดระหว่างกำลังเขียนผลนับ',
+        });
+        return {
+          idempotencyKey: line.idempotencyKey,
+          status: 'rejected',
+          code: SubmissionCode.SESSION_CLOSED,
+        };
+      }
+
+      if (existing.payload_hash !== hash) {
         // ตารางเป็น append-only → ห้ามเขียนทับ แค่บันทึกความผิดปกติไว้ให้ผู้ดูแลตรวจ
         await this.audit(empId, 'count.submission_payload_mismatch', {
           code: SubmissionCode.PAYLOAD_MISMATCH,

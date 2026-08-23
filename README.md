@@ -13,7 +13,7 @@ ERP (`db_TCL` / SQL Server 2019) เป็นแหล่ง **อ่านอ�
 | 2 | Boot probe — ถามสิทธิ์จาก metadata ถ้าเขียนได้ = ปฏิเสธ start | ✅ `MssqlDriver.verifyReadOnly()` · **ไม่เขียนอะไรลง ERP เลย** |
 | 3 | Statement guard — รับเฉพาะ `SELECT`/`WITH` | ✅ `assertReadOnlySql()` · **เทสต์ 24 เคสผ่าน** |
 | 4 | Interface ไม่มี method เขียน + compile-time guard | ✅ เพิ่ม method เขียน = **build พังทันที** (ทดสอบแล้ว) |
-| 5 | Read-only connection option | ✅ |
+| 5 | Read-only connection option (`readOnlyIntent`) | ✅ ใส่จริงแล้ว (มีผลเมื่อ ERP อยู่หลัง AG listener) |
 
 ผลการนับและส่วนต่างเก็บใน PostgreSQL ของระบบนี้เท่านั้น
 
@@ -27,7 +27,7 @@ ERP (`db_TCL` / SQL Server 2019) เป็นแหล่ง **อ่านอ�
 | ออกแบบสถาปัตยกรรม | ✅ เสร็จ ผ่านการตรวจเชิงปฏิปักษ์ 3 มุมมอง |
 | ทดสอบเชื่อมต่อ ERP จริง | ✅ เชื่อมได้ สำรวจข้อมูลครบ (อ่านอย่างเดียว) |
 | **UI (Flutter) — 8 หน้าจอ** | ✅ `flutter analyze` สะอาด · `flutter test` **59/59 ผ่าน** |
-| **Backend (NestJS) — โครงครบ** | ✅ `tsc` สะอาด · boot ได้จริง · เทสต์ **235/235 ผ่าน** (129 unit + 106 integration) · CI รันทุก push |
+| **Backend (NestJS) — โครงครบ** | ✅ `tsc` สะอาด · boot ได้จริง · เทสต์ **259/259 ผ่าน** · CI รันทุก push |
 | **ระบบผู้ใช้/login (ของเราเอง ไม่ดึงจาก ERP)** | ✅ **ใช้งานได้จริง** — `test/auth-integration.spec.ts` **36/36 ผ่าน** กับ Postgres จริง |
 | ต่อ UI เข้ากับ backend (auth + members) | ✅ ตั้ง `API_BASE_URL` = ใช้ backend · ไม่ตั้ง = fixture สำหรับดู UI |
 | **โมดูล Catalog / Count / Sync** | ✅ **ใช้งานได้จริง** — `test/count-cycle.spec.ts` **41/41 ผ่าน** กับ Postgres จริง |

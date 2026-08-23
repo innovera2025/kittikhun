@@ -301,6 +301,65 @@ describeWithDb('items_cache — ทางเข้าข้อมูลสิน
     });
   });
 
+  // ── scan events (telemetry ที่ห้ามหายเงียบ) ──────────────────────────
+
+  describe('⭐ scan-events — เครื่องที่ยังไม่เคย login ต้องไม่ทำให้ทั้ง batch หาย', () => {
+    const scan = (barcode: string, sku: string | null = null) => ({
+      barcode,
+      sku,
+      scannedAt: new Date().toISOString(),
+    });
+
+    beforeEach(async () => {
+      await db.query(
+        `INSERT INTO users (emp_id, name, pin_hash, role, warehouse_code, must_change_pin)
+         VALUES ('52104', 'พนักงาน', $1, 'staff', $2, false)`,
+        ['$argon2id$v=19$m=19456,t=2,p=1$ปลอม$ปลอม', WH],
+      );
+    });
+
+    it('🔴 deviceId ที่ยังไม่มีแถวใน devices → ต้องบันทึกได้ ไม่ใช่คืน 0', async () => {
+      const n = await catalog.recordScanEvents(
+        [scan('8850001'), scan('8850002')],
+        '52104',
+        'device-ที่ไม่เคย-login',
+      );
+      expect(n).toBe(2);
+
+      const rows = await db.one<{ n: number }>(
+        `SELECT count(*)::int AS n FROM scan_events WHERE device_id = 'device-ที่ไม่เคย-login'`,
+      );
+      expect(rows?.n).toBe(2);
+    });
+
+    it('สร้างแถว devices ให้อัตโนมัติตามสัญญาของ schema', async () => {
+      await catalog.recordScanEvents([scan('8850001')], '52104', 'dev-new');
+      const row = await db.one<{ last_emp_id: string; last_seen_at: Date }>(
+        `SELECT last_emp_id, last_seen_at FROM devices WHERE device_id = 'dev-new'`,
+      );
+      expect(row?.last_emp_id).toBe('52104');
+      expect(row?.last_seen_at).not.toBeNull();
+    });
+
+    it('เครื่องเดิมส่งซ้ำ → อัปเดต last_seen_at ไม่สร้างแถวซ้ำ', async () => {
+      await catalog.recordScanEvents([scan('8850001')], '52104', 'dev-x');
+      await catalog.recordScanEvents([scan('8850002')], '52104', 'dev-x');
+      const row = await db.one<{ n: number }>(
+        `SELECT count(*)::int AS n FROM devices WHERE device_id = 'dev-x'`,
+      );
+      expect(row?.n).toBe(1);
+    });
+
+    it('บาร์โค้ดที่ไม่รู้จัก (sku = null) ยังต้องบันทึกไว้ให้ ops เห็น', async () => {
+      const n = await catalog.recordScanEvents([scan('ไม่รู้จัก', null)], '52104', 'dev-y');
+      expect(n).toBe(1);
+    });
+
+    it('ลิสต์ว่าง → คืน 0 ไม่ throw', async () => {
+      await expect(catalog.recordScanEvents([], '52104', 'dev-z')).resolves.toBe(0);
+    });
+  });
+
   // ── ค้นหา / บาร์โค้ด ─────────────────────────────────────────────────
 
   describe('ค้นหาและบาร์โค้ด (พนักงานใช้ทุกวัน)', () => {

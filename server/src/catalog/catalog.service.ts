@@ -389,14 +389,30 @@ export class CatalogService {
     if (valid.length === 0) return 0;
 
     try {
-      const result = await this.db.query(
-        `INSERT INTO scan_events (emp_id, device_id, barcode, sku, scanned_at)
-         SELECT $2, $3, s.barcode, s.sku, s.scanned_at
-           FROM jsonb_to_recordset($1::jsonb)
-             AS s(barcode text, sku text, scanned_at timestamptz)`,
-        [JSON.stringify(valid), empId, deviceId],
-      );
-      return result.rowCount ?? 0;
+      return await this.db.transaction(async (client) => {
+        // ⚠️ ต้อง upsert แถว device ก่อนเสมอ ตามสัญญาของ schema ที่ว่า "ทุกเส้นทางที่
+        //    รับ device_id ต้อง upsert devices"
+        //    เดิมไม่ทำ → เครื่องที่ยังไม่เคย login ผ่าน API ตัวนี้ (ลงแอปใหม่แล้วสแกน
+        //    ก่อน login หรือ deviceId คนละตัวกับตอน login) จะชน FK ทั้ง batch
+        //    แล้วถูกกลืนเป็น {recorded:0} + HTTP 200 → แอปคิดว่าส่งสำเร็จ ลบคิวทิ้ง
+        //    ประวัติการสแกนของเครื่องนั้นหายถาวรและเกิดซ้ำทุกครั้ง
+        await client.query(
+          `INSERT INTO devices (device_id, last_emp_id, last_seen_at)
+           VALUES ($1, $2, now())
+           ON CONFLICT (device_id) DO UPDATE
+              SET last_emp_id = EXCLUDED.last_emp_id, last_seen_at = now()`,
+          [deviceId, empId],
+        );
+
+        const result = await client.query(
+          `INSERT INTO scan_events (emp_id, device_id, barcode, sku, scanned_at)
+           SELECT $2, $3, s.barcode, s.sku, s.scanned_at
+             FROM jsonb_to_recordset($1::jsonb)
+               AS s(barcode text, sku text, scanned_at timestamptz)`,
+          [JSON.stringify(valid), empId, deviceId],
+        );
+        return result.rowCount ?? 0;
+      });
     } catch (err) {
       const code = (err as { code?: string }).code;
       if (code === '23503') {

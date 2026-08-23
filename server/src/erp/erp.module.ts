@@ -1,4 +1,4 @@
-import { Global, Logger, Module, OnModuleInit } from '@nestjs/common';
+import { Global, Inject, Logger, Module, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 import { ERP_ADAPTER, ErpAdapter } from './erp-adapter';
@@ -39,18 +39,69 @@ import type { AppConfig } from '../config/env.config';
   ],
   exports: [ERP_ADAPTER],
 })
-export class ErpModule implements OnModuleInit {
+export class ErpModule implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(ErpModule.name);
 
-  constructor(private readonly cfg: ConfigService<AppConfig, true>) {}
+  constructor(
+    private readonly cfg: ConfigService<AppConfig, true>,
+    @Inject(ERP_ADAPTER) private readonly erp: ErpAdapter,
+  ) {}
 
   /**
-   * ตอน start:
-   * - ชั้นที่ 2: driver ที่เชื่อม DB จริงต้องพิสูจน์ว่าเขียนไม่ได้ (ทำใน driver.init())
-   * - connectivity probe: **ไม่ block การ start** — ERP ล่มต้องไม่ทำให้ระบบล่ม
+   * ตอน start — ต้องเรียก `driver.init()` จริง ไม่ใช่แค่ log
+   *
+   * ⚠️ เคยพลาดตรงนี้: เมธอดนี้ log อย่างเดียวไม่เคยเรียก init() เลย ทำให้
+   *    ชั้นที่ 2 ของกฎเหล็ก (พิสูจน์ว่าเขียน ERP ไม่ได้) ไม่ทำงานตอน boot
+   *    ไปทำงาน lazy ตอน query แรกแทน และ verifyThaiText() ไม่เคยรัน
+   *    → charset ผิดจะทำให้ชื่อสินค้าไทยเพี้ยนไหลเข้า items_cache โดยไม่มีใครรู้
+   *
+   * แยกความล้มเหลว 2 ชนิดออกจากกันอย่างชัดเจน:
+   *   - **เขียน ERP ได้ / charset เพี้ยน** → `ปฏิเสธการ start` (ข้อมูลผิดแย่กว่าระบบไม่ขึ้น)
+   *   - **ต่อ ERP ไม่ได้** → start ต่อได้แบบ degraded (ERP ล่มต้องไม่ทำให้ทั้งระบบล่ม
+   *     แอปยังต้องอ่าน items_cache และรับผลนับเข้าคิวได้)
    */
   async onModuleInit(): Promise<void> {
     const driver = this.cfg.get('ERP_DRIVER', { infer: true });
     this.logger.log(`ERP driver: ${driver} (อ่านอย่างเดียว)`);
+
+    try {
+      await this.erp.init();
+      this.logger.log('ตรวจ ERP ตอน boot ผ่าน: อ่านอย่างเดียวจริง และอ่านภาษาไทยได้ถูกต้อง');
+    } catch (err) {
+      if (isStartupBlocker(err)) {
+        // ปล่อยให้ throw ออกไป — Nest จะหยุด boot ตามที่กฎเหล็กกำหนด
+        throw err;
+      }
+      this.logger.error(
+        `ต่อ ERP ตอน boot ไม่ได้ — ระบบจะ start ต่อแบบ degraded ` +
+          `(อ่าน items_cache ได้ · รับผลนับได้ · แต่ sync จาก ERP จะล้มจนกว่าจะต่อได้): ` +
+          `${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
+
+  /** ปิด connection pool ของ ERP ตอน shutdown (main.ts เปิด enableShutdownHooks ไว้แล้ว) */
+  async onModuleDestroy(): Promise<void> {
+    await this.erp.close().catch((err: unknown) => {
+      this.logger.warn(
+        `ปิด connection ของ ERP ไม่สำเร็จ: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
+  }
+}
+
+/**
+ * ความล้มเหลวชนิดไหนที่ต้อง **ห้าม start**
+ *
+ * ต่อไม่ได้ = ยอมให้ผ่าน (ERP ล่มชั่วคราวเป็นเรื่องปกติของคลัง)
+ * แต่ "เขียนได้" / "คอนฟิกผิด" / "ภาษาไทยเพี้ยน" = ต้องหยุด เพราะปล่อยไปแล้วข้อมูลเสียหาย
+ */
+function isStartupBlocker(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  return (
+    code === 'ERP_WRITE_ALLOWED' ||
+    code === 'ERP_PROBE_INCONCLUSIVE' ||
+    code === 'ERP_THAI_DECODE' ||
+    code === 'ERP_CONFIG'
+  );
 }

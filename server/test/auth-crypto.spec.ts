@@ -67,6 +67,32 @@ describe('AuthService — ชั้นเข้ารหัส', () => {
     });
   });
 
+  describe('⭐ อายุ access token ที่บอกแอป ต้องตรงกับอายุจริงของ token', () => {
+    /** ค่าที่ service เก็บไว้ใช้ทั้ง sign และตอบแอป — ต้องเป็น "วินาที" เสมอ */
+    const ttlSecOf = (ttl: string): number =>
+      (makeService({ JWT_ACCESS_TTL: ttl }) as unknown as { accessTtlSec: number }).accessTtlSec;
+
+    it.each<[string, number]>([
+      ['15m', 900],
+      ['1h', 3600],
+      ['3600', 3600],
+      ['30d', 2_592_000],
+    ])('JWT_ACCESS_TTL=%s → %d วินาที', (ttl, expected) => {
+      expect(ttlSecOf(ttl)).toBe(expected);
+    });
+
+    it('🔴 "3600" ต้องได้ 1 ชั่วโมง ไม่ใช่ 3.6 วินาที', () => {
+      // เดิมส่งสตริง '3600' เข้า jsonwebtoken → ไลบรารี ms อ่านเป็นมิลลิวินาที
+      // token หมดอายุใน 3.6 วิ ทั้งที่บอกแอปว่า expiresIn = 3600
+      expect(ttlSecOf('3600')).toBe(3600);
+    });
+
+    it('ค่าที่ตั้งเป็นสัปดาห์ไม่ทำให้ constructor ระเบิดตอน boot', () => {
+      expect(() => makeService({ JWT_REFRESH_TTL: '2w' })).not.toThrow();
+      expect(() => makeService({ JWT_ACCESS_TTL: '1y' })).not.toThrow();
+    });
+  });
+
   describe('sha256 — เก็บเฉพาะ digest ของ refresh token ไม่เก็บตัว token', () => {
     it('ให้ค่าเดิมเสมอสำหรับ input เดิม และยาว 64 hex', () => {
       const a = AuthService.sha256('token-abc');
@@ -126,9 +152,21 @@ describe('AuthService — ชั้นเข้ารหัส', () => {
       expect(AuthService.parseDuration('90')).toBe(90_000);
     });
 
+    it('⭐ รองรับทุกหน่วยที่ env ยอมรับ — ตั้ง 2w แล้วต้องไม่ทำให้ boot พัง', () => {
+      expect(AuthService.parseDuration('2w')).toBe(2 * 604_800_000);
+      expect(AuthService.parseDuration('1y')).toBe(31_536_000_000);
+      expect(AuthService.parseDuration('500ms')).toBe(500);
+    });
+
+    it('ไม่สนตัวพิมพ์เล็กใหญ่ (env ใช้ regex แบบ case-insensitive)', () => {
+      expect(AuthService.parseDuration('30D')).toBe(AuthService.parseDuration('30d'));
+      expect(AuthService.parseDuration('15M')).toBe(AuthService.parseDuration('15m'));
+    });
+
     it('รูปแบบที่อ่านไม่ออก → throw พร้อมบอกค่าที่ผิด (fail fast ตอน boot ดีกว่าเงียบ)', () => {
       expect(() => AuthService.parseDuration('30วัน')).toThrow(/30วัน/);
       expect(() => AuthService.parseDuration('abc')).toThrow();
+      expect(() => AuthService.parseDuration('')).toThrow();
     });
 
     it('refresh (30d) ต้องยาวกว่า access (15m) อย่างมีนัย — กันสลับค่ากันใน config', () => {

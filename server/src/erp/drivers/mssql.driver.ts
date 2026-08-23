@@ -709,27 +709,11 @@ export class MssqlDriver extends BaseErpDriver {
     logger.log(`ดึง item master จาก ERP สำเร็จ: ${mapped} รายการ (ข้าม ${skipped} แถว)`);
   }
 
-  /**
-   * db_TCL **ไม่มีตารางยอดคงเหลือสำเร็จรูป** (findings §5: BalStock ตรง 0/56,
-   * tbl_STOCKSTD เป็นรหัสคนละระบบ) → ไม่มี snapshot สำเร็จรูปให้ดึง
-   *
-   * ตั้งแต่ 22 ส.ค. 2569 ฝ่าย ERP ส่งสูตรคำนวณยอดจาก ledger มาให้แล้ว
-   * (`SUM(InOut × MainQuantity)` จาก InventoryFlowHdr/Dtl) — สูตรนั้นถูกรวมเข้ากับ
-   * **query item master** ที่ `sql/erp/inventory-items-with-balance.sql` และไหลเข้าระบบ
-   * ทาง `fetchItems()` → `CanonicalItem.onHand` แทน จึงไม่ต้องมีเส้นทาง snapshot แยก
-   * (ดึงครั้งเดียวได้ทั้ง master + ยอด = ไม่มีช่วงที่สองแหล่งไม่ตรงกัน)
-   *
-   * ตั้งใจให้ throw ไม่ใช่คืน list ว่าง: list ว่างจะถูกตีความว่า "ของหมดทุกรายการ"
-   * แล้วไป tombstone/ล้างยอดใน items_cache ได้ — รอบ sync ที่ล้มเหลวปลอดภัยกว่าข้อมูลผิด
+  /*
+   * ⚠️ เคยมี fetchStockSnapshot() ตรงนี้ที่ throw อย่างเดียวและไม่มีใครเรียก
+   *    ยอดคงเหลือมาพร้อม item master แล้ว (sql/erp/inventory-items-with-balance.sql)
+   *    ไหลเข้าระบบทาง fetchItems() → CanonicalItem.onHand ไม่ต้องมีเส้นทางแยก
    */
-  fetchStockSnapshot(warehouseCode: string): AsyncIterable<never[]> {
-    throw new MssqlDriverError(
-      'ERP_CONFIG',
-      `ERP db_TCL ไม่มีแหล่งยอดคงเหลือสำเร็จรูปสำหรับคลัง ${warehouseCode} — ` +
-        'ยอดคงเหลือมาพร้อม item master แล้ว ตั้ง ERP_SQL_ITEMS_SQL_FILE ให้ชี้ไปที่ ' +
-        'sql/erp/inventory-items-with-balance.sql (สูตรจากฝ่าย ERP)',
-    );
-  }
 
   /*
    * ⚠️ เคยมี fetchCountSessions() / fetchCountSession() อยู่ตรงนี้ — ดึง "รอบนับที่ทำใน ERP
@@ -773,6 +757,12 @@ export class MssqlDriver extends BaseErpDriver {
         trustServerCertificate: cfg.trustServerCert,
         // อ่านค่า datetime เป็น UTC ตรงตัว เพื่อให้วันที่ ISO ไม่เลื่อนตาม timezone ของ container
         useUTC: true,
+        // ชั้นที่ 5 ของกฎเหล็ก — บอก SQL Server ว่า connection นี้ตั้งใจอ่านอย่างเดียว
+        // (เอกสารระบุชั้นนี้ไว้ตั้งแต่แรกแต่ไม่เคยถูกใส่จริง)
+        // ⚠️ มีผลบังคับจริงเฉพาะเมื่อ ERP อยู่หลัง Availability Group listener ที่ตั้ง
+        //    read-only routing ไว้ — ที่อื่น SQL Server จะเพิกเฉย จึงเป็นชั้นเสริม
+        //    ไม่ใช่ชั้นที่พึ่งพาได้เดี่ยว ๆ (ชั้น 1-4 ยังเป็นตัวบังคับหลัก)
+        readOnlyIntent: true,
       },
       pool: { max: cfg.poolMax, min: 0, idleTimeoutMillis: 30_000 },
     };

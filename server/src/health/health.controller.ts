@@ -1,4 +1,4 @@
-import { Controller, Get, Inject } from '@nestjs/common';
+import { Controller, Get, HttpStatus, Inject, Res } from '@nestjs/common';
 
 import { Public } from '../auth/auth.guards';
 import { PostgresService } from '../db/postgres.service';
@@ -22,10 +22,18 @@ export class HealthController {
   /**
    * liveness: event loop ตอบได้ + Postgres ของเราตอบได้
    * (Postgres เป็น dependency จริงของระบบ ต่างจาก ERP ที่ล่มได้โดยระบบยังทำงาน)
+   *
+   * ⚠️ ต้องตอบ **503** เมื่อ DB ล่ม ไม่ใช่ 200 พร้อม `{ok:false}`
+   *    healthcheck ใน docker-compose ตรวจแค่ status code (`r.ok`) → เดิมที่ตอบ 200
+   *    ทำให้ container โชว์ healthy ทั้งที่ทุก endpoint ที่ต้อง login ใช้ไม่ได้
+   *    restart policy และ probe ของ orchestrator เลยไม่ทำงานในจังหวะที่ต้องการที่สุด
    */
   @Get()
-  async liveness(): Promise<{ ok: boolean; uptimeSec: number; db: boolean }> {
+  async liveness(
+    @Res({ passthrough: true }) reply: { status: (code: number) => unknown },
+  ): Promise<{ ok: boolean; uptimeSec: number; db: boolean }> {
     const db = await this.db.isReachable();
+    if (!db) reply.status(HttpStatus.SERVICE_UNAVAILABLE);
     return { ok: db, uptimeSec: Math.floor(process.uptime()), db };
   }
 

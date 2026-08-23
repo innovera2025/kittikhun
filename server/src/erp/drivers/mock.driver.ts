@@ -179,6 +179,15 @@ export class MockDriver implements ErpAdapter {
     yield ITEM_SEEDS.map(toCanonicalItem);
   }
 
+  /** mock ไม่ต้องต่ออะไร — แต่ต้องมีตาม contract เพื่อให้ ErpModule เรียกได้เหมือนกันทุก driver */
+  init(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  close(): Promise<void> {
+    return Promise.resolve();
+  }
+
   /** mock พร้อมใช้เสมอ — ไม่มีอะไรให้ล่ม */
   healthCheck(): Promise<ErpHealth> {
     return Promise.resolve({ ok: true, driver: 'mock' });
