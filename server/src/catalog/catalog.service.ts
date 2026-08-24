@@ -1,17 +1,22 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { PoolClient, QueryResult, QueryResultRow } from 'pg';
 import { z } from 'zod';
 
 import type { AppConfig } from '../config/env.config';
 import { PostgresService } from '../db/postgres.service';
-import type { CanonicalItem } from '../erp/erp-adapter';
+import { ERP_ADAPTER, type CanonicalItem, type ErpAdapter } from '../erp/erp-adapter';
 
 /**
  * CatalogService — item master ฝั่งเรา (`items_cache` + `item_barcodes`)
  *
- * 🚫 กฎเหล็ก: ไฟล์นี้เขียน **Postgres ของเราเท่านั้น** ไม่มี statement ใดวิ่งไป ERP
- *    ทางเข้าข้อมูล ERP คือ SyncService ที่เรียก `upsertItems()` / `tombstoneMissing()` ให้
+ * 🚫 กฎเหล็ก: ไฟล์นี้ **เขียน** Postgres ของเราเท่านั้น ไม่มี statement ใดเขียนไป ERP
+ *    ทางเข้าข้อมูล ERP แบบเป็นรอบคือ SyncService (`upsertItems()` / `tombstoneMissing()`)
+ *
+ * ⚠️ ตั้งแต่ 24 ส.ค. 2569 หน้าค้นหาและสแกนบาร์โค้ด **ยิงยอดสดไป ERP ทุกครั้ง**
+ *    (ผู้ใช้ตัดสินใจเอง) — ผ่าน `ErpAdapter.fetchItemsBySku()` ซึ่งเป็น SELECT ล้วน
+ *    ERP ล่ม/ช้าเกิน LIVE_ON_HAND_TIMEOUT_MS → ใช้ยอดจากรอบ sync ล่าสุดแทน
+ *    แล้วบอกผู้ใช้ผ่าน `onHandSource` / `onHandAsOf` ห้ามเงียบ
  *
  * หน้าที่ 2 ฝั่ง:
  *   • ฝั่งมือถือ (อ่าน): `listSince()` delta feed ของ replica · `findByBarcode()` · `search()`
@@ -48,6 +53,15 @@ export interface ItemDto {
   rowVersion: string;
   /** ISO-8601 (timestamptz) */
   updatedAt: string;
+  /**
+   * ที่มาของ `onHand`
+   *   `erp`   = ยิงสดสำเร็จ ยอด ณ วินาทีที่ขอ
+   *   `cache` = ERP ไม่ตอบ/ไม่ได้ยิง → ยอดจากรอบ sync ล่าสุด
+   * มือถือต้องแสดงให้ต่างกัน ห้ามทำให้ยอดเก่าดูเหมือนยอดสด
+   */
+  onHandSource?: 'erp' | 'cache';
+  /** ISO-8601 เวลาที่ `onHand` เป็นจริง — สด = เวลาที่ยิง · cache = เวลาที่ซิงก์ */
+  onHandAsOf?: string;
 }
 
 /** ผลของ delta feed 1 หน้า — tombstone มาคู่กันเสมอ ไม่งั้น replica เก็บของที่ ERP ลบไว้ตลอดกาล */
@@ -159,6 +173,12 @@ const MAX_WAREHOUSE_LENGTH = 32;
 const BARCODE_SOURCE_ERP = 'erp_unit';
 const BARCODE_SOURCE_LABEL = 'item_code_label';
 
+/**
+ * เพดานเวลาการยิงยอดสดต่อหนึ่งคำขอจากมือถือ
+ * เกินกว่านี้พนักงานจะรู้สึกว่าแอปค้าง → ยอมใช้ยอดจากรอบ sync ล่าสุดพร้อมป้ายเวลาแทน
+ */
+const LIVE_ON_HAND_TIMEOUT_MS = 4000;
+
 // ---------------------------------------------------------------------------
 // แถวจาก Postgres (ใช้ type alias เพื่อให้เข้ากับ constraint QueryResultRow ของ pg)
 // ---------------------------------------------------------------------------
@@ -226,8 +246,79 @@ export class CatalogService {
   constructor(
     private readonly db: PostgresService,
     cfg: ConfigService<AppConfig, true>,
+    @Inject(ERP_ADAPTER) private readonly erp: ErpAdapter,
   ) {
     this.defaultWarehouseCode = cfg.get('WAREHOUSE_CODE', { infer: true }).trim();
+    // งบเวลาของการยิงสด: สั้นกว่า ERP_TIMEOUT_MS เสมอ เพราะนี่คือคำขอที่คนกำลังรอหน้าจอ
+    // (ERP_TIMEOUT_MS เป็นงบของรอบ sync เบื้องหลัง ยาวได้)
+    this.liveTimeoutMs = Math.min(
+      cfg.get('ERP_TIMEOUT_MS', { infer: true }),
+      LIVE_ON_HAND_TIMEOUT_MS,
+    );
+  }
+
+  private readonly liveTimeoutMs: number;
+
+  /**
+   * ทับ `onHand` ของทุกแถวด้วยยอดสดจาก ERP
+   *
+   * ERP ล่ม ช้า หรือไม่มีรหัสนั้นในผลลัพธ์ → คงยอดจาก `items_cache` ไว้ตามเดิม
+   * (ยังเป็น `onHandSource: 'cache'` ที่ `toDto()` ตั้งไว้แล้ว)
+   *
+   * ⚠️ ห้ามโยน error ออกจาก method นี้ — หน้าค้นหาต้องใช้งานได้แม้ ERP ล่ม
+   */
+  private async withLiveOnHand(items: ItemDto[]): Promise<ItemDto[]> {
+    if (items.length === 0) return items;
+
+    const skus = items.map((item) => item.sku);
+    let live: readonly CanonicalItem[];
+    try {
+      live = await CatalogService.withTimeout(
+        this.erp.fetchItemsBySku(skus),
+        this.liveTimeoutMs,
+      );
+    } catch (err) {
+      // ตั้งใจ warn ไม่ error: ยอดจาก cache ยังใช้ได้ และผู้ใช้เห็นป้ายเวลาอยู่แล้ว
+      this.logger.warn(
+        `ยิงยอดสด ${skus.length} รหัสไม่สำเร็จ — ใช้ยอดจากรอบ sync ล่าสุดแทน: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return items;
+    }
+
+    const asOf = new Date().toISOString();
+    const bySku = new Map(live.map((item) => [item.sku, item]));
+    return items.map((item) => {
+      const hit = bySku.get(item.sku);
+      if (hit === undefined) return item; // ERP ไม่ส่งรหัสนี้กลับมา → คงยอด cache
+
+      const next: ItemDto = { ...item, onHandSource: 'erp', onHandAsOf: asOf };
+      // ⚠️ null ≠ 0 : ERP ไม่มี movement = ไม่รู้ยอด ต้องเป็น undefined ไม่ใช่ 0
+      if (typeof hit.onHand === 'number' && Number.isFinite(hit.onHand)) next.onHand = hit.onHand;
+      else delete next.onHand;
+      return next;
+    });
+  }
+
+  /** ยกเลิกการรอเมื่อเกินงบเวลา — ตัว driver อาจมี timeout ของตัวเองที่ยาวกว่า */
+  private static withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error(`ERP ไม่ตอบภายใน ${ms}ms`)),
+        ms,
+      );
+      work.then(
+        (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (err: unknown) => {
+          clearTimeout(timer);
+          reject(err instanceof Error ? err : new Error(String(err)));
+        },
+      );
+    });
   }
 
   // ── 1. delta feed สำหรับ replica บนเครื่อง ──────────────────────────────
@@ -317,7 +408,9 @@ export class CatalogService {
       [needle, wh],
     );
 
-    return row ? CatalogService.toDto(row) : null;
+    if (row === null) return null;
+    const [item] = await this.withLiveOnHand([CatalogService.toDto(row)]);
+    return item ?? null;
   }
 
   // ── 3. ค้นหาด้วยข้อความ ─────────────────────────────────────────────────
@@ -354,7 +447,8 @@ export class CatalogService {
     );
 
     const rows: ItemRow[] = result.rows;
-    return { items: rows.map(CatalogService.toDto), total, truncated: total > take };
+    const items = await this.withLiveOnHand(rows.map(CatalogService.toDto));
+    return { items, total, truncated: total > take };
   }
 
   // ── 4. telemetry การสแกน ────────────────────────────────────────────────
@@ -865,6 +959,10 @@ export class CatalogService {
     const reserved = CatalogService.parseNumeric(row.reserved);
     const rop = CatalogService.parseNumeric(row.rop);
     if (onHand !== undefined) dto.onHand = onHand;
+    // ค่าเริ่มต้นคือ 'cache' เสมอ — เส้นทางที่ยิงสดจะทับให้เองใน withLiveOnHand()
+    // updated_at = เวลาที่รอบ sync เขียนแถวนี้ล่าสุด คือ "ยอด ณ เวลานั้น"
+    dto.onHandSource = 'cache';
+    dto.onHandAsOf = dto.updatedAt;
     if (reserved !== undefined) dto.reserved = reserved;
     if (rop !== undefined) dto.rop = rop;
     return dto;

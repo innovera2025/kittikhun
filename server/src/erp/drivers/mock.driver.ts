@@ -175,6 +175,13 @@ export class MockDriver implements ErpAdapter {
   }
 
   /** ชุดเล็ก 5 รายการ → ส่งเป็น batch เดียว (ไม่มี pagination ให้จำลอง) */
+  /** ยอดสดของ mock = ข้อมูล fixture ชุดเดียวกัน กรองตามรหัสที่ขอ */
+  async fetchItemsBySku(skus: readonly string[]): Promise<CanonicalItem[]> {
+    const wanted = new Set(skus.map((s) => s.trim()).filter((s) => s.length > 0));
+    if (wanted.size === 0) return [];
+    return ITEM_SEEDS.map(toCanonicalItem).filter((item) => wanted.has(item.sku));
+  }
+
   async *fetchItems(): AsyncGenerator<CanonicalItem[]> {
     yield ITEM_SEEDS.map(toCanonicalItem);
   }

@@ -36,6 +36,13 @@ const DRIVER_NAME = 'sql';
 
 /** ขนาด batch ของ AsyncIterable ตามสัญญา adapter */
 const ITEM_BATCH_SIZE = 500;
+
+/**
+ * งบตัวอักษรของ `@skus` ต่อหนึ่ง query — `runQuery()` ผูกเป็น NVARCHAR(4000)
+ * เผื่อไว้ให้ต่ำกว่าจริงเพื่อกันรหัสยาวผิดคาดทำให้สตริงถูกตัดเงียบ ๆ
+ * เกินงบ = แบ่งยิงหลายรอบแล้วรวมผล
+ */
+const LIVE_SKU_CHARS_PER_QUERY = 3500;
 /** กันลูป pagination วิ่งไม่จบถ้า ERP ตอบแปลก */
 const MAX_ITEM_PAGES = 2000;
 
@@ -207,6 +214,27 @@ function isConnectionError(err: unknown): boolean {
 }
 
 
+
+/**
+ * แบ่งรายการรหัสสินค้าเป็นกลุ่มที่ต่อเป็นสตริงคั่นคอมมาแล้วไม่เกินงบตัวอักษร
+ * (พารามิเตอร์เป็น NVARCHAR ความยาวจำกัด — เกินแล้วถูกตัดเงียบ จะได้ยอดขาดโดยไม่มีใครรู้)
+ * รหัสเดี่ยวที่ยาวเกินงบยังถูกส่งไปในกลุ่มของตัวเอง เพื่อไม่ให้หายไปเฉย ๆ
+ */
+function* chunkByChars(skus: readonly string[], maxChars: number): Generator<string[]> {
+  let group: string[] = [];
+  let used = 0;
+  for (const sku of skus) {
+    const cost = sku.length + (group.length > 0 ? 1 : 0);
+    if (group.length > 0 && used + cost > maxChars) {
+      yield group;
+      group = [];
+      used = 0;
+    }
+    group.push(sku);
+    used += group.length > 1 ? sku.length + 1 : sku.length;
+  }
+  if (group.length > 0) yield group;
+}
 
 function* chunk<T>(items: readonly T[], size: number): Generator<T[]> {
   for (let i = 0; i < items.length; i += size) yield items.slice(i, i + size);
@@ -457,7 +485,7 @@ FROM ${DEFAULT_ITEMS_TABLE}
 WHERE ItemName IS NOT NULL AND LTRIM(RTRIM(ItemName)) <> ''
 ORDER BY Roworder DESC`;
 
-type SqlParams = Readonly<Record<string, string | number | Date>>;
+type SqlParams = Readonly<Record<string, string | number | Date | null>>;
 
 // ---------------------------------------------------------------------------
 // driver
@@ -726,6 +754,48 @@ export class MssqlDriver extends BaseErpDriver {
    *    รอบนับทั้งหมดเปิดจากแอปเราเอง แล้ว freeze ยอดจาก items_cache
    */
 
+  /**
+   * ยอดสดรายครั้ง — ยิงตรงไปหา ERP ไม่ผ่าน `items_cache`
+   *
+   * ใช้ script เดียวกับรอบ sync แต่ผูก `@skus` เพื่อจำกัดเฉพาะรหัสที่ขอ
+   * (ไม่งั้นการเปิดหน้าค้นหาหนึ่งครั้งจะกวาด ledger ทั้งคลัง)
+   *
+   * ผู้เรียกต้องดักและ fallback เอง — ที่นี่โยน error ตรง ๆ เมื่อ ERP ล่ม/ช้า
+   */
+  async fetchItemsBySku(skus: readonly string[]): Promise<CanonicalItem[]> {
+    const wanted = [...new Set(skus.map((s) => s.trim()).filter((s) => s.length > 0))];
+    if (wanted.length === 0) return [];
+
+    const path = this.sqlCfg.itemsSqlFile;
+    if (!path) {
+      // เส้นทาง view/table ไม่มีคอลัมน์ยอดคงเหลือ (itemsPageSql ไม่ SELECT on_hand)
+      // → ยิงสดไม่ได้จริง ๆ บอกให้ชัดดีกว่าคืนค่าที่ไม่มียอด
+      throw new MssqlDriverError(
+        'ERP_CONFIG',
+        'ยิงยอดสดต้องตั้ง ERP_SQL_ITEMS_SQL_FILE — เส้นทาง view/table ไม่มีคอลัมน์ยอดคงเหลือ',
+      );
+    }
+
+    const text = this.loadItemsSqlFile(path);
+    const asOf = new Date();
+    const items: CanonicalItem[] = [];
+
+    for (const group of chunkByChars(wanted, LIVE_SKU_CHARS_PER_QUERY)) {
+      const rows = await this.runQuery('items-live', text, {
+        warehouse: this.sqlCfg.warehouseCode,
+        asOf,
+        skus: group.join(','),
+      });
+      for (const raw of this.dedupeItemRows(rows)) {
+        const result = this.toCanonicalItem(raw);
+        if (result.ok) items.push(result.item);
+        else logger.warn(`ยอดสด: ข้ามแถวที่ไม่ผ่าน validation — ${result.reason}`);
+      }
+    }
+
+    return items;
+  }
+
   // -------------------------------------------------------------------------
   // ภายใน
   // -------------------------------------------------------------------------
@@ -877,6 +947,8 @@ export class MssqlDriver extends BaseErpDriver {
     const rows = await this.runQuery('items-script', text, {
       warehouse: this.sqlCfg.warehouseCode,
       asOf: new Date(),
+      // NULL = ทั้งคลัง · script อ้าง @skus เสมอ จึงต้องผูกค่าให้ทุกครั้ง
+      skus: null,
     });
     for (const batch of chunk(this.dedupeItemRows(rows), ITEM_BATCH_SIZE)) yield batch;
   }

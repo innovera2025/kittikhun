@@ -1,6 +1,6 @@
 import { CatalogService, TombstoneGuardrailError } from '../src/catalog/catalog.service';
 import type { PostgresService } from '../src/db/postgres.service';
-import type { CanonicalItem } from '../src/erp/erp-adapter';
+import type { CanonicalItem, ErpAdapter } from '../src/erp/erp-adapter';
 import {
   applySchema,
   describeWithDb,
@@ -22,9 +22,38 @@ import {
 
 const WH = 'WH01';
 
+/**
+ * ERP ปลอมสำหรับการยิงยอดสด (หน้าค้นหา/สแกนใช้ `fetchItemsBySku`)
+ * ค่าเริ่มต้นคืน [] = "ERP ไม่มีรหัสนี้" → บริการต้องคงยอดจาก items_cache ไว้
+ */
+type FakeErp = ErpAdapter & { liveRows: CanonicalItem[]; failWith: Error | null; calls: string[][] };
+
+const makeFakeErp = (): FakeErp => {
+  const fake = {
+    liveRows: [] as CanonicalItem[],
+    failWith: null as Error | null,
+    calls: [] as string[][],
+    capabilities: () => ({ delta: false }),
+    init: async () => {},
+    close: async () => {},
+    healthCheck: async () => ({ ok: true, driver: 'fake' }),
+    // eslint-disable-next-line require-yield
+    async *fetchItems(): AsyncGenerator<CanonicalItem[]> {
+      return;
+    },
+    async fetchItemsBySku(skus: readonly string[]): Promise<CanonicalItem[]> {
+      fake.calls.push([...skus]);
+      if (fake.failWith !== null) throw fake.failWith;
+      return fake.liveRows;
+    },
+  };
+  return fake;
+};
+
 describeWithDb('items_cache — ทางเข้าข้อมูลสินค้าจาก ERP', () => {
   let db: PostgresService;
   let catalog: CatalogService;
+  let erp: FakeErp;
 
   beforeAll(async () => {
     db = makeDb();
@@ -37,7 +66,8 @@ describeWithDb('items_cache — ทางเข้าข้อมูลสิน
 
   beforeEach(async () => {
     await truncateAll(db);
-    catalog = new CatalogService(db, testConfigService());
+    erp = makeFakeErp();
+    catalog = new CatalogService(db, testConfigService(), erp);
   });
 
   const item = (sku: string, over: Partial<CanonicalItem> = {}): CanonicalItem => ({
@@ -391,6 +421,74 @@ describeWithDb('items_cache — ทางเข้าข้อมูลสิน
       const skus = await seedMany(100);
       await tombstone(skus.slice(0, 98));
       await expect(catalog.findByBarcode(skus[99], WH)).resolves.toBeNull();
+    });
+  });
+
+  // ── ยอดสดจาก ERP ─────────────────────────────────────────────────────
+
+  describe('⭐ ยอดสดจาก ERP (หน้าค้นหา/สแกนยิงทุกครั้ง)', () => {
+    it('ยิงสดสำเร็จ → ใช้ยอดจาก ERP ไม่ใช่ยอดใน items_cache', async () => {
+      await upsert([item('A-001', { onHand: 10 })]);
+      erp.liveRows = [item('A-001', { onHand: 42 })];
+
+      const r = await catalog.search('A-001', WH, 50);
+      expect(r.items[0].onHand).toBe(42);
+      expect(r.items[0].onHandSource).toBe('erp');
+    });
+
+    it('ยิงสดส่งเฉพาะรหัสที่อยู่ในผลลัพธ์ ไม่กวาดทั้งคลัง', async () => {
+      await upsert([item('A-001'), item('A-002'), item('B-001')]);
+      await catalog.search('A-0', WH, 50);
+      expect(erp.calls).toHaveLength(1);
+      expect([...erp.calls[0]].sort()).toEqual(['A-001', 'A-002']);
+    });
+
+    it('⭐ ERP ล่ม → คงยอดจากรอบ sync ล่าสุด และบอกว่าเป็น cache ไม่ใช่ throw', async () => {
+      await upsert([item('A-001', { onHand: 10 })]);
+      erp.failWith = new Error('ต่อ ERP ไม่ได้');
+
+      const r = await catalog.search('A-001', WH, 50);
+      expect(r.items[0].onHand).toBe(10);
+      expect(r.items[0].onHandSource).toBe('cache');
+      expect(r.items[0].onHandAsOf).toBeDefined();
+    });
+
+    it('ERP ไม่ส่งรหัสนั้นกลับมา → คงยอด cache ของรหัสนั้นไว้', async () => {
+      await upsert([item('A-001', { onHand: 10 }), item('A-002', { onHand: 20 })]);
+      erp.liveRows = [item('A-001', { onHand: 99 })];
+
+      const r = await catalog.search('A-0', WH, 50);
+      const bySku = new Map(r.items.map((i) => [i.sku, i]));
+      expect(bySku.get('A-001')?.onHand).toBe(99);
+      expect(bySku.get('A-001')?.onHandSource).toBe('erp');
+      expect(bySku.get('A-002')?.onHand).toBe(20);
+      expect(bySku.get('A-002')?.onHandSource).toBe('cache');
+    });
+
+    it('⭐ ERP บอกว่าไม่มียอด (null) → onHand ต้องหายไป ไม่ใช่กลายเป็น 0', async () => {
+      await upsert([item('A-001', { onHand: 10 })]);
+      erp.liveRows = [item('A-001', { onHand: undefined })];
+
+      const r = await catalog.search('A-001', WH, 50);
+      expect(r.items[0].onHand).toBeUndefined();
+      expect(r.items[0].onHandSource).toBe('erp');
+    });
+
+    it('สแกนบาร์โค้ดก็ยิงสดเหมือนกัน', async () => {
+      await upsert([item('A-001', { onHand: 1 })]);
+      erp.liveRows = [item('A-001', { onHand: 7 })];
+
+      const found = await catalog.findByBarcode('A-001', WH);
+      expect(found?.onHand).toBe(7);
+      expect(found?.onHandSource).toBe('erp');
+    });
+
+    it('delta feed (ซิงก์ลงมือถือ) ไม่ยิงสด — เป็นสำเนา offline ตามรอบ sync', async () => {
+      await upsert([item('A-001', { onHand: 10 })]);
+      const page = await catalog.listSince(0, 100, WH);
+
+      expect(erp.calls).toHaveLength(0);
+      expect(page.items[0].onHandSource).toBe('cache');
     });
   });
 });

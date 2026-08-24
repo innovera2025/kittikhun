@@ -29,8 +29,13 @@
 
 ## 1. หลักการ
 
-1. **Backend เท่านั้นที่คุยกับ ERP** — มือถือไม่เคยเห็น ERP; ทุกอย่างผ่าน `items_cache` ใน Postgres
+1. **Backend เท่านั้นที่คุยกับ ERP** — มือถือไม่เคยต่อ ERP ตรง ๆ; ทุกคำขอวิ่งผ่าน backend
+   - **ข้อมูลสินค้า (ชื่อ/หน่วย/บาร์โค้ด/ตำแหน่ง)** มาจาก `items_cache` ตามรอบ sync
+   - **ยอดคงเหลือบนหน้าค้นหาและหน้าสแกน** ยิงสดไป ERP ทุกครั้ง (`fetchItemsBySku`) — การตัดสินใจของเจ้าของโปรเจค 24 ส.ค. 2569
+   - **delta feed (`GET /items`)** ยังเป็นสำเนาตามรอบเสมอ เพราะเป็นชุดข้อมูลที่มือถือเก็บไว้ใช้ตอน offline
 2. **ERP ล่ม ≠ ระบบหยุด** — scheduler ล้มเหลว = log + ใช้ cache เดิมต่อ; การนับไม่สะดุด
+   การยิงสดที่ล้มเหลวหรือช้าเกิน 4 วินาที ก็ตกกลับไปใช้ยอดจากรอบ sync ล่าสุดเช่นกัน
+   แล้วบอกผู้ใช้ผ่าน `onHandSource` / `onHandAsOf` (มือถือแสดง "สด" กับ "ณ HH:mm") — **ห้ามเงียบ**
 3. **อ่านอย่างเดียวโดยสมบูรณ์** — ระบบอ่าน item/stock ตามรอบเท่านั้น **ไม่มีการเขียนอะไรกลับ ERP เลย** (การตัดสินใจของเจ้าของโปรเจค 17 ส.ค. 2569): ค่าที่นับได้และส่วนต่างเก็บอยู่ในระบบนี้ ดู §6
 4. **Fail fast เรื่องคอนฟิก, fail soft เรื่องเน็ตเวิร์ก** — `.env` ผิดโครงสร้าง → ไม่ start พร้อมบอกชื่อตัวแปรที่ขาด; ERP ต่อไม่ได้ → start ตามปกติ สถานะ degraded ใน `sync_runs`
 
@@ -108,7 +113,7 @@ dialect อื่น (`pg` / `mysql` / `oracle`) ยังรองรับใ�
 | **Tombstone** | soft-delete SKU ที่หายไป **เฉพาะ**จากรอบ full-reconcile ที่ยืนยันว่าดึงครบ (row count ตรง/ทุกหน้า confirmed) — ห้าม tombstone จาก delta; guardrail: ลบเกิน 5% ของ catalog ในรอบเดียว → abort + alert; cursor ไม่ขยับเมื่อรอบไม่สมบูรณ์ |
 | **Barcode** | 1 SKU : N barcodes (`item_barcodes`), barcode ว่างได้; ชนกัน → นโยบาย deterministic (erp_updated_at ใหม่ชนะ) + เข้า anomalies ให้ผู้ดูแลตรวจ — ห้าม fail ทั้งรอบ |
 | **Freshness** | `stock_as_of` = เวลาดึง ERP สำเร็จครั้งล่าสุด (ต่อรอบ ใน `sync_runs`) — ป้าย "ข้อมูล ณ HH:MM" และ "อัปเดต …" อ่านจากค่านี้; `erp_updated_at` ใช้ทำ delta เท่านั้น |
-| **รอบ sync** | item master ~30 นาที (`ERP_SYNC_CRON`), stock ~5 นาที (`ERP_SYNC_STOCK_CRON`) + sync อัตโนมัติตอนเปิดรอบนับ + ปุ่ม admin สั่งเอง; ทุก run กัน overlap ด้วย pg advisory lock + deadline |
+| **รอบ sync** | ที่ทำจริงตอนนี้: item master + ยอด ตาม `ERP_SYNC_CRON` (ค่าใช้งานจริง = ทุก 30 นาที) และ `POST /sync/items` ให้ admin สั่งเอง · ยอดบนหน้าค้นหา/สแกนไม่รอรอบ เพราะยิงสด · **ยังไม่ได้ทำ:** รอบ stock แยก (`ERP_SYNC_STOCK_CRON`) และ sync อัตโนมัติตอนเปิดรอบนับ · ทุก run กัน overlap ด้วย pg advisory lock + deadline |
 | **เปิดรอบนับตอน ERP ล่ม** | ทำได้เฉพาะ admin ยืนยันโดยเห็นอายุ cache ("ข้อมูลสต็อกอายุ 3 ชม.") — `count_snapshot` ประทับ `erp_data_as_of` และแสดงในหน้านับ + ในรายงาน variance |
 | **นับครั้งล่าสุด** | เมื่อระบบเรารันเองแล้วมี 2 แหล่ง (ERP `lastCountDate` vs `count_submissions` ของเรา) — **กติกา: ค่าที่ใหม่กว่าชนะ** และแสดงเป็น พ.ศ. ฟอร์แมตเดียวกับ design |
 | **Go-live gate ต่อ ERP** | รายงาน reconcile บังคับ: เทียบ 20 รายการที่ map แล้วกับหน้าจอ ERP/ของจริงบนชั้น (ตรวจความหมาย reserved, UoM, วันที่) ก่อนเชื่อ driver |

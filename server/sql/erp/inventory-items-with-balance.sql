@@ -18,6 +18,9 @@
 -- พารามิเตอร์ที่ driver ผูกให้ (ดู MssqlDriver.readItemRowsFromScript):
 --   @warehouse  NVARCHAR  = WAREHOUSE_CODE ของ deployment นี้
 --   @asOf       DATETIME2 = เวลาที่เริ่มรอบ sync (ตรงกับ ?cTodate ในต้นฉบับ)
+--   @skus       NVARCHAR  = รายการรหัสสินค้าคั่นด้วย ',' สำหรับการยิงสดรายครั้ง
+--                           NULL = ดึงทั้งคลัง (รอบ sync ตามเวลา)
+--                           driver ผูกค่านี้ให้ **เสมอ** แม้เป็น NULL
 --
 -- ⚠️ ยังต้องตรวจกับหน้าจอ ERP จริงก่อนเชื่อ — ดู docs/erp-tcl-findings.md §5
 -- =============================================================================
@@ -41,6 +44,9 @@ WITH ranked AS (
     ) AS rn
   FROM dbo.InventoryItem WITH (NOLOCK)
   WHERE IsActive = 1 AND IsStock = 1
+    -- @skus IS NULL → ทั้งคลัง · มีค่า → เฉพาะรหัสที่ขอ (การยิงสดจากมือถือ)
+    AND (@skus IS NULL
+         OR LTRIM(RTRIM(ItemCode)) IN (SELECT LTRIM(RTRIM(value)) FROM STRING_SPLIT(@skus, ',')))
 ),
 bal AS (
   -- ยอดคงเหลือจาก ledger ตามสูตรของฝ่าย ERP
@@ -57,6 +63,8 @@ bal AS (
     AND h.Approved  = 1
     AND h.IsClosed <> 1
     AND d.Warehouse = @warehouse
+    AND (@skus IS NULL
+         OR LTRIM(RTRIM(d.ItemCode)) IN (SELECT LTRIM(RTRIM(value)) FROM STRING_SPLIT(@skus, ',')))
   GROUP BY LTRIM(RTRIM(d.ItemCode))
 )
 SELECT

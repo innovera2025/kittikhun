@@ -17,6 +17,8 @@ class Item {
     this.loc,
     this.warehouse,
     this.onHand,
+    this.onHandIsLive = false,
+    this.onHandAsOf,
     this.reserved,
     this.rop,
     this.updated,
@@ -44,6 +46,15 @@ class Item {
 
   /// ยอดคงเหลือตามระบบ — null = ไม่มีข้อมูล (สินค้าไม่อยู่ในรอบนับ)
   final num? onHand;
+
+  /// `true` = ยอดนี้ยิงสดจาก ERP ตอนที่ขอ · `false` = ยอดจากรอบ sync ล่าสุด
+  ///
+  /// ⚠️ ยอดเก่ากับยอดสดต้องแสดงให้ต่างกันเสมอ พนักงานตัดสินใจจากตัวเลขนี้
+  /// (backend ส่งมาเป็น `onHandSource: 'erp' | 'cache'`)
+  final bool onHandIsLive;
+
+  /// เวลาที่ `onHand` เป็นจริง — ใช้ทำป้าย "ณ HH:mm" เมื่อ ERP ไม่ตอบ
+  final DateTime? onHandAsOf;
   final num? reserved;
   final num? rop;
 
@@ -58,6 +69,18 @@ class Item {
       (onHand == null || reserved == null) ? null : (onHand! - reserved!).clamp(0, double.infinity);
 
   bool get hasQty => onHand != null;
+
+  /// ป้ายบอกที่มาของยอดสำหรับแสดงข้างตัวเลข
+  /// สด → 'สด' · ไม่สด → 'ณ HH:mm' · ไม่รู้เวลา → 'ยอดเก่า'
+  String get onHandSourceLabel {
+    if (onHandIsLive) return 'สด';
+    final at = onHandAsOf;
+    if (at == null) return 'ยอดเก่า';
+    final local = at.toLocal();
+    final hh = local.hour.toString().padLeft(2, '0');
+    final mm = local.minute.toString().padLeft(2, '0');
+    return 'ณ $hh:$mm';
+  }
 }
 
 /// สมาชิกและสิทธิ์

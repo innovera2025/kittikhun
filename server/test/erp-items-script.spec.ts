@@ -90,9 +90,11 @@ describe('script ยอดคงเหลือจากฝ่าย ERP', () =>
   });
 
   describe('สัญญากับ driver', () => {
-    it('ใช้พารามิเตอร์ที่ driver ผูกให้เท่านั้น (@warehouse, @asOf)', () => {
+    it('ใช้พารามิเตอร์ที่ driver ผูกให้เท่านั้น (@warehouse, @asOf, @skus)', () => {
+      // @skus = ตัวกรองของการยิงยอดสดรายครั้ง · NULL = ดึงทั้งคลังเหมือนเดิม
+      // driver ต้องผูกทั้งสามตัวทุกครั้ง ไม่งั้น mssql จะฟ้อง "must declare the scalar variable"
       const params = new Set(script.match(/@[A-Za-z_][A-Za-z0-9_]*/g) ?? []);
-      expect(params).toEqual(new Set(['@warehouse', '@asOf']));
+      expect(params).toEqual(new Set(['@warehouse', '@asOf', '@skus']));
     });
 
     it('ไม่มี placeholder แบบ ODBC หลงเหลือ (?cItemCode ฯลฯ ใช้กับ mssql ไม่ได้)', () => {

@@ -651,6 +651,10 @@ Item _itemFromJson(Map<String, dynamic> json) => Item(
       loc: _asOptString(json['loc']),
       warehouse: _asOptString(json['warehouseCode']),
       onHand: _asNum(json['onHand']),
+      // backend ส่ง 'erp' เมื่อยิงสดสำเร็จ · 'cache' เมื่อ ERP ไม่ตอบแล้วใช้ยอดรอบ sync
+      // สัญญาเก่าไม่มีฟิลด์นี้ → ถือว่าไม่สด (ปลอดภัยกว่าอ้างว่าสดทั้งที่ไม่ใช่)
+      onHandIsLive: _asOptString(json['onHandSource']) == 'erp',
+      onHandAsOf: _asDate(json['onHandAsOf']),
       reserved: _asNum(json['reserved']),
       rop: _asNum(json['rop']),
       updated: _updatedLabel(_asDate(json['updatedAt'])),

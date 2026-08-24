@@ -609,6 +609,12 @@ class _ScanCard extends ConsumerWidget {
                         '${item.unit} คงเหลือ',
                         style: KittikhunTokens.tiny(),
                       ),
+                      // ยอดสดจาก ERP หรือยอดจากรอบ sync ล่าสุด — ต้องแยกให้เห็น
+                      if (onHand != null)
+                        Text(
+                          item.onHandSourceLabel,
+                          style: KittikhunTokens.tiny(),
+                        ),
                     ],
                   ),
                 ],

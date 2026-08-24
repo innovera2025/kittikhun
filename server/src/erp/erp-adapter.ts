@@ -118,6 +118,16 @@ export interface ErpAdapter {
   /** อ่าน item master แบบ stream เป็น batch (ห้ามโหลดทั้งก้อนเข้า memory) */
   fetchItems(since?: ErpCursor): AsyncIterable<CanonicalItem[]>;
 
+  /**
+   * อ่านยอดสดเฉพาะรหัสที่ระบุ — ใช้ตอนมือถือขอดูของ (หน้าค้นหา / สแกนบาร์โค้ด)
+   *
+   * ต่างจาก `fetchItems()` ตรงที่ยิงตรงไปหา ERP รายครั้ง ไม่ผ่าน `items_cache`
+   * ผู้เรียกต้องเตรียมรับ error เสมอ (ERP ล่ม/ช้า) แล้ว fallback ไปยอดที่ซิงก์ไว้
+   *
+   * ยังเป็น SELECT ล้วน — ชื่อขึ้นต้น `fetch` โดยตั้งใจให้ผ่าน `WriteishMethodName`
+   */
+  fetchItemsBySku(skus: readonly string[]): Promise<CanonicalItem[]>;
+
   healthCheck(): Promise<ErpHealth>;
 }
 
@@ -393,6 +403,7 @@ export abstract class BaseErpDriver implements ErpAdapter {
 
   abstract capabilities(): ErpCapabilities;
   abstract fetchItems(since?: ErpCursor): AsyncIterable<CanonicalItem[]>;
+  abstract fetchItemsBySku(skus: readonly string[]): Promise<CanonicalItem[]>;
   abstract healthCheck(): Promise<ErpHealth>;
 
   /**

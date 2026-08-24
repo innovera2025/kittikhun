@@ -243,6 +243,14 @@ class _ResultCard extends StatelessWidget {
                     maxLines: 1,
                   ),
                   Text(item.unit, style: KittikhunTokens.tiny(), maxLines: 1),
+                  // ที่มาของยอด: ยิงสดจาก ERP หรือยอดจากรอบ sync ล่าสุด
+                  // แสดงเฉพาะเมื่อมียอด — ไม่มียอดแล้วบอกเวลาไม่มีความหมาย
+                  if (hasQty)
+                    Text(
+                      item.onHandSourceLabel,
+                      style: KittikhunTokens.tiny(),
+                      maxLines: 1,
+                    ),
                 ],
               ),
             ],
