@@ -124,7 +124,7 @@ APP_MIN_VERSION=4.0.0
 POSTGRES_USER=stock
 POSTGRES_DB=kittikhun
 POSTGRES_PASSWORD=<ที่สร้างไว้>
-DATABASE_URL=postgres://stock:<รหัสเดียวกัน>@postgres:5432/kittikhun
+DATABASE_URL=postgres://stock:<รหัสเดียวกัน>@kittikhun-db:5432/kittikhun   # ⚠️ ชื่อ alias ไม่ใช่ postgres
 
 # ── ความลับ ──
 JWT_ACCESS_SECRET=<hex 32>
@@ -139,7 +139,7 @@ CORS_ORIGINS=https://stock.example.com
 ERP_DRIVER=mock                # ⚠️ ดูหัวข้อ 5 ก่อนเปลี่ยนเป็น sql
 ```
 
-> ⚠️ `DATABASE_URL` ใช้ host ว่า `postgres` (ชื่อ service ใน compose) ไม่ใช่ `localhost`
+> ⚠️ `DATABASE_URL` ใช้ host ว่า **`kittikhun-db`** (alias ที่ override ตั้งไว้) ไม่ใช่ `postgres` และไม่ใช่ `localhost`
 
 ---
 
@@ -185,6 +185,38 @@ docker compose -f docker-compose.yml -f deploy/vps.override.yml up -d
 
 > เช็คว่าถูกต้อง: `... config` แล้วต้องเห็น **ไม่มี service ไหน publish พอร์ตออก host เลย**
 > และ `api` อยู่ทั้ง `default` (คุยกับ postgres) และ `proxy-network` (ให้ proxy เห็น)
+
+### 🔴 ทุก service ต้องอยู่ network เดียว — ห้ามเพิ่ม
+
+caddy-gen ปล่อย **ทุก IP** ของ container ที่มี label `virtual.host` เข้าไปใน
+`reverse_proxy` แบบ `round_robin` ถ้า container อยู่ 2 network มันจะได้ 2 IP
+แล้ว caddy สลับส่งไปทั้งคู่ — ตัวที่อยู่บน network ภายในของเรา caddy เข้าไม่ถึง
+
+**อาการ: 502 สลับ 200 เป๊ะ 50%** (เจอจริง 24 ส.ค. 2569)
+
+```
+kittikhun.krs.co.th {
+  reverse_proxy {
+    lb_policy round_robin
+    to 172.18.0.12:8080   ← proxy-network      เข้าถึงได้
+    to 172.20.0.4:8080    ← kittikhun_default  เข้าไม่ถึง → 502
+```
+
+`deploy/vps.override.yml` จึงบังคับให้ทุก service อยู่ `proxy-network` เท่านั้น
+
+**กับดักที่ตามมา:** `proxy-network` แชร์กับทุกโปรเจคในเครื่อง ชื่อ service `postgres`
+เฉย ๆ อาจชนกับ postgres ของโปรเจคอื่น แล้วแอปต่อฐานข้อมูลผิดตัวโดยไม่มีอะไรฟ้อง
+→ override ตั้ง alias `kittikhun-db` ไว้ **`DATABASE_URL` ต้องชี้มาที่ชื่อนี้**:
+
+```bash
+DATABASE_URL=postgres://stock:<รหัส>@kittikhun-db:5432/kittikhun
+```
+
+ตรวจก่อน `up` ทุกครั้งว่าไม่มี service ไหนอยู่หลาย network:
+
+```bash
+kk config | grep -A3 'networks:'
+```
 
 ### ⚠️ `docker compose` ยังไม่มีในเครื่อง
 

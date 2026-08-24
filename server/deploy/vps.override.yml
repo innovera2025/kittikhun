@@ -10,6 +10,19 @@
 #
 #   → ปิด Caddy ของเรา แล้วให้ api เข้า proxy-network พร้อม label ให้ caddy-gen เห็น
 #   → ไม่ publish พอร์ตออก host เลยแม้แต่ตัวเดียว (ไม่มีอะไรให้ชนกับโปรเจคอื่น)
+#
+# ⚠️⚠️ ทุก service ต้องอยู่ **network เดียว** คือ proxy-network เท่านั้น
+#
+#   เหตุผล: caddy-gen (docker-gen) ปล่อย **ทุก IP** ของ container ที่มี label
+#   `virtual.host` เข้าไปใน `reverse_proxy ... lb_policy round_robin`
+#   ถ้า api อยู่ 2 network มันจะได้ 2 IP แล้ว caddy สลับส่งไปทั้งคู่ —
+#   ตัวที่อยู่บน network ภายในของเรา caddy เข้าไม่ถึง → **502 สลับ 200 เป๊ะ 50%**
+#
+#   เคสจริงที่เจอ (24 ส.ค. 2569):
+#     to 172.18.0.12:8080   ← proxy-network      เข้าถึงได้
+#     to 172.20.0.4:8080    ← kittikhun_default  เข้าไม่ถึง → 502
+#
+#   ห้ามเพิ่ม network ให้ api อีกเด็ดขาด ไม่ว่าจะด้วยเหตุผลใด
 # ─────────────────────────────────────────────────────────────────────────────
 
 services:
@@ -19,18 +32,32 @@ services:
     profiles: ["lan-only"]
 
   api:
+    # network เดียวเท่านั้น (ดูคำเตือนด้านบน)
     networks:
-      # เครือข่ายภายในของโปรเจค (คุยกับ postgres)
-      - default
-      # เครือข่ายของ caddy-gen-proxy
       - proxy-network
     labels:
-      # ⚠️ ตรวจรูปแบบ label ให้ตรงกับที่ caddy-gen ในเครื่องนี้ใช้จริงก่อน:
-      #      docker inspect qtso-app --format '{{json .Config.Labels}}'
-      #    ถ้าของเดิมใช้คีย์อื่น ให้แก้ 3 บรรทัดล่างให้ตรงกัน
-      virtual.host: "${PUBLIC_HOST:?ต้องตั้ง PUBLIC_HOST เช่น stock.example.com}"
+      # ตรวจรูปแบบ label ให้ตรงกับที่ caddy-gen ในเครื่องนี้ใช้จริง:
+      #   docker inspect qtso-app --format '{{json .Config.Labels}}'
+      virtual.host: "${PUBLIC_HOST:?ต้องตั้ง PUBLIC_HOST เช่น kittikhun.krs.co.th}"
       virtual.port: "8080"
       virtual.tls-email: "${TLS_EMAIL:?ต้องตั้ง TLS_EMAIL สำหรับ Let's Encrypt}"
+
+  postgres:
+    networks:
+      proxy-network:
+        # ⚠️ proxy-network แชร์กับทุกโปรเจคในเครื่อง — ชื่อ service `postgres` เฉย ๆ
+        #    อาจชนกับ postgres ของโปรเจคอื่นที่อยู่ network เดียวกัน แล้วแอปจะไปต่อ
+        #    ฐานข้อมูลผิดตัวโดยไม่มีอะไรฟ้อง (ผลนับเข้าผิด DB = หายนะ)
+        #    → ใช้ชื่อเฉพาะ แล้วให้ DATABASE_URL ชี้มาที่ชื่อนี้:
+        #      DATABASE_URL=postgres://stock:<รหัส>@kittikhun-db:5432/kittikhun
+        aliases:
+          - kittikhun-db
+    # postgres ไม่มี label virtual.* → caddy-gen มองไม่เห็น ไม่มีทางเข้าจากภายนอก
+    # และไม่ publish พอร์ตออก host (ตาม docker-compose.yml หลัก)
+
+  backup:
+    networks:
+      - proxy-network
 
 networks:
   proxy-network:
