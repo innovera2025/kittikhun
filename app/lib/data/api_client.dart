@@ -327,7 +327,11 @@ class ApiClient {
         connectTimeout: ApiConfig.connectTimeout,
         receiveTimeout: ApiConfig.receiveTimeout,
         sendTimeout: ApiConfig.receiveTimeout,
-        contentType: Headers.jsonContentType,
+        // ⚠️ **ห้ามตั้ง contentType ที่นี่** — Dio จะใส่ให้ทุก request รวมถึงที่ไม่มี body
+        //    และ `Options(contentType: null)` ต่อ request **ไม่ล้างค่านี้** (ตกกลับมาใช้ค่านี้)
+        //    ฝั่ง Fastify เห็น `Content-Type: application/json` พร้อม body ว่าง จะปฏิเสธ
+        //    ด้วย 400 "Body cannot be empty" ก่อนถึง handler → ปิดรอบนับ / sync / reset-pin
+        //    พังทั้งหมด · ตั้งต่อ request ใน `_send()` เฉพาะเมื่อมี body แทน
         responseType: ResponseType.json,
         headers: const {'Accept': Headers.jsonContentType},
       );
@@ -370,6 +374,20 @@ class ApiClient {
 
   // ── internals ─────────────────────────────────────────────────────
 
+  /// Content-Type ที่ควรส่งสำหรับ body ที่กำลังจะยิง
+  ///
+  /// ⚠️ ไม่มี body → **ต้องเป็น null** (ไม่ส่ง header เลย)
+  ///    Dio หยิบ contentType จาก BaseOptions มาใส่ทุก request แม้ data เป็น null
+  ///    ฝั่ง Fastify เห็น `Content-Type: application/json` พร้อม body ว่าง จะปฏิเสธ
+  ///    ด้วย 400 "Body cannot be empty" **ก่อนถึง handler** → endpoint ที่แอปเรียก
+  ///    แบบไม่มี body พังหมด (ปิดรอบนับ · sync ยอดจาก ERP · รีเซ็ต PIN)
+  ///
+  /// แยกออกมาเป็น static เพื่อให้เทสต์สัญญา (test/api_contract_test.dart) ยิงของจริง
+  /// ด้วยตรรกะเดียวกันได้ — ถ้าใครแก้กลับ เทสต์จะจับได้ทันที
+  @visibleForTesting
+  static String? contentTypeFor(Object? body) =>
+      body == null ? null : Headers.jsonContentType;
+
   Future<T> _send<T>(
     String method,
     String path, {
@@ -389,7 +407,16 @@ class ApiClient {
         data: body,
         queryParameters: query,
         cancelToken: cancelToken,
-        options: Options(method: method),
+        options: Options(
+          method: method,
+          // ⚠️ ไม่มี body → **ต้องไม่ส่ง Content-Type** เลย
+          //    Dio หยิบ contentType จาก BaseOptions มาใส่ให้ทุก request แม้ body เป็น null
+          //    ฝั่ง Fastify เห็น `Content-Type: application/json` แล้ว body ว่าง จะปฏิเสธ
+          //    ด้วย 400 "Body cannot be empty" **ก่อนถึง handler** ทำให้ endpoint ที่
+          //    เรียกแบบไม่มี body พังหมด: ปิดรอบนับ · sync ยอดจาก ERP · รีเซ็ต PIN
+          //    (เทสต์ที่ mock ชั้น HTTP จับไม่ได้ — เจอตอนยิง Dio จริงเข้า server จริง)
+          contentType: contentTypeFor(body),
+        ),
       );
       final data = res.data;
       if (data is T) return data;

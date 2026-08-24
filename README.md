@@ -137,11 +137,13 @@ app/                      Flutter app
   test/widget_test.dart                 22 เทสต์ (ข้อความไทย, สิทธิ์, สแกน, ส่วนต่าง)
   test/offline_test.dart                19 เทสต์ (replica, outbox, รอบนับออฟไลน์)
   test/admin_test.dart                  18 เทสต์ (จอผู้ดูแล, null≠0, ตัวเลือก conflict)
+  test/api_contract_test.dart           สัญญา HTTP ที่ Dio ส่งจริง (ต้องมี server)
 
 server/                   NestJS backend
   sql/erp/inventory-items-with-balance.sql  ⭐ item master + ยอดคงเหลือ (สูตรจากฝ่าย ERP)
   sql/erp/verify-balance.sql            diagnostic ตรวจสูตรก่อนเชื่อตัวเลข (อ่านอย่างเดียว)
   scripts/verify-erp.ts                 `npm run verify:erp` ตรวจสิทธิ์ + ความแม่นของยอด
+  scripts/simulate.ts                   `npm run simulate` จำลองวันนับสต็อกทั้งวันผ่าน HTTP จริง
   src/config/env.config.ts              zod ตรวจ .env ตอน boot (fail fast บอกชื่อตัวแปร)
   src/erp/erp-adapter.ts                ⭐ สัญญา read-only + statement guard + compile guard
   src/erp/drivers/mssql.driver.ts       SQL Server driver + boot write-probe + charset ไทย
