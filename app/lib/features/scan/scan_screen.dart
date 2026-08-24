@@ -530,12 +530,18 @@ class _ScanCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final item = Fixtures.items.where((i) => i.sku == record.sku).firstOrNull;
+    final expandedSku = ref.watch(appProvider.select((s) => s.expandedSku));
+    final controller = ref.read(appProvider.notifier);
+
+    // ⚠️ เดิมค้นจาก `Fixtures.items` ตรง ๆ → รหัสจริงจาก ERP (เช่น 2010201) ไม่เคยเจอ
+    //    การ์ดคืนกล่องเปล่า ตัวนับขึ้น "สแกนแล้ว 1 รายการ" แต่จอว่าง
+    //    `itemFor()` ดู replica ที่ดึงมาจริงก่อน แล้วค่อย fallback เป็นข้อมูลตัวอย่าง
+    //    ต้อง watch `scannedItems` ด้วย ไม่งั้นการ์ดไม่ rebuild เมื่อข้อมูลสินค้ามาถึงทีหลัง
+    ref.watch(appProvider.select((s) => s.scannedItems[record.sku]));
+    final item = controller.itemFor(record.sku);
     if (item == null) return const SizedBox.shrink();
 
-    final expandedSku = ref.watch(appProvider.select((s) => s.expandedSku));
     final expanded = expandedSku == item.sku;
-    final controller = ref.read(appProvider.notifier);
 
     final onHand = item.onHand;
     // ERP ไม่มียอด → ไม่แสดงตัวเลขและไม่เดาสถานะ (erp-tcl-findings §7 ข้อ 5)

@@ -40,6 +40,40 @@ class ShowPending extends Notifier<bool> {
 final showPendingProvider =
     NotifierProvider<ShowPending, bool>(ShowPending.new);
 
+/// หัวเรื่องต่อแท็บ (kicker, title)
+///
+/// ⚠️ เดิมอ่านจาก `Fixtures.heads` ตรง ๆ ซึ่งเป็น `const` ที่ฝัง 'WH-BKK-02' และ
+///    'CC-2408' ไว้ตายตัว → แอปที่ต่อคลัง WHFG จริงก็ยังขึ้นชื่อคลังตัวอย่าง
+///    พนักงานอาจเข้าใจว่ากำลังนับคนละคลัง จึงต้องอ่านจาก state จริงเสมอ
+///
+/// ลำดับที่มาของชื่อคลัง: รอบนับที่เปิดอยู่ → โปรไฟล์ผู้ใช้ → ค่าตัวอย่าง (โหมดไม่มี backend)
+@visibleForTesting
+(String, String) headForTest(AppState state) => _headFor(state);
+
+(String, String) _headFor(AppState state) {
+  final title = Fixtures.heads[state.tab]?.$2 ??
+      Fixtures.heads[AppTab.scan]!.$2;
+
+  if (state.tab == AppTab.count) {
+    final session = state.session;
+    if (session == null) {
+      // ไม่มีรอบเปิดอยู่ — ห้ามโชว์เลขรอบตัวอย่างให้เข้าใจผิดว่ามีรอบ
+      return ('ยังไม่เปิดรอบนับ', title);
+    }
+    // voucherNo ซ้ำได้และอาจว่าง → fallback เป็น id ซึ่งเป็นคีย์จริง
+    final label = session.voucherNo?.trim();
+    return (
+      'รอบตรวจนับ ${label == null || label.isEmpty ? session.id : label}',
+      title,
+    );
+  }
+
+  final wh = state.session?.warehouseCode ??
+      state.warehouseCode ??
+      Fixtures.warehouseCode;
+  return ('คลัง $wh', title);
+}
+
 class AppShell extends ConsumerWidget {
   const AppShell({super.key});
 
@@ -47,7 +81,7 @@ class AppShell extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final state = ref.watch(appProvider);
     final controller = ref.read(appProvider.notifier);
-    final head = Fixtures.heads[state.tab] ?? Fixtures.heads[AppTab.scan]!;
+    final head = _headFor(state);
 
     return Stack(
       fit: StackFit.expand,

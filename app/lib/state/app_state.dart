@@ -44,6 +44,7 @@ class AppState {
     this.session,
     this.searchHits,
     this.scannedItems = const {},
+    this.warehouseCode,
   });
 
   final bool signedIn;
@@ -58,6 +59,12 @@ class AppState {
   // ── ผู้ใช้และสมาชิก ─────────────────────────────────────────────────
   final List<Member> members;
   final String? currentEmpId;
+
+  /// คลังของผู้ใช้ที่ล็อกอินอยู่ (`user.warehouseCode` จาก `/auth/login`)
+  ///
+  /// ⚠️ เคยไม่มีฟิลด์นี้ หัวจอจึงอ่าน `Fixtures.heads` ที่ฝัง 'WH-BKK-02' ไว้ตายตัว
+  ///    ทำให้แอปที่ต่อคลัง WHFG จริงยังขึ้นชื่อคลังตัวอย่าง — พนักงานเข้าใจผิดว่านับผิดคลังได้
+  final String? warehouseCode;
 
   // ── สแกน ───────────────────────────────────────────────────────────
   final List<ScanRecord> scans;
@@ -149,6 +156,7 @@ class AppState {
     bool clearSession = false,
     List<Item>? searchHits,
     Map<String, Item>? scannedItems,
+    String? warehouseCode,
   }) => AppState(
     signedIn: signedIn ?? this.signedIn,
     tab: tab ?? this.tab,
@@ -178,6 +186,7 @@ class AppState {
     session: clearSession ? null : (session ?? this.session),
     searchHits: searchHits ?? this.searchHits,
     scannedItems: scannedItems ?? this.scannedItems,
+    warehouseCode: warehouseCode ?? this.warehouseCode,
   );
 }
 
@@ -256,6 +265,7 @@ class AppController extends Notifier<AppState> {
         signedIn: true,
         tab: AppTab.scan,
         currentEmpId: result.user.empId,
+        warehouseCode: result.user.warehouseCode,
         members: members,
         mustChangePin: result.mustChangePin,
         pin: '',
@@ -434,6 +444,17 @@ class AppController extends Notifier<AppState> {
     state = state.copyWith(searchHits: hits);
   }
 
+  /// ใส่ผลค้นหาตรง ๆ — สำหรับเทสต์ที่ไม่มี replica ในเครื่อง
+  @visibleForTesting
+  void setSearchHits(List<Item> hits) =>
+      state = state.copyWith(searchHits: hits);
+
+  /// จำข้อมูลสินค้าที่ดึงมาแล้ว — สำหรับเทสต์ (ของจริงตั้งใน resolveCodeAsync)
+  @visibleForTesting
+  void rememberScannedItem(Item item) => state = state.copyWith(
+        scannedItems: {...state.scannedItems, item.sku: item},
+      );
+
   /// ผลค้นหา — substring บน name + nameEn + sku + barcode (ไม่สนตัวพิมพ์)
   ///
   /// โหมดต่อ backend จะได้ผลจาก [runSearch] (replica) แทน fixture
@@ -449,7 +470,16 @@ class AppController extends Notifier<AppState> {
   }
 
   /// แตะผลค้นหา → เข้ารายการสแกนแบบขยาย (พฤติกรรม handoff ตาม design)
+  ///
+  /// ⚠️ ต้องพาข้อมูลสินค้าติดไปด้วย — การ์ดฝั่งสแกนอ่านจาก `scannedItems`
+  ///    ถ้าไม่เก็บ การ์ดจะ fallback ไปหาในข้อมูลตัวอย่างแล้วไม่เจอ → จอว่าง
   void openFromSearch(String sku) {
+    final hit = searchResults().where((i) => i.sku == sku).firstOrNull;
+    if (hit != null) {
+      state = state.copyWith(
+        scannedItems: {...state.scannedItems, sku: hit},
+      );
+    }
     addScan(sku, note: 'เลือกจากการค้นหา');
     state = state.copyWith(tab: AppTab.scan, expandedSku: sku);
   }
