@@ -7,7 +7,6 @@ import 'package:intl/intl.dart';
 import '../../core/theme/kittikhun_tokens.dart';
 import '../../core/widgets/common.dart';
 import '../../data/api_client.dart';
-import '../../data/fixtures.dart';
 import '../../local/local_db.dart';
 import '../../data/models.dart';
 import '../../state/app_state.dart';
@@ -97,16 +96,19 @@ final pendingReviewProvider = FutureProvider<List<PendingReviewEntry>>((
   // โหมด fixture (ไม่ตั้ง API_BASE_URL) ไม่มีคิวซิงค์ → ไม่ต้องเปิด local DB
   // (สำคัญบนแพลตฟอร์มที่ไม่มี path_provider เช่น web ที่ใช้ดู UI)
   if (!ApiConfig.isConfigured) return const [];
-  final rows = await ref.watch(localDbProvider).rejectedForReview();
-  return [for (final row in rows) _entryFrom(row)];
+  final db = ref.watch(localDbProvider);
+  final rows = await db.rejectedForReview();
+  return [
+    // หาชื่อ/หน่วยจาก replica จริง — `itemByBarcode` จับกับ sku ตรง ๆ ได้ด้วย
+    for (final row in rows) _entryFrom(row, await db.itemByBarcode(row.sku)),
+  ];
 });
 
 /// จุดเดียวที่ผูกกับชื่อฟิลด์ของ `RejectedRow`
 ///
 /// ฟิลด์จำนวน/เวลา/เหตุผลรับเข้าเป็น nullable ทั้งหมด (ฝั่ง local_db ประกาศเป็น
 /// non-nullable ก็ยังคอมไพล์ผ่าน) — จำนวนที่เป็น null จะไม่ถูกแปลงเป็น 0
-PendingReviewEntry _entryFrom(RejectedRow row) {
-  final item = _itemFor(row.sku);
+PendingReviewEntry _entryFrom(RejectedRow row, Item? item) {
   return PendingReviewEntry(
     id: row.id,
     sku: row.sku,
@@ -116,17 +118,6 @@ PendingReviewEntry _entryFrom(RejectedRow row) {
     countedAt: row.countedAt,
     code: row.code,
   );
-}
-
-/// หาชื่อ/หน่วยจาก replica ของ item master
-///
-/// ตอนนี้ replica อ่านผ่าน `Fixtures.items` (แหล่งเดียวกับจอค้นหา/จอนับ)
-/// เมื่อ local_db เปิดเมธอดค้นหาสินค้า ให้สลับที่ฟังก์ชันนี้จุดเดียว
-Item? _itemFor(String sku) {
-  for (final item in Fixtures.items) {
-    if (item.sku == sku) return item;
-  }
-  return null;
 }
 
 /// ป้ายเวลาที่นับ: 'วันนี้ 09:42' · 'เมื่อวาน 17:20' · '12 ส.ค. 2569'

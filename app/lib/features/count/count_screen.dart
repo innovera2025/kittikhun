@@ -4,8 +4,8 @@ import 'package:intl/intl.dart';
 
 import '../../core/theme/kittikhun_tokens.dart';
 import '../../core/widgets/common.dart';
-import '../../data/fixtures.dart';
 import '../../data/models.dart';
+import '../../data/stock_repository.dart';
 import '../../state/app_state.dart';
 import '../admin/admin_screen.dart';
 
@@ -72,6 +72,7 @@ class _CountScreenState extends ConsumerState<CountScreen> {
           child: _SessionCard(
             done: done,
             total: rows.length,
+            session: state.session,
             // ทางเข้าจอผู้ดูแล — ไม่เพิ่มแท็บที่ 5 (design กำหนดไว้ 4 ช่อง)
             // staff/viewer ไม่เห็นปุ่มนี้เลย จอจึงเหมือนเดิมทุกพิกเซล
             onManage: state.me.role.isAdmin
@@ -134,16 +135,32 @@ class _CountScreenState extends ConsumerState<CountScreen> {
   }
 }
 
+/// ป้ายบอกรอบนับ — โซนและเลขเอกสารจากรอบจริง
+String _sessionLabel(ActiveSession? s) {
+  if (s == null) return 'ยังไม่มีรอบนับที่เปิดอยู่';
+  final zone = s.zone?.trim();
+  final voucher = s.voucherNo?.trim();
+  final parts = [
+    if (zone != null && zone.isNotEmpty) 'โซน $zone' else 'ทั้งคลัง ${s.warehouseCode}',
+    if (voucher != null && voucher.isNotEmpty) voucher else s.id,
+  ];
+  return parts.join(' · ');
+}
+
 /// การ์ดหัวรอบนับ — โซน/เลขรอบ + ความคืบหน้า
 class _SessionCard extends StatelessWidget {
   const _SessionCard({
     required this.done,
     required this.total,
+    required this.session,
     this.onManage,
   });
 
   final int done;
   final int total;
+
+  /// รอบนับที่เปิดอยู่จริง — null = ยังไม่มีรอบ
+  final ActiveSession? session;
 
   /// null = ผู้ใช้ไม่ใช่ผู้ดูแล → ไม่แสดงปุ่มจัดการรอบนับ
   final VoidCallback? onManage;
@@ -164,7 +181,9 @@ class _SessionCard extends StatelessWidget {
             children: [
               Expanded(
                 child: Text(
-                  'โซน ${Fixtures.sessionZone} · ${Fixtures.sessionVoucherNo}',
+                  // ⚠️ เดิมเป็นค่าตัวอย่างตายตัว ('โซน A · CC-2408') ต่อให้ไม่มีรอบเปิดอยู่
+                  //    ก็ยังขึ้นเหมือนมีรอบจริง — พนักงานเริ่มนับทั้งที่ยังไม่เปิดรอบได้
+                  _sessionLabel(session),
                   style: KittikhunTokens.caption(KittikhunTokens.tSoft),
                   overflow: TextOverflow.ellipsis,
                 ),

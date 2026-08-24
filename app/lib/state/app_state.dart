@@ -121,8 +121,12 @@ class AppState {
   bool get hasScans => scans.isNotEmpty;
 
   /// จำนวนรายการที่กรอกค่าแล้วในรอบนับ
-  int get countedRows =>
-      Fixtures.countRows.where((r) => (counts[r.sku] ?? '').isNotEmpty).length;
+  ///
+  /// ⚠️ เดิมนับจาก `Fixtures.countRows` เสมอ → ตัวเลข "นับแล้ว x/y" ไม่ตรงกับ
+  ///    รอบจริง และยังนับต่อได้ทั้งที่ไม่มีรอบเปิดอยู่
+  int get countedRows => (session?.rows ?? const <CountRow>[])
+      .where((r) => (counts[r.sku] ?? '').isNotEmpty)
+      .length;
 
   AppState copyWith({
     bool? signedIn,
@@ -379,9 +383,15 @@ class AppController extends Notifier<AppState> {
   }
 
   /// ข้อมูลสินค้าที่ใช้แสดงในการ์ด — replica ก่อน แล้วค่อย fixture
-  Item? itemFor(String sku) =>
-      state.scannedItems[sku] ??
-      Fixtures.items.where((i) => i.sku == sku).firstOrNull;
+  ///
+  /// 🚫 ต่อ backend จริงแล้วห้ามหล่นไปข้อมูลตัวอย่างเด็ดขาด
+  ///    ของปลอมที่หน้าตาเหมือนของจริงทำให้พนักงานนับผิดตัวโดยไม่รู้
+  Item? itemFor(String sku) {
+    final hit = state.scannedItems[sku];
+    if (hit != null) return hit;
+    if (ApiConfig.isConfigured) return null;
+    return Fixtures.items.where((i) => i.sku == sku).firstOrNull;
+  }
 
   /// ผลการอ่านบาร์โค้ด — ทั้งเจอและไม่เจอต้องสั่น (จัดการที่ UI)
   ///
@@ -460,6 +470,8 @@ class AppController extends Notifier<AppState> {
   /// โหมดต่อ backend จะได้ผลจาก [runSearch] (replica) แทน fixture
   List<Item> searchResults() {
     if (state.searchHits != null) return state.searchHits!;
+    // ต่อ backend จริง: ยังไม่มีผลจาก replica = ยังไม่มีผล ห้ามยัดข้อมูลตัวอย่างแทน
+    if (ApiConfig.isConfigured) return const [];
     final q = state.query.trim().toLowerCase();
     if (q.isEmpty) return Fixtures.items;
     return Fixtures.items.where((i) {
@@ -554,7 +566,13 @@ class AppController extends Notifier<AppState> {
   }
 
   /// รายการในรอบนับ — จากรอบจริงถ้ามี ไม่งั้นใช้ fixture
-  List<CountRow> countRows() => state.session?.rows ?? Fixtures.countRows;
+  /// รายการในรอบนับ
+  ///
+  /// 🚫 ต่อ backend จริงแล้วไม่มีรอบเปิดอยู่ = ลิสต์ว่าง
+  ///    เดิม fallback ไป `Fixtures.countRows` ทำให้จอขึ้นสินค้าตัวอย่าง
+  ///    (SKU-40128 ฯลฯ) ที่พนักงานกรอกจำนวนแล้วกดส่งได้จริง
+  List<CountRow> countRows() =>
+      state.session?.rows ?? (ApiConfig.isConfigured ? const [] : Fixtures.countRows);
 
   /// ดึงรอบนับ active จาก replica ในเครื่อง (นับต่อได้แม้ออฟไลน์)
   Future<void> loadSession() async {

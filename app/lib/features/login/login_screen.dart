@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/theme/kittikhun_tokens.dart';
 import '../../core/widgets/common.dart';
+import '../../data/api_client.dart';
 import '../../data/fixtures.dart';
 import '../../state/app_state.dart';
 
@@ -393,8 +394,10 @@ class _EnvChips extends StatelessWidget {
         spacing: 8,
         runSpacing: 8,
         children: [
-          for (final label in const [
-            Fixtures.warehouseCode,
+          // ⚠️ ก่อน login ยังไม่รู้คลังของผู้ใช้ — ต่อ backend จริงจึงไม่โชว์ชื่อคลัง
+          //    (เดิมโชว์ 'WH-BKK-02' ซึ่งเป็นค่าตัวอย่าง ทำให้เข้าใจผิดตั้งแต่หน้าแรก)
+          for (final label in [
+            if (!ApiConfig.isConfigured) Fixtures.warehouseCode,
             Fixtures.appVersion,
           ])
             Pill(

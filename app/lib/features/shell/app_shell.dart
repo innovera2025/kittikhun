@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/theme/kittikhun_tokens.dart';
 import '../../core/widgets/common.dart';
+import '../../data/api_client.dart';
 import '../../data/fixtures.dart';
 import '../../state/app_state.dart';
 import '../admin/admin_screen.dart';
@@ -70,8 +71,9 @@ final showPendingProvider =
 
   final wh = state.session?.warehouseCode ??
       state.warehouseCode ??
-      Fixtures.warehouseCode;
-  return ('คลัง $wh', title);
+      // ต่อ backend จริงแต่ยังไม่รู้คลัง = บอกตรง ๆ ห้ามยืมชื่อคลังตัวอย่างมาใช้
+      (ApiConfig.isConfigured ? null : Fixtures.warehouseCode);
+  return (wh == null ? 'ยังไม่ทราบคลัง' : 'คลัง $wh', title);
 }
 
 class AppShell extends ConsumerWidget {
