@@ -176,7 +176,7 @@ COMMIT;
 | | เส้นทางอ่าน (เดิม) | เส้นทางเขียน (ใหม่) |
 |---|---|---|
 | interface | `ErpAdapter` | `ErpCountWriter` แยกไฟล์ |
-| login | `kittikhun_reader` (`db_datareader`) | `kittikhun_writer` สิทธิ์เฉพาะ 3 ตาราง |
+| login | `tcl_reader` (`db_datareader`) | `tcl_writer` สิทธิ์เฉพาะ 3 ตาราง |
 | connection pool | `readOnlyIntent: true` คงไว้ | pool ใหม่ |
 | statement guard | `assertReadOnlySql()` คงไว้ทั้งหมด | guard ของตัวเอง — อนุญาตเฉพาะรูปแบบที่ whitelist |
 
@@ -272,7 +272,7 @@ erp_writeback(
 cd /opt/tcl/server
 PW=$(grep -m1 '^ERP_SQL_PASSWORD=' .env | sed -E 's/^[^=]+=//')
 docker run --rm mcr.microsoft.com/mssql-tools:latest /opt/mssql-tools/bin/sqlcmd \
-  -S 43.229.134.162,1433 -U kittikhun_reader -P "$PW" -d db_TCL -C -b -W -s'|' -Q "
+  -S 43.229.134.162,1433 -U tcl_reader -P "$PW" -d db_TCL -C -b -W -s'|' -Q "
 SELECT '--COLUMNS--' AS section;
 SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, IS_NULLABLE, COLUMN_DEFAULT
   FROM INFORMATION_SCHEMA.COLUMNS
