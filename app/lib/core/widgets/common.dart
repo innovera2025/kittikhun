@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../theme/kittikhun_tokens.dart';
+import '../theme/tcl_tokens.dart';
 
 /// ปุ่ม CTA หลัก — พื้น gradient, ตัวอักษร #07121B, pressed = brightness(.94)
 class PrimaryButton extends StatefulWidget {
@@ -8,9 +8,9 @@ class PrimaryButton extends StatefulWidget {
     super.key,
     required this.label,
     required this.onPressed,
-    this.height = KittikhunTokens.hSignIn,
-    this.radius = KittikhunTokens.rButtonLarge,
-    this.shadow = KittikhunTokens.shSignInBtn,
+    this.height = TclTokens.hSignIn,
+    this.radius = TclTokens.rButtonLarge,
+    this.shadow = TclTokens.shSignInBtn,
     this.trailingIcon,
     this.fontSize = 16,
   });
@@ -44,10 +44,10 @@ class _PrimaryButtonState extends State<PrimaryButton> {
         child: Opacity(
           opacity: enabled ? 1 : 0.45,
           child: AnimatedContainer(
-            duration: KittikhunTokens.dKeypad,
+            duration: TclTokens.dKeypad,
             height: widget.height,
             decoration: BoxDecoration(
-              gradient: KittikhunTokens.primaryGradient,
+              gradient: TclTokens.primaryGradient,
               borderRadius: BorderRadius.circular(widget.radius),
               boxShadow: widget.shadow,
             ),
@@ -62,7 +62,7 @@ class _PrimaryButtonState extends State<PrimaryButton> {
               children: [
                 Text(
                   widget.label,
-                  style: KittikhunTokens.ctaPrimary()
+                  style: TclTokens.ctaPrimary()
                       .copyWith(fontSize: widget.fontSize),
                 ),
                 if (widget.trailingIcon != null) ...[
@@ -84,8 +84,8 @@ class SecondaryButton extends StatelessWidget {
     super.key,
     required this.label,
     required this.onPressed,
-    this.height = KittikhunTokens.hCardAction,
-    this.radius = KittikhunTokens.rCardAction,
+    this.height = TclTokens.hCardAction,
+    this.radius = TclTokens.rCardAction,
     this.minWidth,
   });
 
@@ -105,11 +105,11 @@ class SecondaryButton extends StatelessWidget {
         constraints: minWidth == null ? null : BoxConstraints(minWidth: minWidth!),
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: KittikhunTokens.s07,
-          border: Border.all(color: KittikhunTokens.b18),
+          color: TclTokens.s07,
+          border: Border.all(color: TclTokens.b18),
           borderRadius: BorderRadius.circular(radius),
         ),
-        child: Text(label, style: KittikhunTokens.ctaSecondary()),
+        child: Text(label, style: TclTokens.ctaSecondary()),
       ),
     );
   }
@@ -121,9 +121,9 @@ class GlassCard extends StatelessWidget {
     super.key,
     required this.child,
     this.padding = const EdgeInsets.all(20),
-    this.radius = KittikhunTokens.rLoginCard,
-    this.fill = KittikhunTokens.s075,
-    this.border = KittikhunTokens.b13,
+    this.radius = TclTokens.rLoginCard,
+    this.fill = TclTokens.s075,
+    this.border = TclTokens.b13,
     this.shadow,
   });
 
@@ -152,10 +152,10 @@ class GradientCard extends StatelessWidget {
   const GradientCard({
     super.key,
     required this.child,
-    this.gradient = KittikhunTokens.listCardBg,
-    this.border = KittikhunTokens.b11,
-    this.radius = KittikhunTokens.rCard,
-    this.shadow = KittikhunTokens.shSearchCard,
+    this.gradient = TclTokens.listCardBg,
+    this.border = TclTokens.b11,
+    this.radius = TclTokens.rCard,
+    this.shadow = TclTokens.shSearchCard,
     this.padding,
   });
 
@@ -205,12 +205,12 @@ class Pill extends StatelessWidget {
       decoration: BoxDecoration(
         color: background,
         border: border == null ? null : Border.all(color: border!),
-        borderRadius: BorderRadius.circular(KittikhunTokens.rPill),
+        borderRadius: BorderRadius.circular(TclTokens.rPill),
       ),
       child: Text(label, style: style),
     );
     if (onTap == null) return pill;
-    return _Tappable(onTap: onTap, radius: KittikhunTokens.rPill, child: pill);
+    return _Tappable(onTap: onTap, radius: TclTokens.rPill, child: pill);
   }
 }
 
@@ -231,10 +231,10 @@ class ProgressBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => ClipRRect(
-        borderRadius: BorderRadius.circular(KittikhunTokens.rPill),
+        borderRadius: BorderRadius.circular(TclTokens.rPill),
         child: Container(
           height: height,
-          color: KittikhunTokens.s11,
+          color: TclTokens.s11,
           child: FractionallySizedBox(
             alignment: Alignment.centerLeft,
             widthFactor: fraction.clamp(0.0, 1.0),
@@ -242,7 +242,7 @@ class ProgressBar extends StatelessWidget {
               decoration: BoxDecoration(
                 gradient: gradient,
                 color: gradient == null ? color : null,
-                borderRadius: BorderRadius.circular(KittikhunTokens.rPill),
+                borderRadius: BorderRadius.circular(TclTokens.rPill),
               ),
             ),
           ),
@@ -281,16 +281,16 @@ class TokenTextField extends StatelessWidget {
         textAlign: textAlign,
         obscureText: obscure,
         maxLength: maxLength,
-        cursorColor: KittikhunTokens.accent,
-        style: style ?? KittikhunTokens.body15(),
+        cursorColor: TclTokens.accent,
+        style: style ?? TclTokens.body15(),
         decoration: InputDecoration(
           isDense: true,
           border: InputBorder.none,
           counterText: '',
           contentPadding: EdgeInsets.zero,
           hintText: hint,
-          hintStyle: (style ?? KittikhunTokens.body15())
-              .copyWith(color: KittikhunTokens.tFaint),
+          hintStyle: (style ?? TclTokens.body15())
+              .copyWith(color: TclTokens.tFaint),
         ),
       );
 }
@@ -300,10 +300,10 @@ class FieldBox extends StatelessWidget {
   const FieldBox({
     super.key,
     required this.child,
-    this.height = KittikhunTokens.hInput,
-    this.radius = KittikhunTokens.rInput,
+    this.height = TclTokens.hInput,
+    this.radius = TclTokens.rInput,
     this.focused = false,
-    this.fill = KittikhunTokens.s085,
+    this.fill = TclTokens.s085,
     this.padding = const EdgeInsets.symmetric(horizontal: 14),
   });
 
@@ -316,13 +316,13 @@ class FieldBox extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => AnimatedContainer(
-        duration: KittikhunTokens.dKeypad,
+        duration: TclTokens.dKeypad,
         height: height,
         padding: padding,
         decoration: BoxDecoration(
           color: fill,
           border: Border.all(
-            color: focused ? KittikhunTokens.accent : KittikhunTokens.b15,
+            color: focused ? TclTokens.accent : TclTokens.b15,
           ),
           borderRadius: BorderRadius.circular(radius),
         ),
@@ -342,9 +342,9 @@ class BrandMark extends StatelessWidget {
         width: size,
         height: size,
         decoration: BoxDecoration(
-          gradient: KittikhunTokens.logoGradient,
+          gradient: TclTokens.logoGradient,
           borderRadius: BorderRadius.circular(radius),
-          boxShadow: size >= 50 ? KittikhunTokens.shLogoTile : null,
+          boxShadow: size >= 50 ? TclTokens.shLogoTile : null,
         ),
         child: CustomPaint(
           painter: _BarcodeMarkPainter(strokeWidth: size >= 50 ? 2 : 2.2),
@@ -359,7 +359,7 @@ class _BarcodeMarkPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final p = Paint()
-      ..color = KittikhunTokens.logoIconStroke
+      ..color = TclTokens.logoIconStroke
       ..strokeWidth = strokeWidth
       ..strokeCap = StrokeCap.round;
     // เส้นแนวตั้ง 5 เส้นที่ x = 4, 8, 11.5, 15.5, 20 ของ viewBox 24 (y 6→18)
@@ -389,8 +389,8 @@ class _Tappable extends StatelessWidget {
         child: InkWell(
           onTap: onTap,
           borderRadius: BorderRadius.circular(radius),
-          highlightColor: KittikhunTokens.t16,
-          splashColor: KittikhunTokens.t12,
+          highlightColor: TclTokens.t16,
+          splashColor: TclTokens.t12,
           child: child,
         ),
       );
@@ -402,7 +402,7 @@ class Tappable extends StatelessWidget {
     super.key,
     required this.child,
     required this.onTap,
-    this.radius = KittikhunTokens.rCard,
+    this.radius = TclTokens.rCard,
   });
 
   final Widget child;
@@ -420,7 +420,7 @@ class StrokeIcon extends StatelessWidget {
     super.key,
     required this.painter,
     required this.size,
-    this.color = KittikhunTokens.tBody,
+    this.color = TclTokens.tBody,
   });
 
   final CustomPainter painter;

@@ -1,7 +1,7 @@
-# สถาปัตยกรรมระบบ — KITTIKHUN Mobile Stock Check
+# สถาปัตยกรรมระบบ — TCL Mobile Stock Check
 
 > **สถานะ:** ออกแบบเสร็จสมบูรณ์ ผ่านการตรวจสอบเชิงปฏิปักษ์ (adversarial verification) 3 มุมมองแล้ว — พร้อมสำหรับการทำแผน implement
-> **Design ต้นแบบ:** `Mobile Stock Check System/Stock Scan Mobile.dc.html` (KITTIKHUN v4.0) — ดูสัญญาความตรงกับ design ที่ [`design-fidelity.md`](design-fidelity.md)
+> **Design ต้นแบบ:** `Mobile Stock Check System/Stock Scan Mobile.dc.html` (TCL v4.0) — ดูสัญญาความตรงกับ design ที่ [`design-fidelity.md`](design-fidelity.md)
 > **ERP:** on-premise ภายในองค์กร — **DB เป็น Microsoft SQL Server (ยืนยัน 17 ส.ค. 2569)** เชื่อมแบบอ่านอย่างเดียวด้วย driver `sql` (dialect `mssql`) โดยใช้ script ดึง Inventory ที่เจ้าของโปรเจคส่งมอบเป็น query contract — คอนฟิกด้วย `.env` ทั้งหมด ดู [`erp-integration.md`](erp-integration.md)
 
 ---

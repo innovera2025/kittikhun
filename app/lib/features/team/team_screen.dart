@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../core/theme/kittikhun_tokens.dart';
+import '../../core/theme/tcl_tokens.dart';
 import '../../core/widgets/common.dart';
 import '../../data/models.dart';
 import '../../state/app_state.dart';
 
 /// design: ปุ่มแถวล่างของแท็บสมาชิกเป็น 15px (เท่าปุ่มรอง) ไม่ใช่ 16px ของ CTA หลัก
-final double _teamCtaFontSize = KittikhunTokens.ctaSecondary().fontSize!;
+final double _teamCtaFontSize = TclTokens.ctaSecondary().fontSize!;
 
 /// ด้านของ avatar สมาชิก (44×44 ตาม design — ไม่ใช่ความสูง control ตัวใด)
 const double _avatarSize = 44;
@@ -26,23 +26,23 @@ typedef _RoleTone = ({Color pillBg, Color fg, Color border, Color avatarBg});
 
 _RoleTone _toneOfRole(Role role) => switch (role) {
   Role.admin => (
-    pillBg: KittikhunTokens.t18,
-    fg: KittikhunTokens.accentHover,
-    border: KittikhunTokens.t45,
-    avatarBg: KittikhunTokens.t18,
+    pillBg: TclTokens.t18,
+    fg: TclTokens.accentHover,
+    border: TclTokens.t45,
+    avatarBg: TclTokens.t18,
   ),
   Role.staff => (
-    pillBg: KittikhunTokens.okTint16,
-    fg: KittikhunTokens.staffFg,
-    border: KittikhunTokens.okTint40,
-    avatarBg: KittikhunTokens.okTint16,
+    pillBg: TclTokens.okTint16,
+    fg: TclTokens.staffFg,
+    border: TclTokens.okTint40,
+    avatarBg: TclTokens.okTint16,
   ),
   // viewer: พื้น avatar (.11) เข้มกว่าพื้น pill (.10) เล็กน้อยตาม design
   Role.viewer => (
-    pillBg: KittikhunTokens.s10,
-    fg: KittikhunTokens.tMuted,
-    border: KittikhunTokens.b18,
-    avatarBg: KittikhunTokens.s11,
+    pillBg: TclTokens.s10,
+    fg: TclTokens.tMuted,
+    border: TclTokens.b18,
+    avatarBg: TclTokens.s11,
   ),
 };
 
@@ -62,9 +62,9 @@ class TeamScreen extends ConsumerWidget {
         Expanded(
           child: ListView.separated(
             padding: const EdgeInsets.fromLTRB(
-              KittikhunTokens.gutterTab,
+              TclTokens.gutterTab,
               0,
-              KittikhunTokens.gutterTab,
+              TclTokens.gutterTab,
               8,
             ),
             // รายการสุดท้ายคือ hint ที่อยู่ในพื้นที่เลื่อนเดียวกันตาม design
@@ -83,9 +83,9 @@ class TeamScreen extends ConsumerWidget {
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(
-            KittikhunTokens.gutterTab,
+            TclTokens.gutterTab,
             12,
-            KittikhunTokens.gutterTab,
+            TclTokens.gutterTab,
             14,
           ),
           child: Row(
@@ -93,9 +93,9 @@ class TeamScreen extends ConsumerWidget {
               Expanded(
                 child: PrimaryButton(
                   label: 'เพิ่มสมาชิก',
-                  height: KittikhunTokens.hTeamAction,
-                  radius: KittikhunTokens.rTeamAction,
-                  shadow: KittikhunTokens.shTeamAddBtn,
+                  height: TclTokens.hTeamAction,
+                  radius: TclTokens.rTeamAction,
+                  shadow: TclTokens.shTeamAddBtn,
                   fontSize: _teamCtaFontSize,
                   onPressed: controller.openAddSheet,
                 ),
@@ -103,8 +103,8 @@ class TeamScreen extends ConsumerWidget {
               const SizedBox(width: _listGap),
               SecondaryButton(
                 label: 'ออกจากระบบ',
-                height: KittikhunTokens.hTeamAction,
-                radius: KittikhunTokens.rTeamAction,
+                height: TclTokens.hTeamAction,
+                radius: TclTokens.rTeamAction,
                 minWidth: _signOutMinWidth,
                 onPressed: controller.signOut,
               ),
@@ -128,9 +128,9 @@ class _MemberCard extends StatelessWidget {
     final tone = _toneOfRole(member.role);
 
     return GradientCard(
-      gradient: KittikhunTokens.listCardBg,
-      radius: KittikhunTokens.rCard,
-      border: KittikhunTokens.b11,
+      gradient: TclTokens.listCardBg,
+      radius: TclTokens.rCard,
+      border: TclTokens.b11,
       // design ไม่ใส่เงาให้การ์ดสมาชิก (ต่างจากการ์ดค้นหา/นับ)
       shadow: const [],
       padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 14),
@@ -142,11 +142,11 @@ class _MemberCard extends StatelessWidget {
             alignment: Alignment.center,
             decoration: BoxDecoration(
               color: tone.avatarBg,
-              borderRadius: BorderRadius.circular(KittikhunTokens.rAvatar),
+              borderRadius: BorderRadius.circular(TclTokens.rAvatar),
             ),
             child: Text(
               member.initials,
-              style: KittikhunTokens.display(
+              style: TclTokens.display(
                 size: 15,
                 weight: FontWeight.w600,
                 color: tone.fg,
@@ -160,14 +160,14 @@ class _MemberCard extends StatelessWidget {
               children: [
                 Text(
                   member.name,
-                  style: KittikhunTokens.itemName(),
+                  style: TclTokens.itemName(),
                   // กันชื่อยาวล้นการ์ด: ตัดที่ 2 บรรทัด
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                 ),
                 Text(
                   '${member.empId} · ${member.shift}',
-                  style: KittikhunTokens.meta(),
+                  style: TclTokens.meta(),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -182,7 +182,7 @@ class _MemberCard extends StatelessWidget {
               label: member.role.label,
               background: tone.pillBg,
               border: tone.border,
-              style: KittikhunTokens.rolePill(tone.fg),
+              style: TclTokens.rolePill(tone.fg),
               padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 7),
               onTap: onCycleRole,
             ),
@@ -202,7 +202,7 @@ class _RoleHint extends StatelessWidget {
     padding: const EdgeInsets.only(top: 6, left: 4, right: 4),
     child: Text(
       'แตะที่สิทธิ์เพื่อสลับ admin / staff / viewer (เฉพาะผู้ดูแล)',
-      style: KittikhunTokens.meta().copyWith(height: 1.6),
+      style: TclTokens.meta().copyWith(height: 1.6),
     ),
   );
 }

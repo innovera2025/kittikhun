@@ -1,9 +1,9 @@
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:kittikhun_stock/data/fixtures.dart';
-import 'package:kittikhun_stock/data/stock_repository.dart';
-import 'package:kittikhun_stock/features/shell/app_shell.dart';
-import 'package:kittikhun_stock/state/app_state.dart';
+import 'package:tcl_stock/data/fixtures.dart';
+import 'package:tcl_stock/data/stock_repository.dart';
+import 'package:tcl_stock/features/shell/app_shell.dart';
+import 'package:tcl_stock/state/app_state.dart';
 
 /// หัวจอเคยอ่านจาก `Fixtures.heads` ตรง ๆ ซึ่งฝัง 'WH-BKK-02' และ 'CC-2408'
 /// ไว้ตายตัว → แอปที่ต่อคลัง WHFG จริงยังขึ้นชื่อคลังตัวอย่าง

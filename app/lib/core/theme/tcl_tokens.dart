@@ -1,14 +1,14 @@
 import 'package:flutter/material.dart';
 
-/// Design token ทั้งหมดของ KITTIKHUN v4.0
+/// Design token ทั้งหมดของ TCL v4.0
 ///
 /// สกัดจาก `Mobile Stock Check System/Stock Scan Mobile.dc.html` (ไฟล์ต้นแบบ)
 /// **ห้าม widget ใดฮาร์ดโค้ดสี / รัศมี / เงา / ขนาดฟอนต์** — ต้องอ่านจากที่นี่เท่านั้น
 ///
 /// ดูสัญญาความตรงกับ design ที่ `docs/design-fidelity.md`
 @immutable
-class KittikhunTokens extends ThemeExtension<KittikhunTokens> {
-  const KittikhunTokens();
+class TclTokens extends ThemeExtension<TclTokens> {
+  const TclTokens();
 
   // ══════════════════════════════════════════════════════════════════
   // สีพื้นและพื้นผิว
@@ -217,7 +217,7 @@ class KittikhunTokens extends ThemeExtension<KittikhunTokens> {
   static TextStyle qtyLarge(Color c) =>
       display(size: 24, weight: FontWeight.w700, color: c, height: 1.0);
 
-  /// แบรนด์ KITTIKHUN 24/700 ls.02em
+  /// แบรนด์ TCL 24/700 ls.02em
   static TextStyle brand() =>
       display(size: 24, weight: FontWeight.w700, color: tBrightest, letterSpacing: 0.48);
 
@@ -454,10 +454,10 @@ class KittikhunTokens extends ThemeExtension<KittikhunTokens> {
   // ══════════════════════════════════════════════════════════════════
 
   @override
-  KittikhunTokens copyWith() => const KittikhunTokens();
+  TclTokens copyWith() => const TclTokens();
 
   @override
-  KittikhunTokens lerp(ThemeExtension<KittikhunTokens>? other, double t) => this;
+  TclTokens lerp(ThemeExtension<TclTokens>? other, double t) => this;
 }
 
 /// สถานะสต็อกของรายการ (ขับสีและข้อความตาม design)

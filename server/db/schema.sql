@@ -1,5 +1,5 @@
 -- =============================================================================
--- KITTIKHUN Mobile Stock Check — PostgreSQL 16 schema (system of record ของเรา)
+-- TCL Mobile Stock Check — PostgreSQL 16 schema (system of record ของเรา)
 -- =============================================================================
 -- อ้างอิง: docs/architecture.md §4.1 · docs/erp-integration.md §5 · docs/erp-tcl-findings.md
 --
@@ -598,7 +598,7 @@ DO $do$
 DECLARE
   app_role text;
 BEGIN
-  FOREACH app_role IN ARRAY ARRAY['stock_app', 'kittikhun_app'] LOOP
+  FOREACH app_role IN ARRAY ARRAY['stock_app', 'tcl_app'] LOOP
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = app_role) THEN
       EXECUTE format('REVOKE UPDATE, DELETE, TRUNCATE ON count_submissions, audit_log FROM %I', app_role);
       EXECUTE format('GRANT SELECT, INSERT ON count_submissions, audit_log TO %I', app_role);

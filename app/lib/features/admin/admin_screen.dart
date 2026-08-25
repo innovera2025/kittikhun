@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
-import '../../core/theme/kittikhun_tokens.dart';
+import '../../core/theme/tcl_tokens.dart';
 import '../../core/widgets/common.dart';
 import '../../data/api_client.dart';
 import '../../data/stock_repository.dart';
@@ -115,9 +115,9 @@ class AdminScreen extends ConsumerWidget {
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(
-            KittikhunTokens.gutterTab,
+            TclTokens.gutterTab,
             0,
-            KittikhunTokens.gutterTab,
+            TclTokens.gutterTab,
             12,
           ),
           child: _ViewSwitch(
@@ -148,9 +148,9 @@ class _ViewSwitch extends StatelessWidget {
   Widget build(BuildContext context) => Container(
         padding: const EdgeInsets.all(4),
         decoration: BoxDecoration(
-          color: KittikhunTokens.s09,
-          border: Border.all(color: KittikhunTokens.b13),
-          borderRadius: BorderRadius.circular(KittikhunTokens.rTabBar),
+          color: TclTokens.s09,
+          border: Border.all(color: TclTokens.b13),
+          borderRadius: BorderRadius.circular(TclTokens.rTabBar),
         ),
         child: Row(
           children: [
@@ -186,22 +186,22 @@ class _ViewButton extends StatelessWidget {
         selected: active,
         child: InkWell(
           onTap: onTap,
-          borderRadius: BorderRadius.circular(KittikhunTokens.rTabButton),
+          borderRadius: BorderRadius.circular(TclTokens.rTabButton),
           child: Container(
             height: 38,
             alignment: Alignment.center,
             decoration: BoxDecoration(
-              gradient: active ? KittikhunTokens.activeTabGradient : null,
-              borderRadius: BorderRadius.circular(KittikhunTokens.rTabButton),
+              gradient: active ? TclTokens.activeTabGradient : null,
+              borderRadius: BorderRadius.circular(TclTokens.rTabButton),
             ),
             child: Text(
               label,
-              style: KittikhunTokens.thai(
+              style: TclTokens.thai(
                 size: 13,
                 weight: FontWeight.w600,
                 color: active
-                    ? KittikhunTokens.onAccent
-                    : KittikhunTokens.tMuted,
+                    ? TclTokens.onAccent
+                    : TclTokens.tMuted,
               ),
             ),
           ),
@@ -279,10 +279,10 @@ class _SessionPaneState extends ConsumerState<_SessionPane> {
       ),
       data: (active) => ListView(
         padding: const EdgeInsets.fromLTRB(
-          KittikhunTokens.gutterTab,
+          TclTokens.gutterTab,
           0,
-          KittikhunTokens.gutterTab,
-          KittikhunTokens.gutterTab,
+          TclTokens.gutterTab,
+          TclTokens.gutterTab,
         ),
         children: active == null
             ? _openForm()
@@ -293,24 +293,24 @@ class _SessionPaneState extends ConsumerState<_SessionPane> {
 
   List<Widget> _openForm() => [
         GlassCard(
-          radius: KittikhunTokens.rCard,
-          fill: KittikhunTokens.s075,
-          border: KittikhunTokens.b11,
+          radius: TclTokens.rCard,
+          fill: TclTokens.s075,
+          border: TclTokens.b11,
           padding: const EdgeInsets.all(16),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Text('ยังไม่มีรอบตรวจนับ',
-                  style: KittikhunTokens.itemName()),
+                  style: TclTokens.itemName()),
               const SizedBox(height: 6),
               Text(
                 'เปิดรอบใหม่จะ freeze ยอดระบบของทุกสินค้าในคลัง ณ ตอนนี้ '
                 'ตัวเลขที่ freeze จะไม่เปลี่ยนอีกแม้ ERP อัปเดตระหว่างรอบ',
-                style: KittikhunTokens.caption(),
+                style: TclTokens.caption(),
               ),
               const SizedBox(height: 16),
               Text('โซน (ไม่ระบุ = ทั้งคลัง)',
-                  style: KittikhunTokens.label()),
+                  style: TclTokens.label()),
               const SizedBox(height: 6),
               FieldBox(
                 child: TokenTextField(
@@ -346,9 +346,9 @@ class _SessionPaneState extends ConsumerState<_SessionPane> {
 
     return [
       GlassCard(
-        radius: KittikhunTokens.rCard,
-        fill: KittikhunTokens.s075,
-        border: KittikhunTokens.b11,
+        radius: TclTokens.rCard,
+        fill: TclTokens.s075,
+        border: TclTokens.b11,
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -358,16 +358,16 @@ class _SessionPaneState extends ConsumerState<_SessionPane> {
                 Expanded(
                   child: Text(
                     active.voucherNo ?? active.id,
-                    style: KittikhunTokens.itemName(),
+                    style: TclTokens.itemName(),
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
                 const SizedBox(width: 12),
                 Pill(
                   label: 'เปิดอยู่',
-                  background: KittikhunTokens.okTint16,
-                  style: KittikhunTokens.rolePill(KittikhunTokens.ok),
-                  border: KittikhunTokens.okTint40,
+                  background: TclTokens.okTint16,
+                  style: TclTokens.rolePill(TclTokens.ok),
+                  border: TclTokens.okTint40,
                 ),
               ],
             ),
@@ -378,7 +378,7 @@ class _SessionPaneState extends ConsumerState<_SessionPane> {
                 'คลัง ${active.warehouseCode}',
                 '${active.rows.length} รายการ',
               ].join(' · '),
-              style: KittikhunTokens.caption(),
+              style: TclTokens.caption(),
             ),
             if (active.staleCache) ...[
               const SizedBox(height: 10),
@@ -397,7 +397,7 @@ class _SessionPaneState extends ConsumerState<_SessionPane> {
               Text(
                 'ปิดรอบแล้วตัวเลขจะถูกแช่แข็ง แก้ย้อนหลังไม่ได้ '
                 'ผลนับที่ส่งมาหลังจากนี้จะเข้าจอค้างตรวจแทน',
-                style: KittikhunTokens.caption(),
+                style: TclTokens.caption(),
               ),
             const SizedBox(height: 16),
             PrimaryButton(
@@ -437,10 +437,10 @@ class _ConflictsPane extends ConsumerWidget {
         }
         return ListView.separated(
           padding: const EdgeInsets.fromLTRB(
-            KittikhunTokens.gutterTab,
+            TclTokens.gutterTab,
             0,
-            KittikhunTokens.gutterTab,
-            KittikhunTokens.gutterTab,
+            TclTokens.gutterTab,
+            TclTokens.gutterTab,
           ),
           itemCount: rows.length,
           separatorBuilder: (_, _) => const SizedBox(height: _listGap),
@@ -497,9 +497,9 @@ class _ConflictCardState extends ConsumerState<_ConflictCard> {
     final frozen = row.frozenOnHand;
 
     return GradientCard(
-      gradient: KittikhunTokens.listCardBg,
-      border: KittikhunTokens.b11,
-      radius: KittikhunTokens.rCard,
+      gradient: TclTokens.listCardBg,
+      border: TclTokens.b11,
+      radius: TclTokens.rCard,
       padding: const EdgeInsets.all(14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -509,7 +509,7 @@ class _ConflictCardState extends ConsumerState<_ConflictCard> {
               Expanded(
                 child: Text(
                   row.name ?? row.sku,
-                  style: KittikhunTokens.itemName(),
+                  style: TclTokens.itemName(),
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
@@ -517,16 +517,16 @@ class _ConflictCardState extends ConsumerState<_ConflictCard> {
               Pill(
                 label: row.resolved ? 'ตัดสินแล้ว' : '${row.deviceCount} เครื่อง',
                 background: row.resolved
-                    ? KittikhunTokens.okTint16
-                    : KittikhunTokens.warnTint14,
-                style: KittikhunTokens.rolePill(
-                  row.resolved ? KittikhunTokens.ok : KittikhunTokens.warn,
+                    ? TclTokens.okTint16
+                    : TclTokens.warnTint14,
+                style: TclTokens.rolePill(
+                  row.resolved ? TclTokens.ok : TclTokens.warn,
                 ),
               ),
             ],
           ),
           const SizedBox(height: 2),
-          Text(row.sku, style: KittikhunTokens.skuLine()),
+          Text(row.sku, style: TclTokens.skuLine()),
           const SizedBox(height: 8),
           Text(
             frozen == null
@@ -534,7 +534,7 @@ class _ConflictCardState extends ConsumerState<_ConflictCard> {
                 ? 'นอกรายการ · ไม่มียอดระบบให้เทียบ'
                 : 'ยอดระบบ ${_qtyFormat.format(frozen)}'
                     '${row.unit == null ? '' : ' ${row.unit}'}',
-            style: KittikhunTokens.caption(KittikhunTokens.tSoft),
+            style: TclTokens.caption(TclTokens.tSoft),
           ),
           const SizedBox(height: 12),
           for (final s in row.submissions) ...[
@@ -549,14 +549,14 @@ class _ConflictCardState extends ConsumerState<_ConflictCard> {
           if (row.resolved && row.resolvedBy != null)
             Text(
               'ตัดสินโดย ${row.resolvedBy} · เลือกใหม่ได้จนกว่าจะปิดรอบ',
-              style: KittikhunTokens.meta(),
+              style: TclTokens.meta(),
             )
           else
             Text(
               // เตือนไม่ให้เผลอเชื่อ "ตัวที่มาถึงก่อน/หลัง"
               'เวลาที่แสดงคือเวลาที่เครื่องบอก — ใช้ประกอบเท่านั้น '
               'ไม่ใช่หลักฐานว่านับก่อนหรือหลัง',
-              style: KittikhunTokens.meta(),
+              style: TclTokens.meta(),
             ),
         ],
       ),
@@ -585,15 +585,15 @@ class _SubmissionOption extends StatelessWidget {
       selected: chosen,
       child: InkWell(
         onTap: enabled ? onTap : null,
-        borderRadius: BorderRadius.circular(KittikhunTokens.rInput),
+        borderRadius: BorderRadius.circular(TclTokens.rInput),
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           decoration: BoxDecoration(
-            color: chosen ? KittikhunTokens.t16 : KittikhunTokens.s085,
+            color: chosen ? TclTokens.t16 : TclTokens.s085,
             border: Border.all(
-              color: chosen ? KittikhunTokens.t45 : KittikhunTokens.b15,
+              color: chosen ? TclTokens.t45 : TclTokens.b15,
             ),
-            borderRadius: BorderRadius.circular(KittikhunTokens.rInput),
+            borderRadius: BorderRadius.circular(TclTokens.rInput),
           ),
           child: Row(
             children: [
@@ -603,10 +603,10 @@ class _SubmissionOption extends StatelessWidget {
                   children: [
                     Text(
                       'นับได้ ${_qtyFormat.format(submission.countedQty)}',
-                      style: KittikhunTokens.statValue(
+                      style: TclTokens.statValue(
                         chosen
-                            ? KittikhunTokens.accentHover
-                            : KittikhunTokens.tBrightest,
+                            ? TclTokens.accentHover
+                            : TclTokens.tBrightest,
                       ),
                     ),
                     const SizedBox(height: 2),
@@ -616,7 +616,7 @@ class _SubmissionOption extends StatelessWidget {
                         if (at != null) 'เวลา ${_hhmm(at)}',
                         if (submission.isLatest) 'ค่าที่ระบบใช้อยู่',
                       ].join(' · '),
-                      style: KittikhunTokens.meta(),
+                      style: TclTokens.meta(),
                     ),
                   ],
                 ),
@@ -625,7 +625,7 @@ class _SubmissionOption extends StatelessWidget {
                 const Icon(
                   Icons.check_rounded,
                   size: 18,
-                  color: KittikhunTokens.accent,
+                  color: TclTokens.accent,
                 ),
             ],
           ),
@@ -663,17 +663,17 @@ class _VariancePane extends ConsumerWidget {
           children: [
             Padding(
               padding: const EdgeInsets.symmetric(
-                horizontal: KittikhunTokens.gutterTab,
+                horizontal: TclTokens.gutterTab,
               ),
               child: _VarianceSummary(rows: rows),
             ),
             Expanded(
               child: ListView.separated(
                 padding: const EdgeInsets.fromLTRB(
-                  KittikhunTokens.gutterTab,
+                  TclTokens.gutterTab,
                   12,
-                  KittikhunTokens.gutterTab,
-                  KittikhunTokens.gutterTab,
+                  TclTokens.gutterTab,
+                  TclTokens.gutterTab,
                 ),
                 itemCount: rows.length,
                 separatorBuilder: (_, _) => const SizedBox(height: _listGap),
@@ -706,22 +706,22 @@ class _VarianceSummary extends StatelessWidget {
     final conflict = rows.where((r) => r.isConflict).length;
 
     return GlassCard(
-      radius: KittikhunTokens.rCard,
-      fill: KittikhunTokens.s075,
-      border: KittikhunTokens.b11,
+      radius: TclTokens.rCard,
+      fill: TclTokens.s075,
+      border: TclTokens.b11,
       padding: const EdgeInsets.all(14),
       child: Wrap(
         spacing: 8,
         runSpacing: 8,
         children: [
-          _Tally('ตรงกับระบบ', match, KittikhunTokens.ok),
-          if (over > 0) _Tally('เกิน', over, KittikhunTokens.warn),
-          if (short > 0) _Tally('ขาด', short, KittikhunTokens.warn),
+          _Tally('ตรงกับระบบ', match, TclTokens.ok),
+          if (over > 0) _Tally('เกิน', over, TclTokens.warn),
+          if (short > 0) _Tally('ขาด', short, TclTokens.warn),
           // ยังไม่ได้นับ ≠ นับได้ 0 — แยกให้เห็นชัดเสมอ แม้เป็น 0 รายการ
-          _Tally('ยังไม่ได้นับ', notCounted, KittikhunTokens.tMuted),
+          _Tally('ยังไม่ได้นับ', notCounted, TclTokens.tMuted),
           if (offList > 0)
-            _Tally('นอกรายการ', offList, KittikhunTokens.accent),
-          if (conflict > 0) _Tally('ขัดแย้ง', conflict, KittikhunTokens.bad),
+            _Tally('นอกรายการ', offList, TclTokens.accent),
+          if (conflict > 0) _Tally('ขัดแย้ง', conflict, TclTokens.bad),
         ],
       ),
     );
@@ -739,16 +739,16 @@ class _Tally extends StatelessWidget {
   Widget build(BuildContext context) => Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
-          color: KittikhunTokens.s07,
-          border: Border.all(color: KittikhunTokens.b10),
-          borderRadius: BorderRadius.circular(KittikhunTokens.rTeamAction),
+          color: TclTokens.s07,
+          border: Border.all(color: TclTokens.b10),
+          borderRadius: BorderRadius.circular(TclTokens.rTeamAction),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text('$count', style: KittikhunTokens.statValue(color)),
+            Text('$count', style: TclTokens.statValue(color)),
             const SizedBox(width: 6),
-            Text(label, style: KittikhunTokens.meta()),
+            Text(label, style: TclTokens.meta()),
           ],
         ),
       );
@@ -760,12 +760,12 @@ class _VarianceCard extends StatelessWidget {
   final VarianceRow row;
 
   Color get _statusColor => switch (row.status) {
-        VarianceRow.statusMatch => KittikhunTokens.ok,
+        VarianceRow.statusMatch => TclTokens.ok,
         VarianceRow.statusOver || VarianceRow.statusShort =>
-          KittikhunTokens.warn,
-        VarianceRow.statusConflict => KittikhunTokens.bad,
-        VarianceRow.statusOffList => KittikhunTokens.accent,
-        _ => KittikhunTokens.tMuted,
+          TclTokens.warn,
+        VarianceRow.statusConflict => TclTokens.bad,
+        VarianceRow.statusOffList => TclTokens.accent,
+        _ => TclTokens.tMuted,
       };
 
   /// '—' ไม่ใช่ '0' — null แปลว่ายังเทียบไม่ได้ ไม่ใช่เท่ากับศูนย์
@@ -773,9 +773,9 @@ class _VarianceCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => GradientCard(
-        gradient: KittikhunTokens.listCardBg,
-        border: KittikhunTokens.b11,
-        radius: KittikhunTokens.rCard,
+        gradient: TclTokens.listCardBg,
+        border: TclTokens.b11,
+        radius: TclTokens.rCard,
         padding: const EdgeInsets.all(14),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -785,16 +785,16 @@ class _VarianceCard extends StatelessWidget {
                 Expanded(
                   child: Text(
                     row.sku,
-                    style: KittikhunTokens.itemName(),
+                    style: TclTokens.itemName(),
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
                 const SizedBox(width: 10),
                 Pill(
                   label: row.statusLabelTh,
-                  background: KittikhunTokens.s07,
-                  style: KittikhunTokens.rolePill(_statusColor),
-                  border: KittikhunTokens.b10,
+                  background: TclTokens.s07,
+                  style: TclTokens.rolePill(_statusColor),
+                  border: TclTokens.b10,
                 ),
               ],
             ),
@@ -808,7 +808,7 @@ class _VarianceCard extends StatelessWidget {
             ),
             if (row.countedBy != null) ...[
               const SizedBox(height: 8),
-              Text('ผู้นับ ${row.countedBy}', style: KittikhunTokens.meta()),
+              Text('ผู้นับ ${row.countedBy}', style: TclTokens.meta()),
             ],
           ],
         ),
@@ -827,12 +827,12 @@ class _Cell extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(label, style: KittikhunTokens.meta()),
+            Text(label, style: TclTokens.meta()),
             const SizedBox(height: 2),
             Text(
               value,
-              style: KittikhunTokens.statValue(
-                color ?? KittikhunTokens.tBrightest,
+              style: TclTokens.statValue(
+                color ?? TclTokens.tBrightest,
               ),
             ),
           ],
@@ -853,12 +853,12 @@ class _WarnNote extends StatelessWidget {
   Widget build(BuildContext context) => Container(
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          color: KittikhunTokens.warnTint14,
-          borderRadius: BorderRadius.circular(KittikhunTokens.rInput),
+          color: TclTokens.warnTint14,
+          borderRadius: BorderRadius.circular(TclTokens.rInput),
         ),
         child: Text(
           text,
-          style: KittikhunTokens.body13(KittikhunTokens.tSoftAlt),
+          style: TclTokens.body13(TclTokens.tSoftAlt),
         ),
       );
 }
@@ -873,7 +873,7 @@ class _Spinner extends StatelessWidget {
           height: _spinnerSize,
           child: CircularProgressIndicator(
             strokeWidth: _spinnerStroke,
-            color: KittikhunTokens.accent,
+            color: TclTokens.accent,
           ),
         ),
       );
@@ -895,13 +895,13 @@ class _CenterNote extends StatelessWidget {
               Text(
                 title,
                 textAlign: TextAlign.center,
-                style: KittikhunTokens.itemName(),
+                style: TclTokens.itemName(),
               ),
               const SizedBox(height: 6),
               Text(
                 subtitle,
                 textAlign: TextAlign.center,
-                style: KittikhunTokens.caption(),
+                style: TclTokens.caption(),
               ),
             ],
           ),

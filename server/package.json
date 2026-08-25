@@ -1,7 +1,7 @@
 {
-  "name": "kittikhun-stock-api",
+  "name": "tcl-stock-api",
   "version": "4.0.0",
-  "description": "KITTIKHUN Mobile Stock Check — backend API (NestJS 11 + Fastify, ERP read-only)",
+  "description": "TCL Mobile Stock Check — backend API (NestJS 11 + Fastify, ERP read-only)",
   "private": true,
   "license": "UNLICENSED",
   "engines": {

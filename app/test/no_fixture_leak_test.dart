@@ -1,9 +1,9 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:kittikhun_stock/data/api_client.dart';
-import 'package:kittikhun_stock/data/fixtures.dart';
-import 'package:kittikhun_stock/state/app_state.dart';
+import 'package:tcl_stock/data/api_client.dart';
+import 'package:tcl_stock/data/fixtures.dart';
+import 'package:tcl_stock/state/app_state.dart';
 
 /// กฎ: ต่อ backend จริงแล้ว **ห้าม** มีข้อมูลตัวอย่างหลุดขึ้นจอ
 ///

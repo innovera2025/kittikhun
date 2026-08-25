@@ -1,9 +1,9 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:kittikhun_stock/data/fixtures.dart';
-import 'package:kittikhun_stock/data/models.dart';
-import 'package:kittikhun_stock/state/app_state.dart';
+import 'package:tcl_stock/data/fixtures.dart';
+import 'package:tcl_stock/data/models.dart';
+import 'package:tcl_stock/state/app_state.dart';
 
 /// การ์ดสแกนเคยค้นสินค้าจาก `Fixtures.items` ตรง ๆ → รหัสจริงจาก ERP
 /// (เช่น 2010201) ไม่มีในข้อมูลตัวอย่าง การ์ดจึงคืนกล่องเปล่า

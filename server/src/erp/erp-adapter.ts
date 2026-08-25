@@ -1,5 +1,5 @@
 /**
- * สัญญา ERP Adapter — KITTIKHUN Mobile Stock Check
+ * สัญญา ERP Adapter — TCL Mobile Stock Check
  *
  * 🚫 กฎเหล็กของโปรเจค: ERP (`db_TCL` บน SQL Server 2019) เป็นแหล่ง **อ่านอย่างเดียว**
  *    ไม่มีการเขียนข้อมูลกลับ ERP ทุกกรณี ไม่มีข้อยกเว้น (คำสั่งเจ้าของโปรเจค 17 ส.ค. 2569)

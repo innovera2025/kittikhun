@@ -1,9 +1,9 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:kittikhun_stock/data/models.dart';
-import 'package:kittikhun_stock/main.dart';
-import 'package:kittikhun_stock/state/app_state.dart';
+import 'package:tcl_stock/data/models.dart';
+import 'package:tcl_stock/main.dart';
+import 'package:tcl_stock/state/app_state.dart';
 
 void main() {
   group('Variance — ข้อความส่วนต่างต้องตรงตัวอักษรกับ design', () {
@@ -200,11 +200,11 @@ void main() {
     });
   });
 
-  testWidgets('แอปเปิดขึ้นมาที่หน้า Login และแสดงแบรนด์ KITTIKHUN',
+  testWidgets('แอปเปิดขึ้นมาที่หน้า Login และแสดงแบรนด์ TCL',
       (tester) async {
-    await tester.pumpWidget(const ProviderScope(child: KittikhunApp()));
+    await tester.pumpWidget(const ProviderScope(child: TclApp()));
     await tester.pump();
-    expect(find.text('KITTIKHUN'), findsOneWidget);
+    expect(find.text('TCL'), findsOneWidget);
     expect(find.text('เข้าสู่ระบบ'), findsWidgets);
   });
 }

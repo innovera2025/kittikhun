@@ -2,7 +2,7 @@
  * จำลองการใช้งานจริงหนึ่งวันนับสต็อก — ยิงผ่าน HTTP เหมือนมือถือจริงทุกคำขอ
  *
  *   npx ts-node scripts/simulate.ts [baseUrl] [--keep]
- *   npx ts-node scripts/simulate.ts https://kittikhun.krs.co.th
+ *   npx ts-node scripts/simulate.ts https://tcl.krs.co.th
  *
  * ทำไมต้องมี: unit test พิสูจน์ทีละชิ้น แต่ของที่พังจริงในคลังคือ **จังหวะที่ชนกัน**
  * — เครื่องออฟไลน์แล้วเทคิวพร้อมกัน · admin ปิดรอบตอนพนักงานยังส่งอยู่ ·

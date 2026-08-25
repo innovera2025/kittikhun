@@ -20,7 +20,7 @@
 #
 #   เคสจริงที่เจอ (24 ส.ค. 2569):
 #     to 172.18.0.12:8080   ← proxy-network      เข้าถึงได้
-#     to 172.20.0.4:8080    ← kittikhun_default  เข้าไม่ถึง → 502
+#     to 172.20.0.4:8080    ← tcl_default  เข้าไม่ถึง → 502
 #
 #   ห้ามเพิ่ม network ให้ api อีกเด็ดขาด ไม่ว่าจะด้วยเหตุผลใด
 # ─────────────────────────────────────────────────────────────────────────────
@@ -38,7 +38,7 @@ services:
     labels:
       # ตรวจรูปแบบ label ให้ตรงกับที่ caddy-gen ในเครื่องนี้ใช้จริง:
       #   docker inspect qtso-app --format '{{json .Config.Labels}}'
-      virtual.host: "${PUBLIC_HOST:?ต้องตั้ง PUBLIC_HOST เช่น kittikhun.krs.co.th}"
+      virtual.host: "${PUBLIC_HOST:?ต้องตั้ง PUBLIC_HOST เช่น tcl.krs.co.th}"
       virtual.port: "8080"
       virtual.tls-email: "${TLS_EMAIL:?ต้องตั้ง TLS_EMAIL สำหรับ Let's Encrypt}"
 
@@ -49,9 +49,9 @@ services:
         #    อาจชนกับ postgres ของโปรเจคอื่นที่อยู่ network เดียวกัน แล้วแอปจะไปต่อ
         #    ฐานข้อมูลผิดตัวโดยไม่มีอะไรฟ้อง (ผลนับเข้าผิด DB = หายนะ)
         #    → ใช้ชื่อเฉพาะ แล้วให้ DATABASE_URL ชี้มาที่ชื่อนี้:
-        #      DATABASE_URL=postgres://stock:<รหัส>@kittikhun-db:5432/kittikhun
+        #      DATABASE_URL=postgres://stock:<รหัส>@tcl-db:5432/tcl
         aliases:
-          - kittikhun-db
+          - tcl-db
     # postgres ไม่มี label virtual.* → caddy-gen มองไม่เห็น ไม่มีทางเข้าจากภายนอก
     # และไม่ publish พอร์ตออก host (ตาม docker-compose.yml หลัก)
 

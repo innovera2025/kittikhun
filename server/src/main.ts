@@ -33,7 +33,7 @@ async function bootstrap() {
 
   await app.listen({ port: config.APP_PORT, host: '0.0.0.0' });
   logger.log(
-    `KITTIKHUN Stock API พร้อมใช้งานที่พอร์ต ${config.APP_PORT} · คลัง ${config.WAREHOUSE_CODE} · ERP driver: ${config.ERP_DRIVER}`,
+    `TCL Stock API พร้อมใช้งานที่พอร์ต ${config.APP_PORT} · คลัง ${config.WAREHOUSE_CODE} · ERP driver: ${config.ERP_DRIVER}`,
   );
   logger.log('โหมด ERP: อ่านอย่างเดียว — ระบบนี้ไม่เขียนข้อมูลกลับ ERP ทุกกรณี');
 }

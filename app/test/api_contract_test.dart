@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:kittikhun_stock/data/api_client.dart';
+import 'package:tcl_stock/data/api_client.dart';
 
 /// ทดสอบสัญญาระหว่างแอปกับ backend ที่รันอยู่จริง — **ข้ามอัตโนมัติถ้าไม่มี server**
 ///

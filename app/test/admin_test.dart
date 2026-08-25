@@ -2,11 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:kittikhun_stock/core/theme/kittikhun_tokens.dart';
-import 'package:kittikhun_stock/data/models.dart';
-import 'package:kittikhun_stock/data/stock_repository.dart';
-import 'package:kittikhun_stock/features/admin/admin_screen.dart';
-import 'package:kittikhun_stock/state/app_state.dart';
+import 'package:tcl_stock/core/theme/tcl_tokens.dart';
+import 'package:tcl_stock/data/models.dart';
+import 'package:tcl_stock/data/stock_repository.dart';
+import 'package:tcl_stock/features/admin/admin_screen.dart';
+import 'package:tcl_stock/state/app_state.dart';
 
 /// เทสต์จอผู้ดูแลรอบนับ
 ///
@@ -77,7 +77,7 @@ ConflictRow _conflict({bool resolved = false}) => ConflictRow(
 Widget _host(Widget child) => ProviderScope(
       child: MaterialApp(
         home: Scaffold(
-          backgroundColor: KittikhunTokens.canvasBg,
+          backgroundColor: TclTokens.canvasBg,
           body: child,
         ),
       ),

@@ -86,7 +86,7 @@ class Fixtures {
   ];
 
   static const List<Member> members = [
-    Member(name: 'Kittikhun S.', empId: '52104', shift: 'กะเช้า · A', role: Role.admin),
+    Member(name: 'Tcl S.', empId: '52104', shift: 'กะเช้า · A', role: Role.admin),
     Member(name: 'ปิยะนุช ศรีทอง', empId: '52210', shift: 'กะเช้า · A', role: Role.staff),
     Member(name: 'ธนากร แสงทวี', empId: '52318', shift: 'กะบ่าย · B', role: Role.staff),
     Member(name: 'Nattaporn K.', empId: '52402', shift: 'สำนักงาน', role: Role.viewer),

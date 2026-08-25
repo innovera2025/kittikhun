@@ -6,7 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
-import '../../core/theme/kittikhun_tokens.dart';
+import '../../core/theme/tcl_tokens.dart';
 import '../../core/widgets/common.dart';
 import '../../data/fixtures.dart';
 import '../../data/models.dart';
@@ -147,7 +147,7 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
     try {
       await scanner.stop();
     } on Object catch (e) {
-      debugPrint('KITTIKHUN: ปิดกล้องไม่สำเร็จ — $e');
+      debugPrint('TCL: ปิดกล้องไม่สำเร็จ — $e');
     }
     await scanner.dispose();
   }
@@ -172,7 +172,7 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
       if (!mounted) return;
       _reportCameraFailure(e.errorCode);
     } on Object catch (e) {
-      debugPrint('KITTIKHUN: เปิดกล้องไม่สำเร็จ — $e');
+      debugPrint('TCL: เปิดกล้องไม่สำเร็จ — $e');
       if (!mounted) return;
       _reportCameraFailure(MobileScannerErrorCode.genericError);
     } finally {
@@ -186,7 +186,7 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
     try {
       await _scanner.stop();
     } on Object catch (e) {
-      debugPrint('KITTIKHUN: ปิดกล้องไม่สำเร็จ — $e');
+      debugPrint('TCL: ปิดกล้องไม่สำเร็จ — $e');
     } finally {
       _busy = false;
     }
@@ -228,7 +228,7 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
   Future<void> _openManualEntry() async {
     final code = await showDialog<String>(
       context: context,
-      barrierColor: KittikhunTokens.scrim,
+      barrierColor: TclTokens.scrim,
       builder: (_) => const _ManualCodeDialog(),
     );
     if (!mounted || code == null) return;
@@ -247,11 +247,11 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
     // min-height 190 ชนะ flex-basis 186 เหมือน CSS → กรอบที่หดจริงสูง 190
     final camera = ConstrainedBox(
       constraints: const BoxConstraints(
-        minHeight: KittikhunTokens.cameraMinHeight,
+        minHeight: TclTokens.cameraMinHeight,
       ),
       child: state.hasScans
           ? SizedBox(
-              height: KittikhunTokens.cameraCollapsed,
+              height: TclTokens.cameraCollapsed,
               child: _cameraFrame(state),
             )
           : _cameraFrame(state),
@@ -269,13 +269,13 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
   // ── A. กรอบกล้อง ─────────────────────────────────────────────────
 
   Widget _cameraFrame(AppState state) => Padding(
-    padding: const EdgeInsets.symmetric(horizontal: KittikhunTokens.gutterTab),
+    padding: const EdgeInsets.symmetric(horizontal: TclTokens.gutterTab),
     child: Container(
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
-        color: KittikhunTokens.cameraViewportBg,
-        border: Border.all(color: KittikhunTokens.b13),
-        borderRadius: BorderRadius.circular(KittikhunTokens.rCamera),
+        color: TclTokens.cameraViewportBg,
+        border: Border.all(color: TclTokens.b13),
+        borderRadius: BorderRadius.circular(TclTokens.rCamera),
       ),
       child: LayoutBuilder(
         builder: (context, constraints) {
@@ -333,9 +333,9 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
                       horizontal: _camPillPadX,
                       vertical: _camPillPadY,
                     ),
-                    radius: KittikhunTokens.rPill,
-                    fill: KittikhunTokens.camPillBg,
-                    border: KittikhunTokens.b16,
+                    radius: TclTokens.rPill,
+                    fill: TclTokens.camPillBg,
+                    border: TclTokens.b16,
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -346,8 +346,8 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
                             state.camStatusText,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: KittikhunTokens.meta(
-                              KittikhunTokens.tSoftAlt,
+                            style: TclTokens.meta(
+                              TclTokens.tSoftAlt,
                             ),
                           ),
                         ),
@@ -401,9 +401,9 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
         center: Alignment(0, _glowCenterY * 2 - 1),
         radius: shortest <= 0 ? 0 : _glowEdge * farthest / shortest,
         colors: [
-          KittikhunTokens.radialGlow,
+          TclTokens.radialGlow,
           // ไล่เป็น alpha 0 ของสีเดิม (ไม่ใช่ดำโปร่ง) กัน halo เทา
-          KittikhunTokens.radialGlow.withValues(alpha: 0),
+          TclTokens.radialGlow.withValues(alpha: 0),
         ],
       ),
     );
@@ -415,9 +415,9 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
     final controller = ref.read(appProvider.notifier);
     return Padding(
       padding: const EdgeInsets.fromLTRB(
-        KittikhunTokens.gutterTab,
+        TclTokens.gutterTab,
         _toolbarTop,
-        KittikhunTokens.gutterTab,
+        TclTokens.gutterTab,
         _toolbarBottom,
       ),
       child: Row(
@@ -427,7 +427,7 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
               state.hasScans
                   ? 'สแกนแล้ว ${state.scans.length} รายการ'
                   : 'ยังไม่มีรายการที่สแกน',
-              style: KittikhunTokens.caption(),
+              style: TclTokens.caption(),
             ),
           ),
           const SizedBox(width: _toolbarGap),
@@ -437,22 +437,22 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
             label: 'กรอกรหัสบาร์โค้ด',
             child: Tappable(
               onTap: _openManualEntry,
-              radius: KittikhunTokens.rDemoButton,
+              radius: TclTokens.rDemoButton,
               child: Container(
-                width: KittikhunTokens.hDemoButton,
-                height: KittikhunTokens.hDemoButton,
+                width: TclTokens.hDemoButton,
+                height: TclTokens.hDemoButton,
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
-                  color: KittikhunTokens.t12,
-                  border: Border.all(color: KittikhunTokens.t35),
+                  color: TclTokens.t12,
+                  border: Border.all(color: TclTokens.t35),
                   borderRadius: BorderRadius.circular(
-                    KittikhunTokens.rDemoButton,
+                    TclTokens.rDemoButton,
                   ),
                 ),
                 child: const StrokeIcon(
                   painter: _KeypadIconPainter(),
                   size: _toolIconSize,
-                  color: KittikhunTokens.accentHover,
+                  color: TclTokens.accentHover,
                 ),
               ),
             ),
@@ -461,23 +461,23 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
             const SizedBox(width: _toolButtonGap),
             Tappable(
               onTap: controller.clearScans,
-              radius: KittikhunTokens.rDemoButton,
+              radius: TclTokens.rDemoButton,
               child: Container(
-                height: KittikhunTokens.hDemoButton,
+                height: TclTokens.hDemoButton,
                 alignment: Alignment.center,
                 padding: const EdgeInsets.symmetric(
                   horizontal: _toolButtonPadX,
                 ),
                 decoration: BoxDecoration(
-                  color: KittikhunTokens.s07,
-                  border: Border.all(color: KittikhunTokens.b16),
+                  color: TclTokens.s07,
+                  border: Border.all(color: TclTokens.b16),
                   borderRadius: BorderRadius.circular(
-                    KittikhunTokens.rDemoButton,
+                    TclTokens.rDemoButton,
                   ),
                 ),
                 child: Text(
                   'ล้าง',
-                  style: KittikhunTokens.label(KittikhunTokens.tSoft),
+                  style: TclTokens.label(TclTokens.tSoft),
                 ),
               ),
             ),
@@ -491,10 +491,10 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
 
   Widget _resultList(AppState state) {
     const padding = EdgeInsets.fromLTRB(
-      KittikhunTokens.gutterTab,
+      TclTokens.gutterTab,
       _toolbarBottom,
-      KittikhunTokens.gutterTab,
-      KittikhunTokens.gutterTab,
+      TclTokens.gutterTab,
+      TclTokens.gutterTab,
     );
     if (!state.hasScans) {
       return ListView(padding: padding, children: const [_ScanEmptyState()]);
@@ -547,27 +547,27 @@ class _ScanCard extends ConsumerWidget {
     // ERP ไม่มียอด → ไม่แสดงตัวเลขและไม่เดาสถานะ (erp-tcl-findings §7 ข้อ 5)
     final tone = onHand == null
         ? null
-        : KittikhunTokens.toneOf(onHand: onHand, rop: item.rop ?? 0);
+        : TclTokens.toneOf(onHand: onHand, rop: item.rop ?? 0);
     final toneColor = tone == null
-        ? KittikhunTokens.s11
-        : KittikhunTokens.toneColor(tone);
+        ? TclTokens.s11
+        : TclTokens.toneColor(tone);
 
     final subtitle = [
-      if (tone != null) KittikhunTokens.toneLabel(tone),
+      if (tone != null) TclTokens.toneLabel(tone),
       if (item.loc != null) item.loc!,
     ].join(' · ');
 
     return GradientCard(
-      gradient: KittikhunTokens.scanCardBg,
-      border: expanded ? KittikhunTokens.t45 : KittikhunTokens.b13,
-      radius: KittikhunTokens.rCard,
-      shadow: KittikhunTokens.shScanCard,
+      gradient: TclTokens.scanCardBg,
+      border: expanded ? TclTokens.t45 : TclTokens.b13,
+      radius: TclTokens.rCard,
+      shadow: TclTokens.shScanCard,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Tappable(
             onTap: () => controller.toggleExpanded(item.sku),
-            radius: KittikhunTokens.rCard,
+            radius: TclTokens.rCard,
             child: Padding(
               padding: const EdgeInsets.symmetric(
                 horizontal: _cardPadX,
@@ -581,7 +581,7 @@ class _ScanCard extends ConsumerWidget {
                     decoration: BoxDecoration(
                       color: toneColor,
                       borderRadius: BorderRadius.circular(
-                        KittikhunTokens.rPill,
+                        TclTokens.rPill,
                       ),
                     ),
                   ),
@@ -592,12 +592,12 @@ class _ScanCard extends ConsumerWidget {
                       children: [
                         Text(
                           '${item.sku} · ${record.at}',
-                          style: KittikhunTokens.skuLine(),
+                          style: TclTokens.skuLine(),
                         ),
                         const SizedBox(height: _titleGap),
-                        Text(item.name, style: KittikhunTokens.itemName()),
+                        Text(item.name, style: TclTokens.itemName()),
                         if (subtitle.isNotEmpty)
-                          Text(subtitle, style: KittikhunTokens.meta()),
+                          Text(subtitle, style: TclTokens.meta()),
                       ],
                     ),
                   ),
@@ -607,19 +607,19 @@ class _ScanCard extends ConsumerWidget {
                     children: [
                       Text(
                         _qty(onHand),
-                        style: KittikhunTokens.qtyHuge(
-                          tone == null ? KittikhunTokens.tMuted : toneColor,
+                        style: TclTokens.qtyHuge(
+                          tone == null ? TclTokens.tMuted : toneColor,
                         ),
                       ),
                       Text(
                         '${item.unit} คงเหลือ',
-                        style: KittikhunTokens.tiny(),
+                        style: TclTokens.tiny(),
                       ),
                       // ยอดสดจาก ERP หรือยอดจากรอบ sync ล่าสุด — ต้องแยกให้เห็น
                       if (onHand != null)
                         Text(
                           item.onHandSourceLabel,
-                          style: KittikhunTokens.tiny(),
+                          style: TclTokens.tiny(),
                         ),
                     ],
                   ),
@@ -648,7 +648,7 @@ class _ScanCardDetail extends ConsumerWidget {
     // ไม่มี ROP → ไม่มีเกณฑ์เทียบ → ซ่อนแถบทั้งแถบ
     final bar = (onHand == null || rop == null)
         ? null
-        : KittikhunTokens.stockBarFraction(onHand: onHand, rop: rop);
+        : TclTokens.stockBarFraction(onHand: onHand, rop: rop);
 
     final specs = <(String, String)>[
       if (item.vendor != null) ('ผู้ผลิต · Vendor', item.vendor!),
@@ -700,11 +700,11 @@ class _ScanCardDetail extends ConsumerWidget {
                 child: PrimaryButton(
                   label: 'นับสต็อกรายการนี้',
                   onPressed: controller.goCount,
-                  height: KittikhunTokens.hCardAction,
-                  radius: KittikhunTokens.rCardAction,
+                  height: TclTokens.hCardAction,
+                  radius: TclTokens.rCardAction,
                   shadow: const [],
                   // ปุ่มในการ์ดเป็น 15/600 ตาม design → อ่านขนาดจาก type scale
-                  fontSize: KittikhunTokens.ctaSecondary().fontSize!,
+                  fontSize: TclTokens.ctaSecondary().fontSize!,
                 ),
               ),
               const SizedBox(width: _fabGap),
@@ -717,7 +717,7 @@ class _ScanCardDetail extends ConsumerWidget {
           ),
           if (footer.isNotEmpty) ...[
             const SizedBox(height: _footerGap),
-            Text(footer, style: KittikhunTokens.meta()),
+            Text(footer, style: TclTokens.meta()),
           ],
         ],
       ),
@@ -734,15 +734,15 @@ class _StatTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) => GlassCard(
     padding: const EdgeInsets.all(_statTilePad),
-    radius: KittikhunTokens.rStatTile,
-    fill: KittikhunTokens.s075,
-    border: KittikhunTokens.b10,
+    radius: TclTokens.rStatTile,
+    fill: TclTokens.s075,
+    border: TclTokens.b10,
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label, style: KittikhunTokens.tiny(KittikhunTokens.tMuted)),
+        Text(label, style: TclTokens.tiny(TclTokens.tMuted)),
         const SizedBox(height: _titleGap),
-        Text(value, style: KittikhunTokens.statValue()),
+        Text(value, style: TclTokens.statValue()),
       ],
     ),
   );
@@ -758,7 +758,7 @@ class _SpecRow extends StatelessWidget {
   Widget build(BuildContext context) => Container(
     padding: const EdgeInsets.symmetric(vertical: _specRowPadY),
     decoration: const BoxDecoration(
-      border: Border(bottom: BorderSide(color: KittikhunTokens.b10)),
+      border: Border(bottom: BorderSide(color: TclTokens.b10)),
     ),
     // แบ่งความกว้างคงที่ 3:2 → คีย์อยู่ซ้าย ค่าชิดขวาเสมอ (space-between ของ
     // design) และตัดบรรทัดเองเมื่อจอแคบ/text scale ใหญ่ แทนที่จะล้นกรอบ
@@ -769,7 +769,7 @@ class _SpecRow extends StatelessWidget {
           flex: _specKeyFlex,
           child: Text(
             label,
-            style: KittikhunTokens.body13(KittikhunTokens.tMuted),
+            style: TclTokens.body13(TclTokens.tMuted),
           ),
         ),
         const SizedBox(width: _specRowGap),
@@ -778,7 +778,7 @@ class _SpecRow extends StatelessWidget {
           child: Text(
             value,
             textAlign: TextAlign.right,
-            style: KittikhunTokens.body13(KittikhunTokens.tSoftAlt),
+            style: TclTokens.body13(TclTokens.tSoftAlt),
           ),
         ),
       ],
@@ -802,15 +802,15 @@ class _ScanEmptyState extends StatelessWidget {
           constraints: const BoxConstraints(maxWidth: _emptyTextMaxWidth),
           child: Text(
             'สแกนต่อเนื่องได้เรื่อย ๆ ทุกรายการที่อ่านได้จะเรียงไว้ด้านล่างพร้อมยอดคงเหลือ',
-            style: KittikhunTokens.body15(
-              KittikhunTokens.tSoft,
+            style: TclTokens.body15(
+              TclTokens.tSoft,
             ).copyWith(height: _emptyLineHeight),
           ),
         ),
         const SizedBox(height: _emptyLineGap),
         Text(
           'แตะรายการเพื่อดูรายละเอียดเพิ่ม',
-          style: KittikhunTokens.caption(KittikhunTokens.tFaint),
+          style: TclTokens.caption(TclTokens.tFaint),
         ),
       ],
     ),
@@ -872,27 +872,27 @@ class _ManualCodeDialogState extends State<_ManualCodeDialog> {
       padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
       child: Center(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.all(KittikhunTokens.gutterTab),
+          padding: const EdgeInsets.all(TclTokens.gutterTab),
           child: GradientCard(
-            gradient: KittikhunTokens.sheetBg,
-            border: KittikhunTokens.b15,
-            radius: KittikhunTokens.rSheet,
-            shadow: KittikhunTokens.shSheet,
+            gradient: TclTokens.sheetBg,
+            border: TclTokens.b15,
+            radius: TclTokens.rSheet,
+            shadow: TclTokens.shSheet,
             padding: const EdgeInsets.all(_dialogPad),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text('กรอกรหัสบาร์โค้ด', style: KittikhunTokens.sheetTitle()),
+                Text('กรอกรหัสบาร์โค้ด', style: TclTokens.sheetTitle()),
                 const SizedBox(height: _titleGap),
                 Text(
                   'ใช้เมื่อกล้องอ่านไม่ได้หรือฉลากเสีย',
-                  style: KittikhunTokens.caption(),
+                  style: TclTokens.caption(),
                 ),
                 const SizedBox(height: _actionGap),
-                Text('รหัสสินค้า · บาร์โค้ด', style: KittikhunTokens.label()),
+                Text('รหัสสินค้า · บาร์โค้ด', style: TclTokens.label()),
                 const SizedBox(height: _toolButtonGap),
                 FieldBox(
-                  height: KittikhunTokens.hSheetInput,
+                  height: TclTokens.hSheetInput,
                   focused: _focused,
                   child: Align(
                     alignment: Alignment.centerLeft,
@@ -912,8 +912,8 @@ class _ManualCodeDialogState extends State<_ManualCodeDialog> {
                     SecondaryButton(
                       label: 'ยกเลิก',
                       onPressed: () => Navigator.of(context).pop(),
-                      height: KittikhunTokens.hSheetButton,
-                      radius: KittikhunTokens.rSheetButton,
+                      height: TclTokens.hSheetButton,
+                      radius: TclTokens.rSheetButton,
                       minWidth: _dialogCancelMinWidth,
                     ),
                     const SizedBox(width: _fabGap),
@@ -921,10 +921,10 @@ class _ManualCodeDialogState extends State<_ManualCodeDialog> {
                       child: PrimaryButton(
                         label: 'ยืนยัน',
                         onPressed: _code.trim().isEmpty ? null : _submit,
-                        height: KittikhunTokens.hSheetButton,
-                        radius: KittikhunTokens.rSheetButton,
+                        height: TclTokens.hSheetButton,
+                        radius: TclTokens.rSheetButton,
                         shadow: const [],
-                        fontSize: KittikhunTokens.ctaSecondary().fontSize!,
+                        fontSize: TclTokens.ctaSecondary().fontSize!,
                       ),
                     ),
                   ],
@@ -955,11 +955,11 @@ class _RiseIn extends StatefulWidget {
 class _RiseInState extends State<_RiseIn> with SingleTickerProviderStateMixin {
   late final AnimationController _c = AnimationController(
     vsync: this,
-    duration: KittikhunTokens.dRiseCard,
+    duration: TclTokens.dRiseCard,
   );
   late final Animation<double> _t = CurvedAnimation(
     parent: _c,
-    curve: KittikhunTokens.cRise,
+    curve: TclTokens.cRise,
   );
   bool _started = false;
 
@@ -1007,7 +1007,7 @@ class _PulseDotState extends State<_PulseDot>
     with SingleTickerProviderStateMixin {
   late final AnimationController _c = AnimationController(
     vsync: this,
-    duration: KittikhunTokens.dPulse,
+    duration: TclTokens.dPulse,
   );
 
   @override
@@ -1045,7 +1045,7 @@ class _PulseDotState extends State<_PulseDot>
       width: _statusDotSize,
       height: _statusDotSize,
       decoration: const BoxDecoration(
-        color: KittikhunTokens.ok,
+        color: TclTokens.ok,
         shape: BoxShape.circle,
       ),
     ),
@@ -1070,7 +1070,7 @@ class _SweepLineState extends State<_SweepLine>
     with SingleTickerProviderStateMixin {
   late final AnimationController _c = AnimationController(
     vsync: this,
-    duration: KittikhunTokens.dSweep,
+    duration: TclTokens.dSweep,
   );
   late final Animation<double> _t = CurvedAnimation(
     parent: _c,
@@ -1116,13 +1116,13 @@ class _SweepLineState extends State<_SweepLine>
           decoration: BoxDecoration(
             gradient: LinearGradient(
               colors: [
-                KittikhunTokens.accentBright.withValues(alpha: 0),
-                KittikhunTokens.accentBright,
-                KittikhunTokens.accentBright.withValues(alpha: 0),
+                TclTokens.accentBright.withValues(alpha: 0),
+                TclTokens.accentBright,
+                TclTokens.accentBright.withValues(alpha: 0),
               ],
             ),
-            borderRadius: BorderRadius.circular(KittikhunTokens.rPill),
-            boxShadow: KittikhunTokens.shSweepGlow,
+            borderRadius: BorderRadius.circular(TclTokens.rPill),
+            boxShadow: TclTokens.shSweepGlow,
           ),
         ),
       ),
@@ -1147,7 +1147,7 @@ class _GlowRingState extends State<_GlowRing>
     with SingleTickerProviderStateMixin {
   late final AnimationController _c = AnimationController(
     vsync: this,
-    duration: KittikhunTokens.dGlow,
+    duration: TclTokens.dGlow,
   );
 
   @override
@@ -1184,9 +1184,9 @@ class _GlowRingState extends State<_GlowRing>
       final wave = Curves.easeOut.transform(1 - (_c.value * 2 - 1).abs());
       return CustomPaint(
         painter: _GlowRingPainter(
-          spread: KittikhunTokens.glowMaxSpread * wave,
+          spread: TclTokens.glowMaxSpread * wave,
           fade: 1 - wave,
-          radius: KittikhunTokens.rFab,
+          radius: TclTokens.rFab,
         ),
         child: child,
       );
@@ -1229,8 +1229,8 @@ class _GlowRingPainter extends CustomPainter {
     canvas.drawPath(
       Path.combine(PathOperation.difference, outer, inner),
       Paint()
-        ..color = KittikhunTokens.t35.withValues(
-          alpha: KittikhunTokens.t35.a * fade,
+        ..color = TclTokens.t35.withValues(
+          alpha: TclTokens.t35.a * fade,
         ),
     );
   }
@@ -1261,20 +1261,20 @@ class _CamFab extends StatelessWidget {
     label: semanticLabel,
     child: Tappable(
       onTap: onTap,
-      radius: KittikhunTokens.rFab,
+      radius: TclTokens.rFab,
       child: Container(
-        width: KittikhunTokens.hFab,
-        height: KittikhunTokens.hFab,
+        width: TclTokens.hFab,
+        height: TclTokens.hFab,
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: KittikhunTokens.camPillBg,
-          border: Border.all(color: KittikhunTokens.b18),
-          borderRadius: BorderRadius.circular(KittikhunTokens.rFab),
+          color: TclTokens.camPillBg,
+          border: Border.all(color: TclTokens.b18),
+          borderRadius: BorderRadius.circular(TclTokens.rFab),
         ),
         child: StrokeIcon(
           painter: painter,
           size: _fabIconSize,
-          color: KittikhunTokens.tBody,
+          color: TclTokens.tBody,
         ),
       ),
     ),
@@ -1291,19 +1291,19 @@ class _CornerBracketsPainter extends CustomPainter {
     final paint = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = _bracketStroke
-      ..color = KittikhunTokens.accentBright;
+      ..color = TclTokens.accentBright;
 
     // CSS วาด border ไว้ในกรอบ → เยื้องเส้นเข้ามาครึ่งความหนา
     final bracket = Path()
       ..moveTo(half, _bracketArm)
-      ..lineTo(half, KittikhunTokens.rCornerBracket)
+      ..lineTo(half, TclTokens.rCornerBracket)
       ..arcTo(
         Rect.fromCircle(
           center: const Offset(
-            KittikhunTokens.rCornerBracket,
-            KittikhunTokens.rCornerBracket,
+            TclTokens.rCornerBracket,
+            TclTokens.rCornerBracket,
           ),
-          radius: KittikhunTokens.rCornerBracket - half,
+          radius: TclTokens.rCornerBracket - half,
         ),
         math.pi,
         math.pi / 2,
@@ -1337,7 +1337,7 @@ class _CameraIconPainter extends CustomPainter {
       ..strokeWidth = 1.7
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round
-      ..color = KittikhunTokens.tBody;
+      ..color = TclTokens.tBody;
     const r = Radius.circular(2.5);
     final body = Path()
       ..moveTo(4, 9.5)
@@ -1376,7 +1376,7 @@ class _SearchIconPainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.7
       ..strokeCap = StrokeCap.round
-      ..color = KittikhunTokens.tBody;
+      ..color = TclTokens.tBody;
     canvas
       ..save()
       ..scale(size.width / 24, size.height / 24)
@@ -1399,7 +1399,7 @@ class _KeypadIconPainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.7
       ..strokeCap = StrokeCap.round
-      ..color = KittikhunTokens.accentHover;
+      ..color = TclTokens.accentHover;
     canvas
       ..save()
       ..scale(size.width / 24, size.height / 24)

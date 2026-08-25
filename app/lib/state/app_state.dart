@@ -741,15 +741,15 @@ class AppController extends Notifier<AppState> {
   void flash(String message) {
     final seq = ++_toastSeq;
     state = state.copyWith(toast: message);
-    Future.delayed(KittikhunToastDuration.value, () {
+    Future.delayed(TclToastDuration.value, () {
       if (seq == _toastSeq) state = state.copyWith(clearToast: true);
     });
   }
 }
 
 /// แยกออกมาเพื่อไม่ให้ state layer ต้อง import theme
-class KittikhunToastDuration {
-  const KittikhunToastDuration._();
+class TclToastDuration {
+  const TclToastDuration._();
   static const Duration value = Duration(milliseconds: 2400);
 }
 

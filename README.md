@@ -1,4 +1,4 @@
-# KITTIKHUN — Mobile Stock Check System
+# TCL — Mobile Stock Check System
 
 ระบบนับสต็อก / ตรวจเช็คสต็อกคลังสินค้าบนมือถือ เชื่อมต่อกับ ERP ภายในองค์กร (SQL Server) แบบ**อ่านอย่างเดียว** — ดึงยอดระบบมาเทียบ กรอกค่าที่นับได้จริง แล้วดูส่วนต่าง
 UI อ้างอิง design ต้นแบบใน `Mobile Stock Check System/Stock Scan Mobile.dc.html` (v4.0, ธีมดาร์กเนวี) **อย่างเคร่งครัด**
@@ -126,7 +126,7 @@ npm run create-admin -- --emp-id 52104 --name "ชื่อ ผู้ดูแ�
 ```
 app/                      Flutter app
   lib/
-    core/theme/kittikhun_tokens.dart    ⭐ design token ทั้งหมด (ห้ามฮาร์ดโค้ดสีที่อื่น)
+    core/theme/tcl_tokens.dart    ⭐ design token ทั้งหมด (ห้ามฮาร์ดโค้ดสีที่อื่น)
     core/widgets/common.dart            widget ที่ใช้ร่วม
     data/models.dart · fixtures.dart    โมเดล + ข้อมูลตัวอย่างจาก design
     state/app_state.dart                Riverpod controller (พฤติกรรมทุกอย่างตาม design)
@@ -196,10 +196,10 @@ npm run test:unit          # 104 เทสต์ ไม่ต้องมี DB
 npx jest                   # ทั้งหมด — ข้าม integration อัตโนมัติถ้าไม่มี DB
 
 # ── เทสต์ที่ต้องใช้ Postgres จริง (trigger append-only, advisory lock, v_variance) ──
-docker run -d --name kittikhun-test-pg \
-  -e POSTGRES_PASSWORD=testpw -e POSTGRES_USER=kittikhun \
-  -e POSTGRES_DB=kittikhun_test -p 55432:5432 postgres:16-alpine
-export TEST_DATABASE_URL='postgres://kittikhun:testpw@localhost:55432/kittikhun_test'
+docker run -d --name tcl-test-pg \
+  -e POSTGRES_PASSWORD=testpw -e POSTGRES_USER=tcl \
+  -e POSTGRES_DB=tcl_test -p 55432:5432 postgres:16-alpine
+export TEST_DATABASE_URL='postgres://tcl:testpw@localhost:55432/tcl_test'
 npx jest                   # 181 เทสต์ครบทุกชุด
 
 # ── แอปต่อ backend จริง ──

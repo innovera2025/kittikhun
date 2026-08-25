@@ -12,13 +12,13 @@
 ///   ตอนสถานะปกติ (ออนไลน์ · คิวว่าง · ข้อมูลสด)
 /// - **ทน loading/error** — provider ที่ยังไม่มีค่า / ยิง `/sync/status` ไม่ผ่าน
 ///   (ออฟไลน์อยู่ก็เป็นเรื่องปกติ) ต้องแสดงว่าง ไม่ throw ไม่ crash
-/// - ห้ามฮาร์ดโค้ดสี/รัศมี/เงา — ทุกค่าจาก [KittikhunTokens]
+/// - ห้ามฮาร์ดโค้ดสี/รัศมี/เงา — ทุกค่าจาก [TclTokens]
 library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../core/theme/kittikhun_tokens.dart';
+import '../../core/theme/tcl_tokens.dart';
 import '../../core/widgets/common.dart';
 import '../../data/api_client.dart';
 import '../../data/stock_repository.dart';
@@ -122,17 +122,17 @@ class SyncStatusBar extends ConsumerWidget {
       if (queued > 0) 'รอซิงค์ $queued รายการ',
     ];
     final dotColor = offline
-        ? KittikhunTokens.warn
-        : (queued > 0 ? KittikhunTokens.accent : null);
+        ? TclTokens.warn
+        : (queued > 0 ? TclTokens.accent : null);
 
     return Container(
       height: _barHeight,
       padding: const EdgeInsets.symmetric(
-        horizontal: KittikhunTokens.gutterTab,
+        horizontal: TclTokens.gutterTab,
       ),
       decoration: const BoxDecoration(
-        color: KittikhunTokens.s07,
-        border: Border(bottom: BorderSide(color: KittikhunTokens.b11)),
+        color: TclTokens.s07,
+        border: Border(bottom: BorderSide(color: TclTokens.b11)),
       ),
       child: Row(
         children: [
@@ -146,7 +146,7 @@ class SyncStatusBar extends ConsumerWidget {
                 messages.join(' · '),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: KittikhunTokens.meta(KittikhunTokens.tSoftAlt),
+                style: TclTokens.meta(TclTokens.tSoftAlt),
               ),
             ),
           const Spacer(),
@@ -155,18 +155,18 @@ class SyncStatusBar extends ConsumerWidget {
               asOfLabel,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: KittikhunTokens.meta(
-                stale ? KittikhunTokens.warn : KittikhunTokens.tFaint,
+              style: TclTokens.meta(
+                stale ? TclTokens.warn : TclTokens.tFaint,
               ),
             ),
           if (pending > 0) ...[
             const SizedBox(width: 8),
             Pill(
               label: 'ค้างตรวจ $pending',
-              background: KittikhunTokens.s10,
-              border: KittikhunTokens.bad,
+              background: TclTokens.s10,
+              border: TclTokens.bad,
               // ข้อความไทย → ห้าม letterSpacing (ใช้ meta ไม่ใช่ rolePill)
-              style: KittikhunTokens.meta(KittikhunTokens.bad),
+              style: TclTokens.meta(TclTokens.bad),
               padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 2),
               onTap: onTapPending,
             ),
@@ -214,15 +214,15 @@ class QueueBadge extends ConsumerWidget {
         padding: const EdgeInsets.symmetric(horizontal: 4),
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: KittikhunTokens.accent,
-          borderRadius: BorderRadius.circular(KittikhunTokens.rPill),
+          color: TclTokens.accent,
+          borderRadius: BorderRadius.circular(TclTokens.rPill),
         ),
         child: Text(
           depth > _badgeMax ? '$_badgeMax+' : '$depth',
-          style: KittikhunTokens.display(
+          style: TclTokens.display(
             size: 10,
             weight: FontWeight.w600,
-            color: KittikhunTokens.onAccent,
+            color: TclTokens.onAccent,
             height: 1.0,
           ),
         ),
@@ -247,12 +247,12 @@ class StaleDataChip extends ConsumerWidget {
     final label = status?.dataAsOfLabel;
     if (status == null || label == null) return const SizedBox.shrink();
 
-    final chip = KittikhunTokens.chip();
+    final chip = TclTokens.chip();
     return Pill(
       label: label,
-      background: KittikhunTokens.s085,
+      background: TclTokens.s085,
       style: _isStale(status)
-          ? chip.copyWith(color: KittikhunTokens.warn)
+          ? chip.copyWith(color: TclTokens.warn)
           : chip,
     );
   }

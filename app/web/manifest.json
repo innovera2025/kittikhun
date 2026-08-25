@@ -1,6 +1,6 @@
 {
-    "name": "kittikhun_stock",
-    "short_name": "kittikhun_stock",
+    "name": "tcl_stock",
+    "short_name": "tcl_stock",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",

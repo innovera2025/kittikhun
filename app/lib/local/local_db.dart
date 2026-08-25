@@ -252,10 +252,10 @@ class LocalDb extends _$LocalDb {
   /// รับ [QueryExecutor] ตรง ๆ เพื่อให้ test ใส่ `NativeDatabase.memory()` ได้
   LocalDb(super.executor);
 
-  /// ฐานข้อมูลจริงบนเครื่อง (`kittikhun.sqlite` ใน application documents)
+  /// ฐานข้อมูลจริงบนเครื่อง (`tcl.sqlite` ใน application documents)
   factory LocalDb.open() => LocalDb(driftDatabase(name: databaseName));
 
-  static const String databaseName = 'kittikhun';
+  static const String databaseName = 'tcl';
 
   /// cursor ตอนยังไม่เคย sync — server ตีความว่าเอาทั้งคลัง
   static const String initialItemsCursor = '0';

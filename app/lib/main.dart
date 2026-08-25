@@ -3,13 +3,13 @@ import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import 'core/theme/kittikhun_tokens.dart';
+import 'core/theme/tcl_tokens.dart';
 import 'features/login/change_pin_screen.dart';
 import 'features/login/login_screen.dart';
 import 'features/shell/app_shell.dart';
 import 'state/app_state.dart';
 
-void main() => runApp(const ProviderScope(child: KittikhunApp()));
+void main() => runApp(const ProviderScope(child: TclApp()));
 
 /// สไตล์แถบระบบ — ตัวอักษร/ไอคอนขาวบนพื้นเข้ม
 ///
@@ -20,18 +20,18 @@ const SystemUiOverlayStyle _overlayLight = SystemUiOverlayStyle(
   // iOS อ่านค่านี้เป็น "ความสว่างของพื้นหลัง" → dark = ตัวอักษรขาว
   statusBarBrightness: Brightness.dark,
   statusBarIconBrightness: Brightness.light,
-  systemNavigationBarColor: KittikhunTokens.screenBottom,
+  systemNavigationBarColor: TclTokens.screenBottom,
   systemNavigationBarIconBrightness: Brightness.light,
 );
 
-class KittikhunApp extends StatelessWidget {
-  const KittikhunApp({super.key});
+class TclApp extends StatelessWidget {
+  const TclApp({super.key});
 
   @override
   Widget build(BuildContext context) => MaterialApp(
-        title: 'KITTIKHUN Stock Check',
+        title: 'TCL Stock Check',
         debugShowCheckedModeBanner: false,
-        theme: buildKittikhunTheme(),
+        theme: buildTclTheme(),
         locale: const Locale('th'),
         supportedLocales: const [Locale('th'), Locale('en')],
         localizationsDelegates: const [
@@ -39,43 +39,43 @@ class KittikhunApp extends StatelessWidget {
           GlobalWidgetsLocalizations.delegate,
           GlobalCupertinoLocalizations.delegate,
         ],
-        home: const KittikhunRoot(),
+        home: const TclRoot(),
       );
 }
 
-/// ธีมเดียวของแอป — ทุกค่ามาจาก [KittikhunTokens]
+/// ธีมเดียวของแอป — ทุกค่ามาจาก [TclTokens]
 ///
 /// จุดสำคัญ: fontFamily default = IBM Plex Sans Thai (ไม่ใช่ Space Grotesk)
 /// ตาม design-fidelity §1.4 — Space Grotesk ใช้เฉพาะจุดที่ token ระบุ
-ThemeData buildKittikhunTheme() {
+ThemeData buildTclTheme() {
   const scheme = ColorScheme.dark(
-    primary: KittikhunTokens.accent,
-    onPrimary: KittikhunTokens.onAccent,
-    secondary: KittikhunTokens.accentBright,
-    onSecondary: KittikhunTokens.onAccent,
-    surface: KittikhunTokens.screenBottom,
-    onSurface: KittikhunTokens.tBody,
-    error: KittikhunTokens.bad,
-    onError: KittikhunTokens.onAccent,
-    outline: KittikhunTokens.b15,
+    primary: TclTokens.accent,
+    onPrimary: TclTokens.onAccent,
+    secondary: TclTokens.accentBright,
+    onSecondary: TclTokens.onAccent,
+    surface: TclTokens.screenBottom,
+    onSurface: TclTokens.tBody,
+    error: TclTokens.bad,
+    onError: TclTokens.onAccent,
+    outline: TclTokens.b15,
   );
 
   final base = ThemeData(
     brightness: Brightness.dark,
     colorScheme: scheme,
-    extensions: const <ThemeExtension<dynamic>>[KittikhunTokens()],
-    scaffoldBackgroundColor: KittikhunTokens.screenBottom,
-    canvasColor: KittikhunTokens.screenBottom,
-    fontFamily: KittikhunTokens.fontThai,
-    fontFamilyFallback: KittikhunTokens.thaiFallback,
+    extensions: const <ThemeExtension<dynamic>>[TclTokens()],
+    scaffoldBackgroundColor: TclTokens.screenBottom,
+    canvasColor: TclTokens.screenBottom,
+    fontFamily: TclTokens.fontThai,
+    fontFamilyFallback: TclTokens.thaiFallback,
     // pressed state ของ InkWell ทุกจุด = accent tint ตาม style-active ใน design
-    splashColor: KittikhunTokens.t12,
-    highlightColor: KittikhunTokens.t16,
-    iconTheme: const IconThemeData(color: KittikhunTokens.tBody),
+    splashColor: TclTokens.t12,
+    highlightColor: TclTokens.t16,
+    iconTheme: const IconThemeData(color: TclTokens.tBody),
     textSelectionTheme: const TextSelectionThemeData(
-      cursorColor: KittikhunTokens.accent,
-      selectionColor: KittikhunTokens.t40,
-      selectionHandleColor: KittikhunTokens.accent,
+      cursorColor: TclTokens.accent,
+      selectionColor: TclTokens.t40,
+      selectionHandleColor: TclTokens.accent,
     ),
     // ช่องกรอกใน design ไม่มีเส้นใต้/label ลอย — กรอบเป็นหน้าที่ของ FieldBox
     inputDecorationTheme: InputDecorationThemeData(
@@ -89,25 +89,25 @@ ThemeData buildKittikhunTheme() {
       disabledBorder: InputBorder.none,
       contentPadding: EdgeInsets.zero,
       floatingLabelBehavior: FloatingLabelBehavior.never,
-      hintStyle: KittikhunTokens.body15(KittikhunTokens.tFaint),
-      labelStyle: KittikhunTokens.label(),
-      counterStyle: KittikhunTokens.meta(),
-      errorStyle: KittikhunTokens.meta(KittikhunTokens.bad),
+      hintStyle: TclTokens.body15(TclTokens.tFaint),
+      labelStyle: TclTokens.label(),
+      counterStyle: TclTokens.meta(),
+      errorStyle: TclTokens.meta(TclTokens.bad),
     ),
   );
 
   // apply() แก้เฉพาะสี — ไม่ทับ fontFamily ที่ ThemeData ใส่ไว้ให้แล้ว
   return base.copyWith(
     textTheme: base.textTheme.apply(
-      bodyColor: KittikhunTokens.tBody,
-      displayColor: KittikhunTokens.tBrightest,
+      bodyColor: TclTokens.tBody,
+      displayColor: TclTokens.tBrightest,
     ),
   );
 }
 
 /// รากของ UI — เลือกจอตามสถานะ sign-in และวางพื้นหลัง gradient ให้ทั้งแอป
-class KittikhunRoot extends ConsumerWidget {
-  const KittikhunRoot({super.key});
+class TclRoot extends ConsumerWidget {
+  const TclRoot({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -135,9 +135,9 @@ class KittikhunRoot extends ConsumerWidget {
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: _overlayLight,
       child: Scaffold(
-        backgroundColor: KittikhunTokens.screenBottom,
+        backgroundColor: TclTokens.screenBottom,
         body: Container(
-          decoration: const BoxDecoration(gradient: KittikhunTokens.screenBg),
+          decoration: const BoxDecoration(gradient: TclTokens.screenBg),
           child: SafeArea(child: screen),
         ),
       ),

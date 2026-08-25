@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../core/theme/kittikhun_tokens.dart';
+import '../../core/theme/tcl_tokens.dart';
 import '../../core/widgets/common.dart';
 
 // ── ระยะภายใน sheet (ค่าเดียวกับ design §2.7 — ใช้ที่ไฟล์นี้ที่เดียว) ─────
@@ -93,10 +93,10 @@ class _InitialPinSheetState extends ConsumerState<InitialPinSheet>
   void initState() {
     super.initState();
     _riseCtrl = AnimationController(
-      duration: KittikhunTokens.dRiseSheet,
+      duration: TclTokens.dRiseSheet,
       vsync: this,
     );
-    _rise = CurvedAnimation(parent: _riseCtrl, curve: KittikhunTokens.cRise);
+    _rise = CurvedAnimation(parent: _riseCtrl, curve: TclTokens.cRise);
     _riseCtrl.forward();
   }
 
@@ -146,10 +146,10 @@ class _InitialPinSheetState extends ConsumerState<InitialPinSheet>
         child: Container(
           clipBehavior: Clip.antiAlias,
           decoration: BoxDecoration(
-            gradient: KittikhunTokens.sheetBg,
-            border: Border.all(color: KittikhunTokens.b15),
-            borderRadius: BorderRadius.circular(KittikhunTokens.rSheet),
-            boxShadow: KittikhunTokens.shSheet,
+            gradient: TclTokens.sheetBg,
+            border: Border.all(color: TclTokens.b15),
+            borderRadius: BorderRadius.circular(TclTokens.rSheet),
+            boxShadow: TclTokens.shSheet,
           ),
           child: SingleChildScrollView(
             padding: const EdgeInsets.all(_sheetPadding),
@@ -161,11 +161,11 @@ class _InitialPinSheetState extends ConsumerState<InitialPinSheet>
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('เพิ่มสมาชิกแล้ว', style: KittikhunTokens.sheetTitle()),
+                    Text('เพิ่มสมาชิกแล้ว', style: TclTokens.sheetTitle()),
                     const SizedBox(height: _titleGap),
                     Text(
                       'แจ้ง PIN นี้ให้พนักงาน — ระบบจะบังคับตั้ง PIN ใหม่เมื่อเข้าใช้งานครั้งแรก',
-                      style: KittikhunTokens.caption(),
+                      style: TclTokens.caption(),
                     ),
                   ],
                 ),
@@ -177,8 +177,8 @@ class _InitialPinSheetState extends ConsumerState<InitialPinSheet>
                 SecondaryButton(
                   label: _copied ? _copiedLabel : _copyLabel,
                   onPressed: _copy,
-                  height: KittikhunTokens.hSheetButton,
-                  radius: KittikhunTokens.rSheetButton,
+                  height: TclTokens.hSheetButton,
+                  radius: TclTokens.rSheetButton,
                 ),
                 const SizedBox(height: _sectionGap),
                 const _OnceWarning(),
@@ -186,8 +186,8 @@ class _InitialPinSheetState extends ConsumerState<InitialPinSheet>
                 PrimaryButton(
                   label: 'รับทราบแล้ว',
                   onPressed: widget.onDismiss,
-                  height: KittikhunTokens.hSheetButton,
-                  radius: KittikhunTokens.rSheetButton,
+                  height: TclTokens.hSheetButton,
+                  radius: TclTokens.rSheetButton,
                   // design ไม่มีเงาใต้ปุ่มใน sheet
                   shadow: const [],
                   fontSize: _actionFontSize,
@@ -211,8 +211,8 @@ class _Grabber extends StatelessWidget {
       width: _grabberWidth,
       height: _grabberHeight,
       decoration: BoxDecoration(
-        color: KittikhunTokens.b26,
-        borderRadius: BorderRadius.circular(KittikhunTokens.rPill),
+        color: TclTokens.b26,
+        borderRadius: BorderRadius.circular(TclTokens.rPill),
       ),
     ),
   );
@@ -227,16 +227,16 @@ class _MemberBlock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => GlassCard(
-    fill: KittikhunTokens.s075,
-    border: KittikhunTokens.b13,
-    radius: KittikhunTokens.rCard,
+    fill: TclTokens.s075,
+    border: TclTokens.b13,
+    radius: TclTokens.rCard,
     padding: const EdgeInsets.all(_sectionGap),
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
           name,
-          style: KittikhunTokens.itemName(),
+          style: TclTokens.itemName(),
           // กันชื่อยาวล้นการ์ด: ตัดที่ 2 บรรทัด (เหมือนแถวสมาชิก)
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
@@ -244,16 +244,16 @@ class _MemberBlock extends StatelessWidget {
         const SizedBox(height: _rowGap),
         Row(
           children: [
-            Text('รหัสพนักงาน', style: KittikhunTokens.label()),
+            Text('รหัสพนักงาน', style: TclTokens.label()),
             const SizedBox(width: _valueGap),
             Expanded(
               child: Text(
                 empId,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: KittikhunTokens.display(
+                style: TclTokens.display(
                   size: _empIdFontSize,
-                  color: KittikhunTokens.accent,
+                  color: TclTokens.accent,
                   letterSpacing: _empIdLetterSpacing,
                 ),
               ),
@@ -273,9 +273,9 @@ class _PinBlock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => GlassCard(
-    fill: KittikhunTokens.t12,
-    border: KittikhunTokens.t45,
-    radius: KittikhunTokens.rCard,
+    fill: TclTokens.t12,
+    border: TclTokens.t45,
+    radius: TclTokens.rCard,
     padding: _pinBlockPadding,
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -283,7 +283,7 @@ class _PinBlock extends StatelessWidget {
         Text(
           'PIN เริ่มต้น',
           textAlign: TextAlign.center,
-          style: KittikhunTokens.label(KittikhunTokens.tMuted),
+          style: TclTokens.label(TclTokens.tMuted),
         ),
         const SizedBox(height: _labelGap),
         // letterSpacing เติมช่องว่างท้ายตัวสุดท้าย → เผื่อ padding ซ้ายเท่ากัน
@@ -297,10 +297,10 @@ class _PinBlock extends StatelessWidget {
               pin,
               textAlign: TextAlign.center,
               maxLines: 1,
-              style: KittikhunTokens.display(
+              style: TclTokens.display(
                 size: _pinFontSize,
                 weight: FontWeight.w700,
-                color: KittikhunTokens.accentHover,
+                color: TclTokens.accentHover,
                 letterSpacing: _pinLetterSpacing,
               ),
             ),
@@ -323,7 +323,7 @@ class _OnceWarning extends StatelessWidget {
         // ดันไอคอนลงให้ตรงกับบรรทัดแรกของข้อความ 11.5px
         padding: EdgeInsets.only(top: 1),
         child: StrokeIcon(
-          painter: _WarningPainter(color: KittikhunTokens.warn),
+          painter: _WarningPainter(color: TclTokens.warn),
           size: _warnIconSize,
         ),
       ),
@@ -331,7 +331,7 @@ class _OnceWarning extends StatelessWidget {
       Expanded(
         child: Text(
           'PIN นี้แสดงเพียงครั้งเดียว ปิดหน้านี้แล้วจะดูย้อนหลังไม่ได้',
-          style: KittikhunTokens.meta(KittikhunTokens.warn),
+          style: TclTokens.meta(TclTokens.warn),
         ),
       ),
     ],

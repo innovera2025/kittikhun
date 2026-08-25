@@ -1,5 +1,5 @@
 # ============================================================================
-# KITTIKHUN Mobile Stock Check — Docker Compose stack (เซิร์ฟเวอร์ LAN เครื่องเดียว)
+# TCL Mobile Stock Check — Docker Compose stack (เซิร์ฟเวอร์ LAN เครื่องเดียว)
 # อ้างอิง: docs/architecture.md §8 · docs/erp-integration.md
 #
 # 🚫 กฎเหล็ก: ระบบนี้ "อ่าน ERP อย่างเดียว" — ไม่มี service ใดในสแต็กนี้เขียนกลับ ERP
@@ -25,7 +25,7 @@
 #   ตาม docs/architecture.md §8.1 หลังทดสอบเวอร์ชันที่จะใช้จริงแล้ว
 # ============================================================================
 
-name: kittikhun
+name: tcl
 
 # logging เหมือนกันทุก service — กัน disk เต็มจาก log (10MB × 3 ไฟล์ ต่อ container)
 x-logging: &default-logging
@@ -44,7 +44,7 @@ services:
       context: .
       dockerfile: ./Dockerfile
       target: runtime
-    image: kittikhun/stock-api:4.0.0
+    image: tcl/stock-api:4.0.0
     env_file: .env
     depends_on:
       postgres:
@@ -86,7 +86,7 @@ services:
     environment:
       # ⚠️ POSTGRES_USER/DB ต้องตรงกับ DATABASE_URL ใน .env เป๊ะ ๆ ไม่งั้น api ต่อไม่ติด
       POSTGRES_USER: ${POSTGRES_USER:-stock}
-      POSTGRES_DB: ${POSTGRES_DB:-kittikhun}
+      POSTGRES_DB: ${POSTGRES_DB:-tcl}
       # ค่าจริงอยู่ใน .env เท่านั้น — ถ้าไม่ตั้ง compose จะหยุดพร้อมข้อความนี้
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?ต้องตั้ง POSTGRES_PASSWORD ใน server/.env}
       TZ: ${TZ:-Asia/Bangkok}
@@ -140,10 +140,10 @@ services:
   #
   #   ⚠️⚠️ dump ที่ยังอยู่ในเครื่องเดียวกับ Postgres ไม่ถือเป็น backup
   #        ต้องตั้งค่าอย่างน้อยหนึ่งอย่างใน .env ให้ไฟล์ออกไปนอกเครื่องจริง:
-  #          BACKUP_REMOTE_TARGET=backup@nas.lan:/volume1/kittikhun/   (rsync over ssh)
+  #          BACKUP_REMOTE_TARGET=backup@nas.lan:/volume1/tcl/   (rsync over ssh)
   #          BACKUP_SSH_KEY=/keys/id_ed25519  + mount ./secrets/ssh:/keys:ro (สร้างโฟลเดอร์เอง)
   #        หรือคำสั่งอื่นเต็มรูปแบบ:
-  #          BACKUP_PUSH_CMD=rclone copy /backups nas:kittikhun --config /keys/rclone.conf
+  #          BACKUP_PUSH_CMD=rclone copy /backups nas:tcl --config /keys/rclone.conf
   #   ⚠️ ใช้ image เดียวกับ postgres เพื่อให้เวอร์ชัน pg_dump ตรงกับ server เป๊ะ
   #   ⚠️ rsync/openssh ไม่มีใน postgres:16-alpine → script ติดตั้งตอน start (ต้องมีเน็ตครั้งแรก);
   #      production ที่ปิดเน็ตขาออกควร bake image ของตัวเองที่มี rsync/rclone ติดมาแล้ว
@@ -174,7 +174,7 @@ services:
         export PGPASSWORD="$${POSTGRES_PASSWORD:?ต้องตั้ง POSTGRES_PASSWORD ใน server/.env}"
         DB_HOST="$${POSTGRES_HOST:-postgres}"
         DB_USER="$${POSTGRES_USER:-stock}"
-        DB_NAME="$${POSTGRES_DB:-kittikhun}"
+        DB_NAME="$${POSTGRES_DB:-tcl}"
         RETENTION="$${BACKUP_RETENTION_DAYS:-14}"
         RUN_HOUR="$${BACKUP_HOUR:-2}"
         STALE_MIN="$${BACKUP_STALE_MINUTES:-1560}"
@@ -200,7 +200,7 @@ services:
           sleep "$$WAIT"
 
           STAMP=$$(date +%Y%m%d-%H%M)
-          OUT="/backups/kittikhun-$${STAMP}.dump"
+          OUT="/backups/tcl-$${STAMP}.dump"
           echo "[backup] เริ่ม pg_dump → $$OUT"
           # เขียนเป็น .part ก่อนแล้วค่อย mv — ไฟล์ที่เห็นใน /backups จึงสมบูรณ์เสมอ
           if pg_dump -h "$$DB_HOST" -U "$$DB_USER" -d "$$DB_NAME" -Fc -Z 6 -f "$$OUT.part"; then
@@ -231,7 +231,7 @@ services:
           fi
 
           # retention 14 วัน (เฉพาะสำเนาในเครื่อง)
-          find /backups -maxdepth 1 -type f -name 'kittikhun-*.dump' -mtime +"$$RETENTION" -exec rm -f {} + || true
+          find /backups -maxdepth 1 -type f -name 'tcl-*.dump' -mtime +"$$RETENTION" -exec rm -f {} + || true
 
           # แจ้งเตือนเมื่อ dump ที่ยืนยันว่าออกนอกเครื่องแล้วเก่ากว่า 26 ชม. (§8.1)
           if [ ! -f /backups/.last-offsite-ok ] || [ -n "$$(find /backups/.last-offsite-ok -mmin +"$$STALE_MIN" 2>/dev/null)" ]; then

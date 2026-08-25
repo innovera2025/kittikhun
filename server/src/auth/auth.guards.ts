@@ -20,18 +20,18 @@ import {
 } from './auth.types';
 
 /** endpoint ที่ไม่ต้อง login (login / refresh / healthz) */
-export const IS_PUBLIC = 'kittikhun:isPublic';
+export const IS_PUBLIC = 'tcl:isPublic';
 export const Public = () => SetMetadata(IS_PUBLIC, true);
 
 /** สิทธิ์ที่ต้องมี */
-export const REQUIRED_ROLES = 'kittikhun:roles';
+export const REQUIRED_ROLES = 'tcl:roles';
 export const Roles = (...roles: Role[]) => SetMetadata(REQUIRED_ROLES, roles);
 
 /**
  * บังคับตรวจ role กับ DB (ไม่เชื่อ claim ใน token)
  * ใช้กับ endpoint blast radius สูง: member CRUD, เปลี่ยน role, ปิดรอบนับ
  */
-export const FRESH_ROLE = 'kittikhun:freshRole';
+export const FRESH_ROLE = 'tcl:freshRole';
 export const RequireFreshRole = () => SetMetadata(FRESH_ROLE, true);
 
 /** ดึงผู้เรียกที่ผ่าน guard แล้ว: `@CurrentUser() user: AuthenticatedUser` */

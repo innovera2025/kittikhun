@@ -1,5 +1,5 @@
-name: kittikhun_stock
-description: KITTIKHUN Mobile Stock Check — ระบบนับสต็อกคลังสินค้า
+name: tcl_stock
+description: TCL Mobile Stock Check — ระบบนับสต็อกคลังสินค้า
 publish_to: "none"
 version: 4.0.0+1
 

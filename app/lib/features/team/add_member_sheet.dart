@@ -3,7 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../core/theme/kittikhun_tokens.dart';
+import '../../core/theme/tcl_tokens.dart';
 import '../../core/widgets/common.dart';
 import '../../data/models.dart';
 import '../../state/app_state.dart';
@@ -65,10 +65,10 @@ class _AddMemberSheetState extends ConsumerState<AddMemberSheet>
     _nameCtrl = TextEditingController(text: s.newName);
     _idCtrl = TextEditingController(text: s.newId);
     _riseCtrl = AnimationController(
-      duration: KittikhunTokens.dRiseSheet,
+      duration: TclTokens.dRiseSheet,
       vsync: this,
     );
-    _rise = CurvedAnimation(parent: _riseCtrl, curve: KittikhunTokens.cRise);
+    _rise = CurvedAnimation(parent: _riseCtrl, curve: TclTokens.cRise);
     _riseCtrl.forward();
   }
 
@@ -129,10 +129,10 @@ class _AddMemberSheetState extends ConsumerState<AddMemberSheet>
           child: Container(
             clipBehavior: Clip.antiAlias,
             decoration: BoxDecoration(
-              gradient: KittikhunTokens.sheetBg,
-              border: Border.all(color: KittikhunTokens.b15),
-              borderRadius: BorderRadius.circular(KittikhunTokens.rSheet),
-              boxShadow: KittikhunTokens.shSheet,
+              gradient: TclTokens.sheetBg,
+              border: Border.all(color: TclTokens.b15),
+              borderRadius: BorderRadius.circular(TclTokens.rSheet),
+              boxShadow: TclTokens.shSheet,
             ),
             child: SingleChildScrollView(
               padding: const EdgeInsets.all(_sheetPadding),
@@ -148,12 +148,12 @@ class _AddMemberSheetState extends ConsumerState<AddMemberSheet>
                     children: [
                       Text(
                         'เพิ่มสมาชิกใหม่',
-                        style: KittikhunTokens.sheetTitle(),
+                        style: TclTokens.sheetTitle(),
                       ),
                       const SizedBox(height: _titleGap),
                       Text(
                         'กำหนดชื่อ รหัสพนักงาน และสิทธิ์การใช้งาน',
-                        style: KittikhunTokens.caption(),
+                        style: TclTokens.caption(),
                       ),
                     ],
                   ),
@@ -161,8 +161,8 @@ class _AddMemberSheetState extends ConsumerState<AddMemberSheet>
                   _FieldGroup(
                     label: 'ชื่อ-สกุล',
                     child: FieldBox(
-                      height: KittikhunTokens.hSheetInput,
-                      radius: KittikhunTokens.rInput,
+                      height: TclTokens.hSheetInput,
+                      radius: TclTokens.rInput,
                       focused: _nameFocused,
                       child: Focus(
                         // canRequestFocus:false เพื่ออ่านสถานะโฟกัสของ TextField
@@ -177,7 +177,7 @@ class _AddMemberSheetState extends ConsumerState<AddMemberSheet>
                           controller: _nameCtrl,
                           onChanged: c.setNewName,
                           hint: 'ชื่อพนักงาน',
-                          style: KittikhunTokens.body15(),
+                          style: TclTokens.body15(),
                         ),
                       ),
                     ),
@@ -186,8 +186,8 @@ class _AddMemberSheetState extends ConsumerState<AddMemberSheet>
                   _FieldGroup(
                     label: 'รหัสพนักงาน',
                     child: FieldBox(
-                      height: KittikhunTokens.hSheetInput,
-                      radius: KittikhunTokens.rInput,
+                      height: TclTokens.hSheetInput,
+                      radius: TclTokens.rInput,
                       focused: _idFocused,
                       child: Focus(
                         canRequestFocus: false,
@@ -201,9 +201,9 @@ class _AddMemberSheetState extends ConsumerState<AddMemberSheet>
                           onChanged: c.setNewId,
                           hint: '52xxx',
                           keyboardType: TextInputType.number,
-                          style: KittikhunTokens.display(
+                          style: TclTokens.display(
                             size: _idFontSize,
-                            color: KittikhunTokens.tBrightest,
+                            color: TclTokens.tBrightest,
                             letterSpacing: _idLetterSpacing,
                           ),
                         ),
@@ -234,8 +234,8 @@ class _AddMemberSheetState extends ConsumerState<AddMemberSheet>
                       SecondaryButton(
                         label: 'ยกเลิก',
                         onPressed: c.closeAddSheet,
-                        height: KittikhunTokens.hSheetButton,
-                        radius: KittikhunTokens.rSheetButton,
+                        height: TclTokens.hSheetButton,
+                        radius: TclTokens.rSheetButton,
                         minWidth: _cancelMinWidth,
                       ),
                       const SizedBox(width: _actionGap),
@@ -243,8 +243,8 @@ class _AddMemberSheetState extends ConsumerState<AddMemberSheet>
                         child: PrimaryButton(
                           label: 'บันทึก',
                           onPressed: c.addMember,
-                          height: KittikhunTokens.hSheetButton,
-                          radius: KittikhunTokens.rSheetButton,
+                          height: TclTokens.hSheetButton,
+                          radius: TclTokens.rSheetButton,
                           // design ไม่มีเงาใต้ปุ่มใน sheet
                           shadow: const [],
                           fontSize: _actionFontSize,
@@ -272,8 +272,8 @@ class _Grabber extends StatelessWidget {
       width: _grabberWidth,
       height: _grabberHeight,
       decoration: BoxDecoration(
-        color: KittikhunTokens.b26,
-        borderRadius: BorderRadius.circular(KittikhunTokens.rPill),
+        color: TclTokens.b26,
+        borderRadius: BorderRadius.circular(TclTokens.rPill),
       ),
     ),
   );
@@ -290,7 +290,7 @@ class _FieldGroup extends StatelessWidget {
   Widget build(BuildContext context) => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
-      Text(label, style: KittikhunTokens.label()),
+      Text(label, style: TclTokens.label()),
       const SizedBox(height: _labelGap),
       child,
     ],
@@ -318,20 +318,20 @@ class _RoleOption extends StatelessWidget {
       label: role.label,
       child: Tappable(
         onTap: onTap,
-        radius: KittikhunTokens.rRolePicker,
+        radius: TclTokens.rRolePicker,
         child: Container(
-          height: KittikhunTokens.hRoleOption,
+          height: TclTokens.hRoleOption,
           alignment: Alignment.center,
           decoration: BoxDecoration(
             color: palette.bg,
             border: Border.all(color: palette.border),
-            borderRadius: BorderRadius.circular(KittikhunTokens.rRolePicker),
+            borderRadius: BorderRadius.circular(TclTokens.rRolePicker),
           ),
           child: Text(
             role.label,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: KittikhunTokens.display(
+            style: TclTokens.display(
               size: _roleFontSize,
               weight: FontWeight.w600,
               color: palette.fg,
@@ -351,26 +351,26 @@ class _RoleOption extends StatelessWidget {
 }) {
   if (!selected) {
     return (
-      bg: KittikhunTokens.s07,
-      fg: KittikhunTokens.tMuted,
-      border: KittikhunTokens.b16,
+      bg: TclTokens.s07,
+      fg: TclTokens.tMuted,
+      border: TclTokens.b16,
     );
   }
   return switch (role) {
     Role.admin => (
-      bg: KittikhunTokens.t18,
-      fg: KittikhunTokens.accentHover,
-      border: KittikhunTokens.t45,
+      bg: TclTokens.t18,
+      fg: TclTokens.accentHover,
+      border: TclTokens.t45,
     ),
     Role.staff => (
-      bg: KittikhunTokens.okTint16,
-      fg: KittikhunTokens.staffFg,
-      border: KittikhunTokens.okTint40,
+      bg: TclTokens.okTint16,
+      fg: TclTokens.staffFg,
+      border: TclTokens.okTint40,
     ),
     Role.viewer => (
-      bg: KittikhunTokens.s10,
-      fg: KittikhunTokens.tMuted,
-      border: KittikhunTokens.b18,
+      bg: TclTokens.s10,
+      fg: TclTokens.tMuted,
+      border: TclTokens.b18,
     ),
   };
 }

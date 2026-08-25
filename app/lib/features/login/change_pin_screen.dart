@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../core/theme/kittikhun_tokens.dart';
+import '../../core/theme/tcl_tokens.dart';
 import '../../core/widgets/common.dart';
 import '../../data/api_client.dart';
 import '../../data/auth_repository.dart';
@@ -69,23 +69,23 @@ class _ChangePinScreenState extends ConsumerState<ChangePinScreen>
   @override
   void initState() {
     super.initState();
-    _shakeCtrl = AnimationController(duration: KittikhunTokens.dNudge, vsync: this);
+    _shakeCtrl = AnimationController(duration: TclTokens.dNudge, vsync: this);
     // @keyframes nudge: 0%,100% = 0 · 25% = -6 · 75% = +6 (เหมือนจอเข้าสู่ระบบ)
     _shake = TweenSequence<double>([
       TweenSequenceItem(
-        tween: Tween(begin: 0.0, end: -KittikhunTokens.nudgeOffset)
+        tween: Tween(begin: 0.0, end: -TclTokens.nudgeOffset)
             .chain(CurveTween(curve: Curves.easeInOut)),
         weight: 25,
       ),
       TweenSequenceItem(
         tween: Tween(
-          begin: -KittikhunTokens.nudgeOffset,
-          end: KittikhunTokens.nudgeOffset,
+          begin: -TclTokens.nudgeOffset,
+          end: TclTokens.nudgeOffset,
         ).chain(CurveTween(curve: Curves.easeInOut)),
         weight: 50,
       ),
       TweenSequenceItem(
-        tween: Tween(begin: KittikhunTokens.nudgeOffset, end: 0.0)
+        tween: Tween(begin: TclTokens.nudgeOffset, end: 0.0)
             .chain(CurveTween(curve: Curves.easeInOut)),
         weight: 25,
       ),
@@ -223,7 +223,7 @@ class _ChangePinScreenState extends ConsumerState<ChangePinScreen>
     final onSignOut = widget.onSignOut;
 
     return DecoratedBox(
-      decoration: const BoxDecoration(gradient: KittikhunTokens.screenBg),
+      decoration: const BoxDecoration(gradient: TclTokens.screenBg),
       child: SafeArea(
         child: AnimatedBuilder(
           animation: _shake,
@@ -235,8 +235,8 @@ class _ChangePinScreenState extends ConsumerState<ChangePinScreen>
             slivers: [
               SliverPadding(
                 padding: const EdgeInsets.only(
-                  left: KittikhunTokens.gutterLogin,
-                  right: KittikhunTokens.gutterLogin,
+                  left: TclTokens.gutterLogin,
+                  right: TclTokens.gutterLogin,
                   bottom: 30,
                 ),
                 sliver: SliverFillRemaining(
@@ -254,8 +254,8 @@ class _ChangePinScreenState extends ConsumerState<ChangePinScreen>
                             child: SecondaryButton(
                               label: 'ออกจากระบบ',
                               onPressed: _busy ? null : onSignOut,
-                              height: KittikhunTokens.hDemoButton,
-                              radius: KittikhunTokens.rDemoButton,
+                              height: TclTokens.hDemoButton,
+                              radius: TclTokens.rDemoButton,
                               minWidth: 160,
                             ),
                           ),
@@ -273,10 +273,10 @@ class _ChangePinScreenState extends ConsumerState<ChangePinScreen>
   }
 
   Widget _buildCard() => GlassCard(
-        radius: KittikhunTokens.rLoginCard,
-        fill: KittikhunTokens.s075,
-        border: KittikhunTokens.b13,
-        shadow: KittikhunTokens.shLoginCard,
+        radius: TclTokens.rLoginCard,
+        fill: TclTokens.s075,
+        border: TclTokens.b13,
+        shadow: TclTokens.shLoginCard,
         padding: const EdgeInsets.all(20),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -297,16 +297,16 @@ class _ChangePinScreenState extends ConsumerState<ChangePinScreen>
             PrimaryButton(
               label: 'บันทึก PIN ใหม่',
               onPressed: _busy ? null : _submit,
-              height: KittikhunTokens.hSignIn,
-              radius: KittikhunTokens.rButtonLarge,
-              shadow: KittikhunTokens.shSignInBtn,
+              height: TclTokens.hSignIn,
+              radius: TclTokens.rButtonLarge,
+              shadow: TclTokens.shSignInBtn,
             ),
             const SizedBox(height: 14),
             Text(
               _message,
               textAlign: TextAlign.center,
-              style: KittikhunTokens.caption(
-                _error ? KittikhunTokens.bad : KittikhunTokens.tFaint,
+              style: TclTokens.caption(
+                _error ? TclTokens.bad : TclTokens.tFaint,
               ),
             ),
           ],
@@ -325,19 +325,19 @@ class _Header extends StatelessWidget {
         padding: const EdgeInsets.only(top: 26, bottom: 22),
         child: Row(
           children: [
-            const BrandMark(size: 54, radius: KittikhunTokens.rLogoLarge),
+            const BrandMark(size: 54, radius: TclTokens.rLogoLarge),
             const SizedBox(width: 14),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('ตั้ง PIN ใหม่', style: KittikhunTokens.screenTitle()),
+                  Text('ตั้ง PIN ใหม่', style: TclTokens.screenTitle()),
                   const SizedBox(height: 2),
                   Text(
                     forced
                         ? 'เพื่อความปลอดภัย กรุณาตั้ง PIN ของคุณเองก่อนเริ่มใช้งาน'
                         : 'กรอก PIN เดิมและ PIN ใหม่ 6 หลัก',
-                    style: KittikhunTokens.caption(),
+                    style: TclTokens.caption(),
                   ),
                 ],
               ),
@@ -368,8 +368,8 @@ class _PinField extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final borderColor = error
-        ? KittikhunTokens.errorBorder
-        : (active ? KittikhunTokens.accent : KittikhunTokens.b20);
+        ? TclTokens.errorBorder
+        : (active ? TclTokens.accent : TclTokens.b20);
     return Semantics(
       button: true,
       label: label,
@@ -387,17 +387,17 @@ class _PinField extends StatelessWidget {
                 Expanded(
                   child: Text(
                     label,
-                    style: KittikhunTokens.label(
-                      active ? KittikhunTokens.accent : KittikhunTokens.tMuted,
+                    style: TclTokens.label(
+                      active ? TclTokens.accent : TclTokens.tMuted,
                     ),
                   ),
                 ),
                 Text(
                   '$filled/$_pinLength',
-                  style: KittikhunTokens.display(
+                  style: TclTokens.display(
                     size: 12,
                     weight: FontWeight.w400,
-                    color: KittikhunTokens.tFaint,
+                    color: TclTokens.tFaint,
                   ),
                 ),
               ],
@@ -409,13 +409,13 @@ class _PinField extends StatelessWidget {
                   if (i > 0) const SizedBox(width: 10),
                   Expanded(
                     child: AnimatedContainer(
-                      duration: KittikhunTokens.dKeypad,
-                      height: KittikhunTokens.hPinCell,
+                      duration: TclTokens.dKeypad,
+                      height: TclTokens.hPinCell,
                       decoration: BoxDecoration(
-                        color: i < filled ? KittikhunTokens.accent : null,
+                        color: i < filled ? TclTokens.accent : null,
                         border: Border.all(color: borderColor),
                         borderRadius:
-                            BorderRadius.circular(KittikhunTokens.rPinCell),
+                            BorderRadius.circular(TclTokens.rPinCell),
                       ),
                     ),
                   ),
@@ -491,15 +491,15 @@ class _KeypadKeyState extends State<_KeypadKey> {
           onTapCancel: () => _set(false),
           onTap: widget.onTap,
           child: AnimatedContainer(
-            duration: KittikhunTokens.dKeypad,
-            height: KittikhunTokens.hKeypadKey,
+            duration: TclTokens.dKeypad,
+            height: TclTokens.hKeypadKey,
             alignment: Alignment.center,
             decoration: BoxDecoration(
-              color: _pressed ? KittikhunTokens.t28 : KittikhunTokens.s07,
-              border: Border.all(color: KittikhunTokens.b11),
-              borderRadius: BorderRadius.circular(KittikhunTokens.rKeypad),
+              color: _pressed ? TclTokens.t28 : TclTokens.s07,
+              border: Border.all(color: TclTokens.b11),
+              borderRadius: BorderRadius.circular(TclTokens.rKeypad),
             ),
-            child: Text(widget.label, style: KittikhunTokens.keypadKey()),
+            child: Text(widget.label, style: TclTokens.keypadKey()),
           ),
         ),
       );

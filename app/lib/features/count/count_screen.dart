@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
-import '../../core/theme/kittikhun_tokens.dart';
+import '../../core/theme/tcl_tokens.dart';
 import '../../core/widgets/common.dart';
 import '../../data/models.dart';
 import '../../data/stock_repository.dart';
@@ -67,7 +67,7 @@ class _CountScreenState extends ConsumerState<CountScreen> {
       children: [
         Padding(
           padding: const EdgeInsets.symmetric(
-            horizontal: KittikhunTokens.gutterTab,
+            horizontal: TclTokens.gutterTab,
           ),
           child: _SessionCard(
             done: done,
@@ -83,9 +83,9 @@ class _CountScreenState extends ConsumerState<CountScreen> {
         Expanded(
           child: ListView.separated(
             padding: EdgeInsets.fromLTRB(
-              KittikhunTokens.gutterTab,
+              TclTokens.gutterTab,
               12,
-              KittikhunTokens.gutterTab,
+              TclTokens.gutterTab,
               8 + keyboardInset,
             ),
             itemCount: rows.length,
@@ -113,9 +113,9 @@ class _CountScreenState extends ConsumerState<CountScreen> {
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(
-            KittikhunTokens.gutterTab,
+            TclTokens.gutterTab,
             10,
-            KittikhunTokens.gutterTab,
+            TclTokens.gutterTab,
             14,
           ),
           child: Opacity(
@@ -123,9 +123,9 @@ class _CountScreenState extends ConsumerState<CountScreen> {
             opacity: canWrite ? 1 : 0.45,
             child: PrimaryButton(
               label: 'ส่งผลการนับ',
-              height: KittikhunTokens.hSubmit,
-              radius: KittikhunTokens.rButtonLarge,
-              shadow: KittikhunTokens.shSubmitBtn,
+              height: TclTokens.hSubmit,
+              radius: TclTokens.rButtonLarge,
+              shadow: TclTokens.shSubmitBtn,
               onPressed: controller.submitCount,
             ),
           ),
@@ -168,9 +168,9 @@ class _SessionCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return GlassCard(
-      radius: KittikhunTokens.rCard,
-      fill: KittikhunTokens.s075,
-      border: KittikhunTokens.b11,
+      radius: TclTokens.rCard,
+      fill: TclTokens.s075,
+      border: TclTokens.b11,
       padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -184,17 +184,17 @@ class _SessionCard extends StatelessWidget {
                   // ⚠️ เดิมเป็นค่าตัวอย่างตายตัว ('โซน A · CC-2408') ต่อให้ไม่มีรอบเปิดอยู่
                   //    ก็ยังขึ้นเหมือนมีรอบจริง — พนักงานเริ่มนับทั้งที่ยังไม่เปิดรอบได้
                   _sessionLabel(session),
-                  style: KittikhunTokens.caption(KittikhunTokens.tSoft),
+                  style: TclTokens.caption(TclTokens.tSoft),
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
               const SizedBox(width: 12),
               Text(
                 'นับแล้ว $done/$total',
-                style: KittikhunTokens.display(
+                style: TclTokens.display(
                   size: 12.5,
                   weight: FontWeight.w400,
-                  color: KittikhunTokens.accent,
+                  color: TclTokens.accent,
                 ),
               ),
             ],
@@ -202,14 +202,14 @@ class _SessionCard extends StatelessWidget {
           const SizedBox(height: 12),
           ProgressBar(
             fraction: total == 0 ? 0 : done / total,
-            gradient: KittikhunTokens.countProgressGradient,
+            gradient: TclTokens.countProgressGradient,
           ),
           if (onManage case final VoidCallback open) ...[
             const SizedBox(height: 12),
             SecondaryButton(
               label: 'จัดการรอบนับ',
               height: 38,
-              radius: KittikhunTokens.rTeamAction,
+              radius: TclTokens.rTeamAction,
               onPressed: open,
             ),
           ],
@@ -248,9 +248,9 @@ class _CountCardState extends State<_CountCard> {
   /// สี/พื้นของ pill ตามผลส่วนต่าง (ยังไม่นับ → กลาง · ตรง → ok · เกิน/ขาด → warn)
   (Color fg, Color bg) get _varianceTone {
     final v = widget.variance;
-    if (!v.isCounted) return (KittikhunTokens.tMuted, KittikhunTokens.s10);
-    if (v.isMatch) return (KittikhunTokens.ok, KittikhunTokens.okTint14);
-    return (KittikhunTokens.warn, KittikhunTokens.warnTint14);
+    if (!v.isCounted) return (TclTokens.tMuted, TclTokens.s10);
+    if (v.isMatch) return (TclTokens.ok, TclTokens.okTint14);
+    return (TclTokens.warn, TclTokens.warnTint14);
   }
 
   @override
@@ -262,10 +262,10 @@ class _CountCardState extends State<_CountCard> {
     final (varFg, varBg) = _varianceTone;
 
     return GradientCard(
-      gradient: KittikhunTokens.listCardBg,
-      radius: KittikhunTokens.rCard,
-      border: KittikhunTokens.b11,
-      shadow: KittikhunTokens.shCountCard,
+      gradient: TclTokens.listCardBg,
+      radius: TclTokens.rCard,
+      border: TclTokens.b11,
+      shadow: TclTokens.shCountCard,
       padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -279,11 +279,11 @@ class _CountCardState extends State<_CountCard> {
                   children: [
                     Text(
                       skuLine,
-                      style: KittikhunTokens.skuLine(),
+                      style: TclTokens.skuLine(),
                       overflow: TextOverflow.ellipsis,
                     ),
                     const SizedBox(height: 2),
-                    Text(row.name, style: KittikhunTokens.itemName()),
+                    Text(row.name, style: TclTokens.itemName()),
                   ],
                 ),
               ),
@@ -291,10 +291,10 @@ class _CountCardState extends State<_CountCard> {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  Text('ระบบ', style: KittikhunTokens.tiny()),
+                  Text('ระบบ', style: TclTokens.tiny()),
                   Text(
                     _qtyFormat.format(row.systemQty),
-                    style: KittikhunTokens.statValue(KittikhunTokens.tSoft),
+                    style: TclTokens.statValue(TclTokens.tSoft),
                   ),
                 ],
               ),
@@ -324,7 +324,7 @@ class _CountCardState extends State<_CountCard> {
                     child: Pill(
                       label: widget.variance.label,
                       background: varBg,
-                      style: KittikhunTokens.label(varFg),
+                      style: TclTokens.label(varFg),
                     ),
                   ),
                 ),
@@ -351,21 +351,21 @@ class _StepperButton extends StatelessWidget {
       label: glyph == '+' ? 'เพิ่มจำนวน' : 'ลดจำนวน',
       child: Tappable(
         onTap: onTap,
-        radius: KittikhunTokens.rStepper,
+        radius: TclTokens.rStepper,
         child: Container(
-          width: KittikhunTokens.hStepper,
-          height: KittikhunTokens.hStepper,
+          width: TclTokens.hStepper,
+          height: TclTokens.hStepper,
           alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: KittikhunTokens.s07,
-            border: Border.all(color: KittikhunTokens.b16),
-            borderRadius: BorderRadius.circular(KittikhunTokens.rStepper),
+            color: TclTokens.s07,
+            border: Border.all(color: TclTokens.b16),
+            borderRadius: BorderRadius.circular(TclTokens.rStepper),
           ),
           child: Text(
             glyph,
-            style: KittikhunTokens.thai(
+            style: TclTokens.thai(
               size: 20,
-              color: KittikhunTokens.tBody,
+              color: TclTokens.tBody,
               height: 1,
             ),
           ),
@@ -396,15 +396,15 @@ class _CountField extends StatelessWidget {
       child: Focus(
         onFocusChange: onFocusChange,
         child: AnimatedContainer(
-          duration: KittikhunTokens.dKeypad,
-          height: KittikhunTokens.hStepper,
+          duration: TclTokens.dKeypad,
+          height: TclTokens.hStepper,
           alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: KittikhunTokens.s10,
+            color: TclTokens.s10,
             border: Border.all(
-              color: focused ? KittikhunTokens.accent : KittikhunTokens.b16,
+              color: focused ? TclTokens.accent : TclTokens.b16,
             ),
-            borderRadius: BorderRadius.circular(KittikhunTokens.rCountInput),
+            borderRadius: BorderRadius.circular(TclTokens.rCountInput),
           ),
           child: TokenTextField(
             controller: controller,
@@ -412,7 +412,7 @@ class _CountField extends StatelessWidget {
             hint: 'นับได้',
             textAlign: TextAlign.center,
             keyboardType: TextInputType.number,
-            style: KittikhunTokens.statValue(KittikhunTokens.tBrightest),
+            style: TclTokens.statValue(TclTokens.tBrightest),
           ),
         ),
       ),

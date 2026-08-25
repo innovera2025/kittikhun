@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
-import '../../core/theme/kittikhun_tokens.dart';
+import '../../core/theme/tcl_tokens.dart';
 import '../../core/widgets/common.dart';
 import '../../data/models.dart';
 import '../../state/app_state.dart';
@@ -81,14 +81,14 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       children: [
         Padding(
           padding: const EdgeInsets.symmetric(
-            horizontal: KittikhunTokens.gutterTab,
+            horizontal: TclTokens.gutterTab,
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               FieldBox(
-                height: KittikhunTokens.hSearchInput,
-                radius: KittikhunTokens.rSearchInput,
+                height: TclTokens.hSearchInput,
+                radius: TclTokens.rSearchInput,
                 focused: _focused,
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: Row(
@@ -96,7 +96,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                     const StrokeIcon(
                       painter: _SearchIconPainter(),
                       size: _searchIconSize,
-                      color: KittikhunTokens.accent,
+                      color: TclTokens.accent,
                     ),
                     const SizedBox(width: _searchIconGap),
                     Expanded(
@@ -111,7 +111,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                           controller: _controller,
                           onChanged: _onChanged,
                           hint: 'ชื่อสินค้า / SKU / บาร์โค้ด',
-                          style: KittikhunTokens.body15(),
+                          style: TclTokens.body15(),
                         ),
                       ),
                     ),
@@ -129,7 +129,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                   limited
                       ? 'แสดง ${shown.length} จาก $total รายการ'
                       : '$total รายการ',
-                  style: KittikhunTokens.label(KittikhunTokens.tFaint),
+                  style: TclTokens.label(TclTokens.tFaint),
                 ),
               ),
             ],
@@ -140,10 +140,10 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
               ? const _SearchEmptyState()
               : ListView.separated(
                   padding: const EdgeInsets.fromLTRB(
-                    KittikhunTokens.gutterTab,
+                    TclTokens.gutterTab,
                     6,
-                    KittikhunTokens.gutterTab,
-                    KittikhunTokens.gutterTab,
+                    TclTokens.gutterTab,
+                    TclTokens.gutterTab,
                   ),
                   keyboardDismissBehavior:
                       ScrollViewKeyboardDismissBehavior.onDrag,
@@ -177,21 +177,21 @@ class _ResultCard extends StatelessWidget {
     // onHand ว่าง = ไม่มีข้อมูลยอด → ไม่เดา tone (แสดงกลาง ๆ + '—')
     final hasQty = item.hasQty;
     final tone = hasQty
-        ? KittikhunTokens.toneOf(onHand: item.onHand!, rop: item.rop ?? 0)
+        ? TclTokens.toneOf(onHand: item.onHand!, rop: item.rop ?? 0)
         : null;
     final toneColor = tone == null
-        ? KittikhunTokens.tFaint
-        : KittikhunTokens.toneColor(tone);
+        ? TclTokens.tFaint
+        : TclTokens.toneColor(tone);
     final loc = item.loc;
 
     return GradientCard(
-      gradient: KittikhunTokens.listCardBg,
-      border: KittikhunTokens.b11,
-      radius: KittikhunTokens.rCard,
-      shadow: KittikhunTokens.shSearchCard,
+      gradient: TclTokens.listCardBg,
+      border: TclTokens.b11,
+      radius: TclTokens.rCard,
+      shadow: TclTokens.shSearchCard,
       child: Tappable(
         onTap: onTap,
-        radius: KittikhunTokens.rCard,
+        radius: TclTokens.rCard,
         child: Padding(
           padding: const EdgeInsets.all(_cardPadding),
           child: Row(
@@ -201,7 +201,7 @@ class _ResultCard extends StatelessWidget {
                 height: _toneBarHeight,
                 decoration: BoxDecoration(
                   color: toneColor,
-                  borderRadius: BorderRadius.circular(KittikhunTokens.rPill),
+                  borderRadius: BorderRadius.circular(TclTokens.rPill),
                 ),
               ),
               const SizedBox(width: _cardInnerGap),
@@ -211,14 +211,14 @@ class _ResultCard extends StatelessWidget {
                   children: [
                     Text(
                       loc == null ? item.sku : '${item.sku} · $loc',
-                      style: KittikhunTokens.skuLine(),
+                      style: TclTokens.skuLine(),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
                     const SizedBox(height: 2),
                     Text(
                       item.name,
-                      style: KittikhunTokens.itemName(),
+                      style: TclTokens.itemName(),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -226,7 +226,7 @@ class _ResultCard extends StatelessWidget {
                     if (item.nameEn != null)
                       Text(
                         item.nameEn!,
-                        style: KittikhunTokens.meta(),
+                        style: TclTokens.meta(),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -239,16 +239,16 @@ class _ResultCard extends StatelessWidget {
                 children: [
                   Text(
                     hasQty ? _qtyFormat.format(item.onHand) : '—',
-                    style: KittikhunTokens.qtyLarge(toneColor),
+                    style: TclTokens.qtyLarge(toneColor),
                     maxLines: 1,
                   ),
-                  Text(item.unit, style: KittikhunTokens.tiny(), maxLines: 1),
+                  Text(item.unit, style: TclTokens.tiny(), maxLines: 1),
                   // ที่มาของยอด: ยิงสดจาก ERP หรือยอดจากรอบ sync ล่าสุด
                   // แสดงเฉพาะเมื่อมียอด — ไม่มียอดแล้วบอกเวลาไม่มีความหมาย
                   if (hasQty)
                     Text(
                       item.onHandSourceLabel,
-                      style: KittikhunTokens.tiny(),
+                      style: TclTokens.tiny(),
                       maxLines: 1,
                     ),
                 ],
@@ -268,10 +268,10 @@ class _SearchEmptyState extends StatelessWidget {
   @override
   Widget build(BuildContext context) => ListView(
     padding: const EdgeInsets.fromLTRB(
-      KittikhunTokens.gutterTab,
+      TclTokens.gutterTab,
       6,
-      KittikhunTokens.gutterTab,
-      KittikhunTokens.gutterTab,
+      TclTokens.gutterTab,
+      TclTokens.gutterTab,
     ),
     keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
     children: [
@@ -281,9 +281,9 @@ class _SearchEmptyState extends StatelessWidget {
           'ไม่พบสินค้าที่ตรงกับคำค้น\nNo matching items',
           textAlign: TextAlign.center,
           // design 13.5px ไม่มี step ในสเกล → เรียก helper thai() ของ token โดยตรง
-          style: KittikhunTokens.thai(
+          style: TclTokens.thai(
             size: 13.5,
-            color: KittikhunTokens.tFaint,
+            color: TclTokens.tFaint,
             height: 1.5,
           ),
         ),
@@ -302,7 +302,7 @@ class _SearchIconPainter extends CustomPainter {
     final s = size.width / 24;
     final p = Paint()
       ..style = PaintingStyle.stroke
-      ..color = KittikhunTokens.accent
+      ..color = TclTokens.accent
       ..strokeWidth = 1.8 * s
       ..strokeCap = StrokeCap.round;
     canvas.drawCircle(Offset(11 * s, 11 * s), 7 * s, p);

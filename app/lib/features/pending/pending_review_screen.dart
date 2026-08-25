@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
-import '../../core/theme/kittikhun_tokens.dart';
+import '../../core/theme/tcl_tokens.dart';
 import '../../core/widgets/common.dart';
 import '../../data/api_client.dart';
 import '../../local/local_db.dart';
@@ -185,7 +185,7 @@ class PendingReviewScreen extends ConsumerWidget {
           height: _spinnerSize,
           child: CircularProgressIndicator(
             strokeWidth: _spinnerStroke,
-            color: KittikhunTokens.accent,
+            color: TclTokens.accent,
           ),
         ),
       ),
@@ -205,17 +205,17 @@ class PendingReviewScreen extends ConsumerWidget {
           children: [
             Padding(
               padding: const EdgeInsets.symmetric(
-                horizontal: KittikhunTokens.gutterTab,
+                horizontal: TclTokens.gutterTab,
               ),
               child: _SummaryCard(count: entries.length),
             ),
             Expanded(
               child: ListView.separated(
                 padding: const EdgeInsets.fromLTRB(
-                  KittikhunTokens.gutterTab,
+                  TclTokens.gutterTab,
                   12,
-                  KittikhunTokens.gutterTab,
-                  KittikhunTokens.gutterTab,
+                  TclTokens.gutterTab,
+                  TclTokens.gutterTab,
                 ),
                 itemCount: entries.length,
                 separatorBuilder: (_, _) => const SizedBox(height: _listGap),
@@ -244,21 +244,21 @@ class _SummaryCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => GlassCard(
-    radius: KittikhunTokens.rCard,
-    fill: KittikhunTokens.s075,
-    border: KittikhunTokens.b11,
+    radius: TclTokens.rCard,
+    fill: TclTokens.s075,
+    border: TclTokens.b11,
     padding: const EdgeInsets.all(16),
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
           'มี $count รายการที่ส่งไม่สำเร็จ',
-          style: KittikhunTokens.itemName(),
+          style: TclTokens.itemName(),
         ),
         const SizedBox(height: 6),
         Text(
           'ตรวจสอบแล้วแจ้งผู้ดูแล หรือทิ้งรายการที่ไม่ต้องการ',
-          style: KittikhunTokens.caption(),
+          style: TclTokens.caption(),
         ),
       ],
     ),
@@ -278,10 +278,10 @@ class _PendingCard extends StatelessWidget {
     final unit = entry.unit;
 
     return GradientCard(
-      gradient: KittikhunTokens.listCardBg,
-      radius: KittikhunTokens.rCard,
-      border: KittikhunTokens.b11,
-      shadow: KittikhunTokens.shCountCard,
+      gradient: TclTokens.listCardBg,
+      radius: TclTokens.rCard,
+      border: TclTokens.b11,
+      shadow: TclTokens.shCountCard,
       padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -300,15 +300,15 @@ class _PendingCard extends StatelessWidget {
                       runSpacing: 2,
                       crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
-                        Text(entry.sku, style: KittikhunTokens.skuLine()),
+                        Text(entry.sku, style: TclTokens.skuLine()),
                         // เวลาแยก Text: skuLine() มี letterSpacing ซึ่งทำ
                         // shaping ของ 'วันนี้/เมื่อวาน' พัง (ดูหมายเหตุใน token)
                         if (timeLabel != null)
-                          Text(timeLabel, style: KittikhunTokens.meta()),
+                          Text(timeLabel, style: TclTokens.meta()),
                       ],
                     ),
                     const SizedBox(height: 2),
-                    Text(entry.name, style: KittikhunTokens.itemName()),
+                    Text(entry.name, style: TclTokens.itemName()),
                   ],
                 ),
               ),
@@ -316,20 +316,20 @@ class _PendingCard extends StatelessWidget {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  Text('นับได้', style: KittikhunTokens.tiny()),
+                  Text('นับได้', style: TclTokens.tiny()),
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.baseline,
                     textBaseline: TextBaseline.alphabetic,
                     children: [
                       Text(
                         entry.qtyLabel,
-                        style: KittikhunTokens.statValue(
-                          KittikhunTokens.tBrightest,
+                        style: TclTokens.statValue(
+                          TclTokens.tBrightest,
                         ),
                       ),
                       if (unit != null && unit.isNotEmpty) ...[
                         const SizedBox(width: 4),
-                        Text(unit, style: KittikhunTokens.tiny()),
+                        Text(unit, style: TclTokens.tiny()),
                       ],
                     ],
                   ),
@@ -342,8 +342,8 @@ class _PendingCard extends StatelessWidget {
             alignment: Alignment.centerLeft,
             child: Pill(
               label: entry.reasonLabel,
-              background: KittikhunTokens.warnTint14,
-              style: KittikhunTokens.label(KittikhunTokens.warn),
+              background: TclTokens.warnTint14,
+              style: TclTokens.label(TclTokens.warn),
             ),
           ),
           const SizedBox(height: 12),
@@ -425,7 +425,7 @@ class _CenterNote extends StatelessWidget {
   Widget build(BuildContext context) => Center(
     child: Padding(
       padding: const EdgeInsets.symmetric(
-        horizontal: KittikhunTokens.gutterTab,
+        horizontal: TclTokens.gutterTab,
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -433,13 +433,13 @@ class _CenterNote extends StatelessWidget {
           Text(
             title,
             textAlign: TextAlign.center,
-            style: KittikhunTokens.body15(KittikhunTokens.tSoft),
+            style: TclTokens.body15(TclTokens.tSoft),
           ),
           const SizedBox(height: 6),
           Text(
             subtitle,
             textAlign: TextAlign.center,
-            style: KittikhunTokens.caption(KittikhunTokens.tFaint),
+            style: TclTokens.caption(TclTokens.tFaint),
           ),
         ],
       ),

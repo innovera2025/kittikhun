@@ -4,7 +4,7 @@
 > ของเดิมในเครื่อง: `api-pueanphet` · `orderstock`
 > (`containerd` เป็นของ Docker ไม่ใช่โปรเจค — ห้ามแตะ)
 >
-> ตรวจแล้วกับ image ที่ build จริง (`kittikhun/stock-api:4.0.0`)
+> ตรวจแล้วกับ image ที่ build จริง (`tcl/stock-api:4.0.0`)
 
 ---
 
@@ -22,7 +22,7 @@ docker --version; docker compose version
 echo '── 3) ของเดิมที่รันอยู่ ──'
 docker ps --format 'table {{.Names}}\t{{.Ports}}'
 
-echo '── 4) ชื่อที่ถูกใช้แล้ว (ต้องไม่มีคำว่า kittikhun) ──'
+echo '── 4) ชื่อที่ถูกใช้แล้ว (ต้องไม่มีคำว่า tcl) ──'
 docker network ls --format '{{.Name}}'
 docker volume ls --format '{{.Name}}' | head -20
 
@@ -41,7 +41,7 @@ df -h /opt | tail -1; free -h | head -2
 ├── api-pueanphet/              ← ของเดิม ห้ามแตะ
 ├── orderstock/                 ← ของเดิม ห้ามแตะ
 ├── containerd/                 ← ของ Docker ห้ามแตะ
-└── kittikhun/                  ★ สร้างใหม่
+└── tcl/                  ★ สร้างใหม่
     └── server/                 ← ทำงานทุกคำสั่งจากในนี้
         ├── docker-compose.yml  (มากับ repo)
         ├── Dockerfile          (มากับ repo)
@@ -59,10 +59,10 @@ df -h /opt | tail -1; free -h | head -2
 ### คำสั่ง
 
 ```bash
-mkdir -p /opt/kittikhun
-cd /opt/kittikhun
+mkdir -p /opt/tcl
+cd /opt/tcl
 
-git clone https://github.com/innovera2025/kittikhun.git .
+git clone https://github.com/innovera2025/tcl.git .
 cd server
 
 mkdir -p config public secrets/ssh
@@ -78,10 +78,10 @@ chmod 700 secrets secrets/ssh
 
 | สิ่งที่มักชนกัน | โปรเจคนี้ | ชนไหม |
 |---|---|---|
-| ชื่อ compose project | `kittikhun` (ตั้งไว้ในไฟล์แล้ว) | ✅ ไม่ชน |
-| ชื่อ volume | `kittikhun_pgdata`, `kittikhun_caddy_data`, … | ✅ ไม่ชน (มี prefix อัตโนมัติ) |
-| ชื่อ network | `kittikhun_default` | ✅ ไม่ชน |
-| ชื่อ container | `kittikhun-api-1`, `kittikhun-postgres-1`, … | ✅ ไม่ชน |
+| ชื่อ compose project | `tcl` (ตั้งไว้ในไฟล์แล้ว) | ✅ ไม่ชน |
+| ชื่อ volume | `tcl_pgdata`, `tcl_caddy_data`, … | ✅ ไม่ชน (มี prefix อัตโนมัติ) |
+| ชื่อ network | `tcl_default` | ✅ ไม่ชน |
+| ชื่อ container | `tcl-api-1`, `tcl-postgres-1`, … | ✅ ไม่ชน |
 | **พอร์ต 80 / 443** | ปิด Caddy ของเราด้วย override | ✅ ไม่ชน (ใช้ caddy-gen-proxy แทน) |
 | พอร์ต Postgres | ไม่ publish ออก host | ✅ ไม่ชน |
 | พอร์ต API | `expose` เท่านั้น ไม่ publish | ✅ ไม่ชน |
@@ -93,7 +93,7 @@ chmod 700 secrets secrets/ssh
 ## 3. สร้างไฟล์ `.env`
 
 ```bash
-cd /opt/kittikhun/server
+cd /opt/tcl/server
 cp ../.env.example .env    # ถ้าไม่มีให้เขียนใหม่ตามด้านล่าง
 chmod 600 .env
 ```
@@ -122,9 +122,9 @@ APP_MIN_VERSION=4.0.0
 
 # ── Postgres (ต้องตรงกันทั้ง 3 บรรทัดกับ DATABASE_URL) ──
 POSTGRES_USER=stock
-POSTGRES_DB=kittikhun
+POSTGRES_DB=tcl
 POSTGRES_PASSWORD=<ที่สร้างไว้>
-DATABASE_URL=postgres://stock:<รหัสเดียวกัน>@kittikhun-db:5432/kittikhun   # ⚠️ ชื่อ alias ไม่ใช่ postgres
+DATABASE_URL=postgres://stock:<รหัสเดียวกัน>@tcl-db:5432/tcl   # ⚠️ ชื่อ alias ไม่ใช่ postgres
 
 # ── ความลับ ──
 JWT_ACCESS_SECRET=<hex 32>
@@ -139,7 +139,7 @@ CORS_ORIGINS=https://stock.example.com
 ERP_DRIVER=mock                # ⚠️ ดูหัวข้อ 5 ก่อนเปลี่ยนเป็น sql
 ```
 
-> ⚠️ `DATABASE_URL` ใช้ host ว่า **`kittikhun-db`** (alias ที่ override ตั้งไว้) ไม่ใช่ `postgres` และไม่ใช่ `localhost`
+> ⚠️ `DATABASE_URL` ใช้ host ว่า **`tcl-db`** (alias ที่ override ตั้งไว้) ไม่ใช่ `postgres` และไม่ใช่ `localhost`
 
 ---
 
@@ -195,21 +195,21 @@ caddy-gen ปล่อย **ทุก IP** ของ container ที่มี l
 **อาการ: 502 สลับ 200 เป๊ะ 50%** (เจอจริง 24 ส.ค. 2569)
 
 ```
-kittikhun.krs.co.th {
+tcl.krs.co.th {
   reverse_proxy {
     lb_policy round_robin
     to 172.18.0.12:8080   ← proxy-network      เข้าถึงได้
-    to 172.20.0.4:8080    ← kittikhun_default  เข้าไม่ถึง → 502
+    to 172.20.0.4:8080    ← tcl_default  เข้าไม่ถึง → 502
 ```
 
 `deploy/vps.override.yml` จึงบังคับให้ทุก service อยู่ `proxy-network` เท่านั้น
 
 **กับดักที่ตามมา:** `proxy-network` แชร์กับทุกโปรเจคในเครื่อง ชื่อ service `postgres`
 เฉย ๆ อาจชนกับ postgres ของโปรเจคอื่น แล้วแอปต่อฐานข้อมูลผิดตัวโดยไม่มีอะไรฟ้อง
-→ override ตั้ง alias `kittikhun-db` ไว้ **`DATABASE_URL` ต้องชี้มาที่ชื่อนี้**:
+→ override ตั้ง alias `tcl-db` ไว้ **`DATABASE_URL` ต้องชี้มาที่ชื่อนี้**:
 
 ```bash
-DATABASE_URL=postgres://stock:<รหัส>@kittikhun-db:5432/kittikhun
+DATABASE_URL=postgres://stock:<รหัส>@tcl-db:5432/tcl
 ```
 
 ตรวจก่อน `up` ทุกครั้งว่าไม่มี service ไหนอยู่หลาย network:
@@ -281,7 +281,7 @@ VPS อยู่นอกองค์กร → ต้องให้ ERP ยอ
 ## 6. คำสั่งขึ้นระบบ
 
 ```bash
-cd /opt/kittikhun/server
+cd /opt/tcl/server
 
 # ตั้ง alias ให้พิมพ์สั้นลง (ต้องใช้ override ทุกครั้ง)
 alias kk='docker compose -f docker-compose.yml -f deploy/vps.override.yml'
@@ -320,7 +320,7 @@ curl -s https://stock.example.com/healthz
 ต้องตั้งอย่างน้อยหนึ่งอย่างใน `.env`:
 
 ```bash
-BACKUP_REMOTE_TARGET=backup@nas.example.com:/volume1/kittikhun/
+BACKUP_REMOTE_TARGET=backup@nas.example.com:/volume1/tcl/
 BACKUP_SSH_KEY=/keys/id_ed25519
 # แล้ว mount: ./secrets/ssh:/keys:ro
 ```
@@ -345,7 +345,7 @@ flutter build apk --release \
 ## 9. อัปเดตเวอร์ชันใหม่
 
 ```bash
-cd /opt/kittikhun && git pull
+cd /opt/tcl && git pull
 cd server && kk build api && kk up -d api
 ```
 

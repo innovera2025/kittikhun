@@ -1,4 +1,4 @@
-# สัญญาความตรงกับ Design — KITTIKHUN v4.0
+# สัญญาความตรงกับ Design — TCL v4.0
 
 > **ไฟล์ต้นแบบ (authoritative):** `Mobile Stock Check System/Stock Scan Mobile.dc.html`
 > เอกสารนี้คือ "fidelity contract" — ทุกค่าที่ระบุที่นี่ **ต้อง** ตรงกับที่ implement ใน Flutter
@@ -8,7 +8,7 @@
 
 ## 1. Design Tokens
 
-รวบเป็น Dart class เดียว: `KittikhunTokens` (ThemeExtension) — **ห้าม widget ใดฮาร์ดโค้ดสี/รัศมี/เงา**
+รวบเป็น Dart class เดียว: `TclTokens` (ThemeExtension) — **ห้าม widget ใดฮาร์ดโค้ดสี/รัศมี/เงา**
 
 ### 1.1 สีพื้นและพื้นผิว
 
@@ -53,7 +53,7 @@
 | `BAD` | `#FF8377` — หมดสต็อก / login error |
 | accent tints | `.12 .16 .18 .26 .28 .30 .35 .40 .45` ตามตำแหน่ง (demo btn → expanded border) |
 
-**ฟังก์ชัน tone (ใช้ร่วม scan/search/count — เป็น pure function ใน `KittikhunTokens`):**
+**ฟังก์ชัน tone (ใช้ร่วม scan/search/count — เป็น pure function ใน `TclTokens`):**
 ```
 onHand <= 0        → BAD  "หมดสต็อก"     // ⚠️ production ใช้ <= 0 ไม่ใช่ === 0 (ERP ส่งค่าติดลบได้)
 onHand <= rop      → WARN "ใกล้หมด"
@@ -63,8 +63,8 @@ onHand <= rop      → WARN "ใกล้หมด"
 ### 1.4 Typography
 
 - **ฟอนต์ default ของ TextTheme = IBM Plex Sans Thai** (400/500/600) — สแต็ก body ใน design เป็นไทยนำ
-- **Space Grotesk** (400/500/600/700) ใช้ **เฉพาะจุดที่ design ระบุ**: ตัวเลขจำนวน, บรรทัด SKU, แบรนด์ KITTIKHUN, keypad, badge/role pill, นาฬิกา
-- ⚠️ ห้ามตั้ง Space Grotesk เป็น default แล้ว fallback ไทย — จะทำให้คำละติน/ตัวเลขในเนื้อความไทย ("Employee ID", ชื่อ "Kittikhun S.") ผิดฟอนต์ทั้งแอป
+- **Space Grotesk** (400/500/600/700) ใช้ **เฉพาะจุดที่ design ระบุ**: ตัวเลขจำนวน, บรรทัด SKU, แบรนด์ TCL, keypad, badge/role pill, นาฬิกา
+- ⚠️ ห้ามตั้ง Space Grotesk เป็น default แล้ว fallback ไทย — จะทำให้คำละติน/ตัวเลขในเนื้อความไทย ("Employee ID", ชื่อ "Tcl S.") ผิดฟอนต์ทั้งแอป
 - ⚠️ **ห้ามใส่ letterSpacing กับข้อความสคริปต์ไทย** (`.08–.14em` ใน design เป็นของ Latin/ตัวเลขเท่านั้น) — ทำ shaping ไทยพัง
 - ฟอนต์ bundle ใน assets (ห้าม fetch runtime) + StrutStyle ต่อ scale step กัน baseline ไทย/ละตินเหลื่อมและวรรณยุกต์ (◌้ ◌์) โดนตัด
 - **Golden tests ทุกจอด้วยสตริงวรรณยุกต์หนัก** เป็น CI gate
@@ -105,7 +105,7 @@ Type scale (px/weight): `30/700` เลขคงเหลือการ์ด�
 
 ### 2.1 Login "เข้าสู่ระบบ"
 
-- โลโก้ tile 54×54 r17 gradient + แบรนด์ **KITTIKHUN** (Space Grotesk 700 24) + ซับ "เข้าสู่ระบบด้วยรหัสพนักงานและ PIN"
+- โลโก้ tile 54×54 r17 gradient + แบรนด์ **TCL** (Space Grotesk 700 24) + ซับ "เข้าสู่ระบบด้วยรหัสพนักงานและ PIN"
 - การ์ดแก้ว: ช่อง **รหัสพนักงาน · Employee ID** (h52 r16, ไอคอนคน `#84BAF3`, ตัวเลข ls .14em) → **รหัส PIN · 6 หลัก** + hint `{n}/6` → **ช่อง PIN 6 เซลล์** (h12 r6, เติม `#84BAF3` ซ้าย→ขวา) → keypad 12 ปุ่ม `1-9, C, 0, ⌫` (เมื่อ `loginLayout='keypad'`) → ปุ่ม **เข้าสู่ระบบ** gradient + ลูกศร → บรรทัดข้อความสถานะ
 - Chips ล่าง: `WH-BKK-02` `v4.0` (ตัด chip `PIN 000000` — ดู §6)
 - **สถานะ:** ปกติ / ไม่พบพนักงาน → shake + ข้อความ **"ไม่พบรหัสพนักงานนี้ · unknown employee ID"** สี BAD + ขอบเซลล์แดง / PIN ผิด → ล้าง PIN + **"PIN ไม่ถูกต้อง ลองอีกครั้ง"** / กดปุ่มใด ๆ ล้าง error
@@ -177,7 +177,7 @@ Governance: เก็บเป็น remote config ที่ **เปลี่�
 ## 4. ข้อมูลตัวอย่าง (canonical fixture — ใช้ใน mock driver + golden tests)
 
 สินค้า 5 รายการ (barcode EAN-13 จริง): สลักเกลียวหัวหกเหลี่ยม M12 (1240/180/400 ชิ้น, A-04-12) · เทปพันสายไฟ PVC 19 มม. (86/60/120 ม้วน — ใกล้หมด) · ถุงมือหนังนิรภัย เบอร์ 9 (0 — หมดสต็อก) · น้ำมันหล่อลื่นเกียร์ 20 ลิตร (34/6/10 ถัง) · แผ่นตัดเหล็ก 4 นิ้ว (512/24/150 แผ่น) — พร้อม vendor/lot/วันที่นับล่าสุดแบบ พ.ศ.
-สมาชิก 4 คน: Kittikhun S. (52104 admin) · ปิยะนุช ศรีทอง (52210 staff) · ธนากร แสงทวี (52318 staff) · Nattaporn K. (52402 viewer)
+สมาชิก 4 คน: Tcl S. (52104 admin) · ปิยะนุช ศรีทอง (52210 staff) · ธนากร แสงทวี (52318 staff) · Nattaporn K. (52402 viewer)
 
 ตัวเลขแสดงผ่าน `toLocaleString` (1,240) · วันที่ พ.ศ. ("12 ส.ค. 2569") · เวลาสัมพัทธ์ "วันนี้ HH:MM" / "เมื่อวาน HH:MM" (กติกาเกินเมื่อวาน: ออกแบบเพิ่ม §7)
 
@@ -231,7 +231,7 @@ Governance: เก็บเป็น remote config ที่ **เปลี่�
 
 ## 7. Design extensions ที่ต้องออกแบบเพิ่ม (สถานะที่ demo ไม่มีแต่ production ต้องมี)
 
-ทำด้วยภาษา token ของ KITTIKHUN เดิมทั้งหมด — ลำดับตามความจำเป็นก่อน implement:
+ทำด้วยภาษา token ของ TCL เดิมทั้งหมด — ลำดับตามความจำเป็นก่อน implement:
 
 1. **จอ pending-review** — งานที่ถูก reject ตอน sync (เช่น "สิทธิ์ถูกเปลี่ยน — รอผู้ดูแลตรวจสอบ", "รอบนับถูกปิดแล้ว") + ปุ่ม retry/ทิ้ง
 2. **ตัวชี้สถานะซิงค์** — queue-depth badge, ป้าย "ข้อมูล ณ HH:MM" (พื้นที่ว่างบนกรอบกล้องจำกัด — เสนอวางในแถบเครื่องมือใต้กล้อง), สถานะ online/offline

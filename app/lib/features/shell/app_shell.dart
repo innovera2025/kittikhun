@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../core/theme/kittikhun_tokens.dart';
+import '../../core/theme/tcl_tokens.dart';
 import '../../core/widgets/common.dart';
 import '../../data/api_client.dart';
 import '../../data/fixtures.dart';
@@ -22,7 +22,7 @@ const double _riseFrom = 26;
 /// 12/400 — design ใช้ 12px ที่ kicker และชื่อผู้ใช้
 /// (อยู่ระหว่าง token caption 12.5/400 กับ label 12/500 → ใช้ helper thai() ตรง ๆ)
 TextStyle _head12(Color color) =>
-    KittikhunTokens.thai(size: 12, color: color);
+    TclTokens.thai(size: 12, color: color);
 
 /// เปลือกแอปหลัง sign-in (design §2.2) — header + เนื้อหาแท็บ + แถบแท็บล่าง
 ///
@@ -135,7 +135,7 @@ class AppShell extends ConsumerWidget {
               fit: StackFit.expand,
               children: [
                 // dismissible:false — design ไม่ปิด sheet ด้วยการแตะฉากหลัง
-                ModalBarrier(color: KittikhunTokens.scrim, dismissible: false),
+                ModalBarrier(color: TclTokens.scrim, dismissible: false),
                 Padding(
                   padding: EdgeInsets.all(16),
                   child: Align(
@@ -155,7 +155,7 @@ class AppShell extends ConsumerWidget {
               fit: StackFit.expand,
               children: [
                 const ModalBarrier(
-                  color: KittikhunTokens.scrim,
+                  color: TclTokens.scrim,
                   dismissible: false,
                 ),
                 Padding(
@@ -178,7 +178,7 @@ class AppShell extends ConsumerWidget {
           Positioned(
             left: 20,
             right: 20,
-            bottom: KittikhunTokens.toastBottomOffset,
+            bottom: TclTokens.toastBottomOffset,
             // key ผูกกับข้อความ → ข้อความใหม่ remount แล้วเล่นอนิเมชัน rise ซ้ำ
             child: _Toast(key: ValueKey(state.toast), message: state.toast!),
           ),
@@ -229,7 +229,7 @@ class _Header extends StatelessWidget {
                   children: [
                     const BrandMark(
                       size: 34,
-                      radius: KittikhunTokens.rLogoSmall,
+                      radius: TclTokens.rLogoSmall,
                     ),
                     const SizedBox(width: 11),
                     Expanded(
@@ -241,14 +241,14 @@ class _Header extends StatelessWidget {
                             kicker,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: _head12(KittikhunTokens.tMuted),
+                            style: _head12(TclTokens.tMuted),
                           ),
                           const SizedBox(height: 2),
                           Text(
                             title,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: KittikhunTokens.screenTitle(),
+                            style: TclTokens.screenTitle(),
                           ),
                         ],
                       ),
@@ -272,13 +272,13 @@ class _Header extends StatelessWidget {
                             maxLines: 1,
                             textAlign: TextAlign.right,
                             overflow: TextOverflow.ellipsis,
-                            style: _head12(KittikhunTokens.tSoft),
+                            style: _head12(TclTokens.tSoft),
                           ),
                           Text(
                             role,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: KittikhunTokens.roleKicker(),
+                            style: TclTokens.roleKicker(),
                           ),
                         ],
                       ),
@@ -307,16 +307,16 @@ class _HeaderAvatar extends StatelessWidget {
     height: 42,
     alignment: Alignment.center,
     decoration: BoxDecoration(
-      color: KittikhunTokens.t16,
-      border: Border.all(color: KittikhunTokens.t30),
-      borderRadius: BorderRadius.circular(KittikhunTokens.rHeaderAvatar),
+      color: TclTokens.t16,
+      border: Border.all(color: TclTokens.t30),
+      borderRadius: BorderRadius.circular(TclTokens.rHeaderAvatar),
     ),
     child: Text(
       initials,
-      style: KittikhunTokens.display(
+      style: TclTokens.display(
         size: 14,
         weight: FontWeight.w600,
-        color: KittikhunTokens.accentHover,
+        color: TclTokens.accentHover,
       ),
     ),
   );
@@ -335,18 +335,18 @@ class _TabBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Padding(
     padding: const EdgeInsets.fromLTRB(
-      KittikhunTokens.gutterTab,
+      TclTokens.gutterTab,
       6,
-      KittikhunTokens.gutterTab,
+      TclTokens.gutterTab,
       16,
     ),
     child: Container(
       padding: const EdgeInsets.all(7),
       decoration: BoxDecoration(
-        color: KittikhunTokens.s09,
-        border: Border.all(color: KittikhunTokens.b13),
-        borderRadius: BorderRadius.circular(KittikhunTokens.rTabBar),
-        boxShadow: KittikhunTokens.shTabBar,
+        color: TclTokens.s09,
+        border: Border.all(color: TclTokens.b13),
+        borderRadius: BorderRadius.circular(TclTokens.rTabBar),
+        boxShadow: TclTokens.shTabBar,
       ),
       child: Row(
         children: [
@@ -379,20 +379,20 @@ class _TabButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final fg = active ? KittikhunTokens.onAccent : KittikhunTokens.tMuted;
+    final fg = active ? TclTokens.onAccent : TclTokens.tMuted;
     return DecoratedBox(
       decoration: BoxDecoration(
-        gradient: active ? KittikhunTokens.activeTabGradient : null,
-        borderRadius: BorderRadius.circular(KittikhunTokens.rTabButton),
+        gradient: active ? TclTokens.activeTabGradient : null,
+        borderRadius: BorderRadius.circular(TclTokens.rTabButton),
       ),
       child: Semantics(
         button: true,
         selected: active,
         child: Tappable(
           onTap: onTap,
-          radius: KittikhunTokens.rTabButton,
+          radius: TclTokens.rTabButton,
           child: SizedBox(
-            height: KittikhunTokens.hTabButton,
+            height: TclTokens.hTabButton,
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
@@ -402,7 +402,7 @@ class _TabButton extends StatelessWidget {
                   color: fg,
                 ),
                 const SizedBox(height: 4),
-                Text(tab.label, style: KittikhunTokens.tiny(fg)),
+                Text(tab.label, style: TclTokens.tiny(fg)),
               ],
             ),
           ),
@@ -529,11 +529,11 @@ class _Toast extends StatefulWidget {
 class _ToastState extends State<_Toast> with SingleTickerProviderStateMixin {
   late final AnimationController _ctrl = AnimationController(
     vsync: this,
-    duration: KittikhunTokens.dRiseToast,
+    duration: TclTokens.dRiseToast,
   );
   late final Animation<double> _rise = CurvedAnimation(
     parent: _ctrl,
-    curve: KittikhunTokens.cRise,
+    curve: TclTokens.cRise,
   );
 
   @override
@@ -563,10 +563,10 @@ class _ToastState extends State<_Toast> with SingleTickerProviderStateMixin {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
           decoration: BoxDecoration(
-            color: KittikhunTokens.toastBg,
-            border: Border.all(color: KittikhunTokens.b16),
-            borderRadius: BorderRadius.circular(KittikhunTokens.rToast),
-            boxShadow: KittikhunTokens.shToast,
+            color: TclTokens.toastBg,
+            border: Border.all(color: TclTokens.b16),
+            borderRadius: BorderRadius.circular(TclTokens.rToast),
+            boxShadow: TclTokens.shToast,
           ),
           child: Row(
             children: [
@@ -574,13 +574,13 @@ class _ToastState extends State<_Toast> with SingleTickerProviderStateMixin {
                 width: 8,
                 height: 8,
                 decoration: const BoxDecoration(
-                  color: KittikhunTokens.accent,
+                  color: TclTokens.accent,
                   shape: BoxShape.circle,
                 ),
               ),
               const SizedBox(width: 10),
               Expanded(
-                child: Text(widget.message, style: KittikhunTokens.body13()),
+                child: Text(widget.message, style: TclTokens.body13()),
               ),
             ],
           ),

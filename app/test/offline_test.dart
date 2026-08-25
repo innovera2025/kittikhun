@@ -1,9 +1,9 @@
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:kittikhun_stock/data/models.dart';
-import 'package:kittikhun_stock/data/stock_repository.dart';
-import 'package:kittikhun_stock/local/local_db.dart';
+import 'package:tcl_stock/data/models.dart';
+import 'package:tcl_stock/data/stock_repository.dart';
+import 'package:tcl_stock/local/local_db.dart';
 
 /// เทสต์ offline layer — พิสูจน์ว่าคลังที่มีจุดอับสัญญาณยังทำงานได้
 ///

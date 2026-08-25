@@ -1,14 +1,14 @@
 // -----------------------------------------------------------------------------
-// KITTIKHUN Mobile Stock Check — CLI สร้าง admin คนแรก (bootstrap)
+// TCL Mobile Stock Check — CLI สร้าง admin คนแรก (bootstrap)
 // -----------------------------------------------------------------------------
 // ⚠️ ต้องมี script บรรทัดนี้ใน package.json (agent อื่นเป็นคนแก้ไฟล์นั้น):
 //       "create-admin": "node dist/cli/create-admin.js"
 //
 // เรียกใช้ (หลัง npm run build):
-//   npm run create-admin -- --emp-id 52104 --name "Kittikhun S." \
+//   npm run create-admin -- --emp-id 52104 --name "Tcl S." \
 //                           [--shift "กะเช้า · A"] [--pin 481920]
 // ระหว่าง dev (ไม่ต้อง build):
-//   npx ts-node src/cli/create-admin.ts --emp-id 52104 --name "Kittikhun S."
+//   npx ts-node src/cli/create-admin.ts --emp-id 52104 --name "Tcl S."
 // ในคอนเทนเนอร์:
 //   docker compose exec api node dist/cli/create-admin.js --emp-id 52104 --name "..."
 //

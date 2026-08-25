@@ -17,10 +17,10 @@ import { PostgresService } from '../../src/db/postgres.service';
  * (ไม่ทำให้ `npx jest` แดงบนเครื่องที่ไม่มี DB)
  *
  * เปิด DB ชั่วคราวสำหรับเทสต์:
- *   docker run -d --name kittikhun-test-pg \
- *     -e POSTGRES_PASSWORD=testpw -e POSTGRES_USER=kittikhun \
- *     -e POSTGRES_DB=kittikhun_test -p 55432:5432 postgres:16-alpine
- *   export TEST_DATABASE_URL='postgres://kittikhun:testpw@localhost:55432/kittikhun_test'
+ *   docker run -d --name tcl-test-pg \
+ *     -e POSTGRES_PASSWORD=testpw -e POSTGRES_USER=tcl \
+ *     -e POSTGRES_DB=tcl_test -p 55432:5432 postgres:16-alpine
+ *   export TEST_DATABASE_URL='postgres://tcl:testpw@localhost:55432/tcl_test'
  */
 export const TEST_DATABASE_URL = process.env['TEST_DATABASE_URL'];
 
