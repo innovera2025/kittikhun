@@ -127,6 +127,82 @@ INSERT INTO RunningNumber(Name, Number) VALUES (?xRun, ?cRunno)
 
 ---
 
+## 3.4 แผนที่ข้อมูลสองทิศทาง (ตารางเทียบ)
+
+สรุปว่า **อ่านอะไรจากตารางไหนของ ERP** และ **เขียนอะไรกลับไปที่ตารางไหน**
+
+### ก. ขาไป — ERP → ระบบเรา (อ่านอย่างเดียว)
+
+ผ่าน script `sql/erp/inventory-items-with-balance.sql`
+
+| ตารางต้นทางใน ERP | คอลัมน์ที่ดึง | เข้ามาเป็นอะไรในระบบเรา | หมายเหตุ |
+|---|---|---|---|
+| `dbo.InventoryItem` | `ItemCode` | `items_cache.sku` | คีย์เชื่อมทุกอย่าง · ครบ 100% |
+| `dbo.InventoryItem` | `ItemName` | `items_cache.name` | ชื่อไทย · ครบ 100% |
+| `dbo.InventoryItem` | `ItemNameEng` | `items_cache.name_en` | ว่าง 100% ในข้อมูลจริง |
+| `dbo.InventoryItem` | `MainUnits` | `items_cache.unit` | ครบ 100% |
+| `dbo.InventoryItem` | `MinStock` | `items_cache.rop` | มี ~29% · ค่า 0 ถือว่าไม่ได้ตั้ง |
+| `dbo.InventoryItem` | `Shelf` | `items_cache.loc` | ว่าง 100% |
+| `dbo.InventoryItem` | `LotNumber` | (ไม่ใช้ต่อ) | ว่าง 100% |
+| `dbo.InventoryItem` | `BarCodeUnits` · `BarCodePack` | `item_barcodes.barcode` | มีจริง ~2% |
+| `dbo.InventoryItem` | `Roworder` | ใช้ตัดแถวซ้ำเท่านั้น | `ItemCode` ซ้ำได้ → เอา `Roworder` สูงสุด |
+| `dbo.InventoryItem` | `IsActive` · `IsStock` | เงื่อนไขกรอง | เอาเฉพาะ `= 1` |
+| `dbo.InventoryFlowHdr` | `InOutDate` · `Approved` · `IsClosed` | เงื่อนไขกรอง ledger | สูตรของฝ่าย ERP |
+| `dbo.InventoryFlowHdr` | `TranSactionno` · `VoucherNo` | คีย์ join ไป `Dtl` | |
+| `dbo.InventoryFlowDtl` | `ItemCode` · `Warehouse` | เงื่อนไขกรอง | กรองตาม `WAREHOUSE_CODE` |
+| `dbo.InventoryFlowDtl` | `SUM(InOut × MainQuantity)` | `items_cache.on_hand` | **ยอดคงเหลือ** · ไม่มี movement = `NULL` ไม่ใช่ 0 |
+
+**ไม่ได้ดึงอะไรอีกเลย** — ไม่เอาข้อมูลพนักงาน ราคา ผู้ขาย หรือรอบนับของ ERP
+ตามขอบเขตที่เจ้าของโปรเจคยืนยันไว้เมื่อ 22 ส.ค. 2569
+
+**เส้นทางที่ข้อมูลวิ่งต่อ**
+
+```
+ERP → items_cache → count_snapshot (ตรึงตอนเปิดรอบ) → มือถือ
+                 └→ ยิงสดรายครั้งตอนค้นหา/สแกน (ไม่ผ่าน cache)
+```
+
+### ข. ขากลับ — ระบบเรา → ERP (เขียน)
+
+| ปลายทางใน ERP | คอลัมน์ | มาจากตารางไหนของเรา | คอลัมน์ของเรา |
+|---|---|---|---|
+| `RunningNumber` | `Number` | — | อ่านแล้ว `+1` ในคำสั่งเดียว (`CNTTr` และ `CNT`+YYMM) |
+| `tbl_CountHdr` | `TransactionNo` | — | เลขที่ออกจาก `RunningNumber.CNTTr` |
+| `tbl_CountHdr` | `VoucherNo` | — | ประกอบเป็น `CNT-YYMM-NNNN` |
+| `tbl_CountHdr` | `VoucherDate` | — | เวลาที่กดส่ง |
+| `tbl_CountHdr` | `CountDate` | `count_sessions` | `closed_at` (วันที่ปิดรอบ) |
+| `tbl_CountHdr` | `Emp_ID` | `count_sessions` | `closed_by` |
+| `tbl_CountHdr` | `Emp_Name` | `users` | `name` ของ `closed_by` |
+| `tbl_CountHdr` | `CountNo` · `CountYear` · `CountNumber` | — | คงที่ `'1'` · ปีที่นับ · `1` |
+| `tbl_CountHdr` | `Remark` | `count_sessions` | รหัสรอบของเรา |
+| `tbl_CountHdr` | `EntryBy` | `users` | `emp_id` ของ admin ที่กดส่ง |
+| `tbl_CountHdr` | `EntryDate` | — | `GETDATE()` ของ ERP |
+| `tbl_CountDtl` | `TransactionNo` | — | เลขเดียวกับหัวเอกสาร |
+| `tbl_CountDtl` | `Number` | — | ลำดับ 1..N เรียงตาม `sku` |
+| `tbl_CountDtl` | `ItemCode` | `closed_variance` | `sku` |
+| `tbl_CountDtl` | `Description` | `items_cache` | `name` |
+| `tbl_CountDtl` | `Warehouse` | `count_sessions` | `warehouse_code` |
+| `tbl_CountDtl` | `MainQty` | `closed_variance` | `frozen_on_hand` (ยอดที่ตรึงตอนเปิดรอบ) |
+| `tbl_CountDtl` | `MainUnits` | `closed_variance` | `unit` |
+| `tbl_CountDtl` | `CountQty` | `closed_variance` | `final_counted_qty` |
+| `tbl_CountDtl` | `DifQty` | คำนวณ | `MainQty − CountQty` |
+| `tbl_CountDtl` | `RemarkDtl` | `closed_variance` | หมายเหตุเมื่อ `status = 'conflict'` |
+
+**ไม่เขียนตารางอื่นเลย** — บังคับด้วย `assertCountWriteSql()` ที่ยอมเฉพาะ 3 ตารางนี้
+
+### ค. จุดที่สองทิศทางไม่ตรงกัน — ต้องแปลงเสมอ
+
+| เรื่อง | ฝั่งเรา | ฝั่ง ERP | ต้องทำอะไร |
+|---|---|---|---|
+| ทิศทางส่วนต่าง | `diff = counted − system` (เกิน = บวก) | `DifQty = MainQty − CountQty` (ขาด = บวก) | **กลับเครื่องหมาย** |
+| ความละเอียดตัวเลข | `numeric(18,3)` | `decimal(18,2)` | **ปัดเป็น 2 ตำแหน่ง** |
+| ยังไม่ได้นับ | `final_counted_qty = NULL` | `CountQty` เป็น NULL ไม่ได้ | **ตัดแถวออกไม่ส่ง** |
+| ของนอกรายการ | `status = 'off_list'` (ไม่มี `frozen_on_hand`) | ไม่มีที่รองรับ | **ตัดแถวออกไม่ส่ง** |
+| คลังสินค้า | ผูกกับรอบนับ | อยู่ที่ระดับรายการ | ประทับ `warehouse_code` ของรอบลงทุกแถว |
+| กันเอกสารซ้ำ | `erp_writeback.session_id` เป็น PK | **ไม่มี unique เลย** | ด่านทั้งหมดอยู่ฝั่งเรา |
+
+---
+
 ## 4. ⭐ ความเสี่ยงอันดับหนึ่ง — เลขที่เอกสารชนกัน
 
 สเปกที่ได้รับเป็น `SELECT` แล้วค่อย `UPDATE` แยกคำสั่ง **ซึ่งไม่ปลอดภัยเมื่อมีผู้ใช้พร้อมกัน**
