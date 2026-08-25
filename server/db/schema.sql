@@ -255,7 +255,7 @@ CREATE TABLE IF NOT EXISTS count_sessions (
   )
 );
 
-COMMENT ON TABLE  count_sessions IS 'รอบนับ — mirror ของ dbo.tbl_CountHdr (join tbl_CountDtl ด้วย TransactionNo); ผลการนับและส่วนต่างเก็บฝั่งเราเท่านั้น ไม่เขียนกลับ ERP';
+COMMENT ON TABLE  count_sessions IS 'รอบนับ — เปิดจากระบบเราเอง; ผลการนับและส่วนต่างเก็บฝั่งเรา และส่งกลับ ERP ได้หลังปิดรอบผ่าน erp_writeback';
 COMMENT ON COLUMN count_sessions.erp_transaction_no IS 'คีย์เชื่อม tbl_CountDtl; NULL ได้เมื่อเป็นรอบที่สร้างในระบบเราเอง (ไม่มีต้นทางใน ERP)';
 COMMENT ON COLUMN count_sessions.erp_voucher_no IS 'VoucherNo เช่น CNT-2608-0003 — ⚠️ ซ้ำได้ ห้ามใส่ unique constraint';
 COMMENT ON COLUMN count_sessions.erp_data_as_of IS 'อายุข้อมูล ERP ตอน freeze snapshot — แสดงในหน้านับและในรายงาน variance';
@@ -336,7 +336,9 @@ CREATE TRIGGER trg_count_submissions_append_only
 
 -- 3.10 closed_variance -------------------------------------------------------
 -- materialize ตอนปิดรอบ = คำตอบถาวรของคำถาม "ต่างกันเท่าไหร่"
--- 🚫 ผลนี้อยู่ในระบบเรา (+ export CSV อ้างอิงภายใน) — ไม่มีเส้นทางกลับ ERP
+-- ผลนี้อยู่ในระบบเรา (+ export CSV) และเป็นแหล่งข้อมูลของการส่งกลับ ERP
+-- ⚠️ ส่งกลับได้เฉพาะแถวที่มีคนนับจริง — `not_counted` ถูกตัดออกเสมอ เพราะ ERP
+--    เก็บ CountQty เป็น NULL ไม่ได้ ส่ง 0 ไปจะแปลว่า "นับแล้วได้ศูนย์" (ของหาย)
 CREATE TABLE IF NOT EXISTS closed_variance (
   session_id        text            NOT NULL REFERENCES count_sessions(id) ON UPDATE CASCADE ON DELETE CASCADE,
   sku               text            NOT NULL,
@@ -373,7 +375,40 @@ COMMENT ON COLUMN closed_variance.diff IS 'final_counted_qty − frozen_on_hand 
 COMMENT ON COLUMN closed_variance.status IS 'conflict = admin ตัดสินจากหลายเครื่อง (chosen_submission บอกว่าเลือกแถวไหน) — ห้าม auto-resolve';
 COMMENT ON COLUMN closed_variance.sku IS 'ไม่ผูก FK ไป items_cache โดยเจตนา: รายงานส่วนต่างต้องอยู่ถาวรแม้อนาคตจะ purge สินค้าที่ tombstone แล้ว';
 
--- 3.11 audit_log (APPEND-ONLY) -----------------------------------------------
+-- 3.11 erp_writeback ---------------------------------------------------------
+-- สถานะการส่งผลนับกลับเข้า ERP (tbl_CountHdr / tbl_CountDtl)
+--
+-- ⚠️ session_id เป็น PRIMARY KEY โดยเจตนา = หนึ่งรอบนับส่งได้ครั้งเดียวตลอดกาล
+--    ฝั่ง ERP ไม่มี unique บน VoucherNo/TransactionNo (คีย์หลักคือ Roworder+TransactionNo
+--    ซึ่ง Roworder เป็น IDENTITY) → ไม่มีด่านสุดท้ายกันเอกสารซ้ำที่ฐานข้อมูลปลายทาง
+--    ตารางนี้จึงเป็นด่านเดียวที่กันได้ ห้ามผ่อนคีย์นี้เด็ดขาด
+CREATE TABLE IF NOT EXISTS erp_writeback (
+  session_id      text        PRIMARY KEY REFERENCES count_sessions(id) ON UPDATE CASCADE ON DELETE RESTRICT,
+  status          text        NOT NULL DEFAULT 'queued',
+  transaction_no  integer,
+  voucher_no      text,
+  row_count       integer,
+  attempts        integer     NOT NULL DEFAULT 0,
+  last_error      text,
+  requested_by    text        REFERENCES users(emp_id) ON UPDATE CASCADE ON DELETE SET NULL,
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  sent_at         timestamptz,
+  CONSTRAINT erp_writeback_status_ok  CHECK (status IN ('queued','sent','failed')),
+  CONSTRAINT erp_writeback_attempts_ge CHECK (attempts >= 0),
+  CONSTRAINT erp_writeback_row_count_ge CHECK (row_count IS NULL OR row_count >= 0),
+  -- ส่งสำเร็จต้องมีเลขเอกสารครบ ไม่งั้นตามรอยใน ERP ไม่ได้
+  CONSTRAINT erp_writeback_sent_complete CHECK (
+    status <> 'sent'
+    OR (transaction_no IS NOT NULL AND voucher_no IS NOT NULL AND sent_at IS NOT NULL)
+  )
+);
+
+COMMENT ON TABLE  erp_writeback IS 'สถานะการส่งผลนับกลับ ERP — หนึ่งรอบต่อหนึ่งแถว (PK) คือกลไกกันส่งซ้ำเพียงชั้นเดียวที่มี';
+COMMENT ON COLUMN erp_writeback.transaction_no IS 'tbl_CountHdr.TransactionNo ที่เราออกให้จาก RunningNumber.CNTTr';
+COMMENT ON COLUMN erp_writeback.voucher_no IS 'tbl_CountHdr.VoucherNo รูปแบบ CNT-YYMM-NNNN';
+COMMENT ON COLUMN erp_writeback.row_count IS 'จำนวนแถวใน tbl_CountDtl ที่ส่งจริง — นับเฉพาะรายการที่มีคนนับ (not_counted ถูกตัดออก)';
+
+-- 3.12 audit_log (APPEND-ONLY) -----------------------------------------------
 CREATE TABLE IF NOT EXISTS audit_log (
   id         bigserial   PRIMARY KEY,
   actor      text        NOT NULL,

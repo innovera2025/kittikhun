@@ -2,6 +2,8 @@ import { Global, Inject, Logger, Module, OnModuleDestroy, OnModuleInit } from '@
 import { ConfigService } from '@nestjs/config';
 
 import { ERP_ADAPTER, ErpAdapter } from './erp-adapter';
+import { ERP_COUNT_WRITER, type ErpCountWriter } from './erp-count-writer';
+import { MssqlCountWriter } from './drivers/mssql-count-writer';
 import { MssqlDriver } from './drivers/mssql.driver';
 import { MockDriver } from './drivers/mock.driver';
 import type { AppConfig } from '../config/env.config';
@@ -36,8 +38,37 @@ import type { AppConfig } from '../config/env.config';
         }
       },
     },
+    {
+      // เส้นทางเขียนกลับ ERP — `null` เมื่อปิดอยู่ (ค่าเริ่มต้น)
+      //
+      // 🚫 ใช้ **บัญชีคนละตัว** กับเส้นทางอ่านเสมอ (env.config บังคับไว้แล้ว)
+      //    บัญชีอ่านต้องพิสูจน์ได้ว่าเขียนไม่ได้ตามกฎเหล็กชั้นที่ 1
+      provide: ERP_COUNT_WRITER,
+      inject: [ConfigService],
+      useFactory: (cfg: ConfigService<AppConfig, true>): ErpCountWriter | null => {
+        if (!cfg.get('ERP_WRITEBACK_ENABLED', { infer: true })) return null;
+
+        const user = cfg.get('ERP_SQL_WRITE_USER', { infer: true });
+        const password = cfg.get('ERP_SQL_WRITE_PASSWORD', { infer: true });
+        const host = cfg.get('ERP_SQL_HOST', { infer: true });
+        const database = cfg.get('ERP_SQL_DATABASE', { infer: true });
+        // env.config ตรวจครบแล้วว่าต้องมีเมื่อเปิดใช้ — เช็คซ้ำเพื่อให้ชนิดข้อมูลแคบลง
+        if (!user || !password || !host || !database) return null;
+
+        return new MssqlCountWriter({
+          host,
+          port: cfg.get('ERP_SQL_PORT', { infer: true }),
+          user,
+          password,
+          database,
+          encrypt: cfg.get('ERP_SQL_ENCRYPT', { infer: true }),
+          trustServerCert: cfg.get('ERP_SQL_TRUST_SERVER_CERT', { infer: true }),
+          timeoutMs: cfg.get('ERP_TIMEOUT_MS', { infer: true }),
+        });
+      },
+    },
   ],
-  exports: [ERP_ADAPTER],
+  exports: [ERP_ADAPTER, ERP_COUNT_WRITER],
 })
 export class ErpModule implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(ErpModule.name);

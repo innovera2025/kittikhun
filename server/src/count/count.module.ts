@@ -16,6 +16,11 @@ import { CurrentUser, RequireFreshRole, Roles } from '../auth/auth.guards';
 import { AuthModule } from '../auth/auth.module';
 import type { AuthenticatedUser } from '../auth/auth.types';
 import { CountService } from './count.service';
+import {
+  ErpWritebackService,
+  type WritebackResult,
+  type WritebackStatus,
+} from './erp-writeback.service';
 
 // ---------------------------------------------------------------------------
 // zod: ทุกอย่างที่มาจากภายนอก (path param / query / body)
@@ -161,7 +166,10 @@ type ResolveConflictResult = Awaited<ReturnType<CountService['resolveConflict']>
  */
 @Controller('count-sessions')
 export class CountController {
-  constructor(private readonly count: CountService) {}
+  constructor(
+    private readonly count: CountService,
+    private readonly writeback: ErpWritebackService,
+  ) {}
 
   /**
    * รอบนับที่เปิดอยู่ของคลังผู้เรียก + frozen qty + `erpDataAsOf`
@@ -293,13 +301,40 @@ export class CountController {
     );
     return this.count.resolveConflict(sessionId, sku, chosenSubmission, user);
   }
+
+  /**
+   * ส่งผลการนับของรอบที่ปิดแล้วเข้า ERP (`tbl_CountHdr` / `tbl_CountDtl`)
+   *
+   * 🚫 นี่คือ endpoint เดียวในระบบที่เขียนอะไรลง ERP — เส้นทางอื่นทั้งหมด
+   *    ยังพิสูจน์ได้ว่าอ่านอย่างเดียวเหมือนเดิม
+   * ส่งได้ครั้งเดียวต่อรอบ (PK ของ `erp_writeback`) เพราะ ERP ไม่มี unique
+   * บน `VoucherNo` จึงกันเอกสารซ้ำที่ปลายทางไม่ได้
+   */
+  @Post(':id/erp-writeback')
+  @Roles('admin')
+  @RequireFreshRole()
+  @HttpCode(200)
+  async erpWriteback(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') idParam: string,
+  ): Promise<WritebackResult> {
+    const sessionId = parseOrThrow(SessionIdSchema, idParam, 'รหัสรอบนับไม่ถูกต้อง');
+    return this.writeback.send(sessionId, user.empId);
+  }
+
+  /** สถานะการส่งเข้า ERP ของรอบหนึ่ง — `null` = ยังไม่เคยส่ง */
+  @Get(':id/erp-writeback')
+  async erpWritebackStatus(@Param('id') idParam: string): Promise<WritebackStatus | null> {
+    const sessionId = parseOrThrow(SessionIdSchema, idParam, 'รหัสรอบนับไม่ถูกต้อง');
+    return this.writeback.status(sessionId);
+  }
 }
 
 /** PostgresModule เป็น @Global และ ConfigModule ตั้ง isGlobal ไว้แล้ว จึงไม่ต้อง import */
 @Module({
   imports: [AuthModule],
   controllers: [CountController],
-  providers: [CountService],
-  exports: [CountService],
+  providers: [CountService, ErpWritebackService],
+  exports: [CountService, ErpWritebackService],
 })
 export class CountModule {}

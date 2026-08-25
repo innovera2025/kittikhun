@@ -98,7 +98,10 @@ export type ErpDriverKind = 'sql' | 'rest' | 'mock';
  *
  * ห้าม: `pushAdjustment`, `postCount`, `writeBack`, `updateStock`, `syncToErp`, ... ทุกรูปแบบ
  * ถ้ามีคนเผลอเพิ่ม → `ERP_ADAPTER_IS_READ_ONLY` ด้านล่างจะทำให้ compile ไม่ผ่าน (ตัวจับ regression)
- * การเขียนกลับ ERP ถูกตัดออกจาก scope **ถาวร** — ห้ามเสนอใหม่ (docs/erp-integration.md §6)
+ * ⚠️ 25 ส.ค. 2569: มีเส้นทางเขียนแยกต่างหากแล้วที่ `erp-count-writer.ts` (ส่งผลนับเข้า
+ * `tbl_CountHdr`/`tbl_CountDtl` ตามสัญญาที่ฝ่าย ERP ให้มา) — **แต่ interface นี้ยัง
+ * ห้ามมี method เขียนเด็ดขาดเหมือนเดิม** เส้นทางเขียนใช้คนละ interface คนละ pool
+ * และคนละบัญชีฐานข้อมูล เพื่อให้ทุกเส้นทางอ่านยังพิสูจน์ได้ว่าเขียนไม่ได้
  */
 export interface ErpAdapter {
   capabilities(): ErpCapabilities;

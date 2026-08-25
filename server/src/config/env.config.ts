@@ -324,6 +324,24 @@ const sqlRequiredShape = {
   ERP_SQL_DATABASE: sqlDatabase,
 } as const;
 
+/**
+ * เส้นทางเขียนกลับ ERP (ส่งผลนับเข้า tbl_CountHdr / tbl_CountDtl)
+ *
+ * 🚫 บัญชีนี้ต้องแยกจากบัญชีอ่านเสมอ — บัญชีอ่านต้องพิสูจน์ได้ว่าเขียนไม่ได้
+ *    ตามกฎเหล็กชั้นที่ 1 ถ้าใช้บัญชีเดียวกัน การพิสูจน์นั้นหมดความหมายทันที
+ * ปิดอยู่โดยค่าเริ่มต้น — ต้องตั้ง ERP_WRITEBACK_ENABLED=true อย่างจงใจเท่านั้น
+ */
+const writebackShape = {
+  ERP_WRITEBACK_ENABLED: envBool(
+    false,
+    'true = เปิดให้ส่งผลนับกลับ ERP (ต้องตั้ง ERP_SQL_WRITE_USER/PASSWORD ด้วย)',
+  ),
+  ERP_SQL_WRITE_USER: envStr('login ที่มีสิทธิ์เขียนเฉพาะตารางรอบนับของ ERP', {
+    max: 128,
+  }).optional(),
+  ERP_SQL_WRITE_PASSWORD: envStr('รหัสผ่านของ ERP_SQL_WRITE_USER', { max: 256 }).optional(),
+} as const;
+
 /** driver อื่นไม่บังคับ แต่ยังประกาศคีย์ไว้ให้ ConfigService อ่านได้ */
 const sqlOptionalShape = {
   ERP_SQL_HOST: sqlHost.optional(),
@@ -416,6 +434,7 @@ const mockEnvSchema = z.object({
   ...commonShape,
   ...sqlSharedShape,
   ...sqlOptionalShape,
+  ...writebackShape,
   ...restSharedShape,
   ...restOptionalShape,
 });
@@ -425,6 +444,7 @@ const sqlEnvSchema = z.object({
   ...commonShape,
   ...sqlSharedShape,
   ...sqlRequiredShape,
+  ...writebackShape,
   ...restSharedShape,
   ...restOptionalShape,
 });
@@ -434,6 +454,7 @@ const restEnvSchema = z.object({
   ...commonShape,
   ...sqlSharedShape,
   ...sqlOptionalShape,
+  ...writebackShape,
   ...restSharedShape,
   ...restRequiredShape,
 });
@@ -504,6 +525,36 @@ function crossFieldRules(config: AppConfig, ctx: z.RefinementCtx): void {
       'JWT_REFRESH_SECRET',
       'ต้องไม่เป็นค่าเดียวกับ JWT_ACCESS_SECRET — สร้างแยกกันด้วย openssl rand -hex 32',
     );
+  }
+
+  if (config.ERP_WRITEBACK_ENABLED) {
+    if (config.ERP_DRIVER !== 'sql') {
+      addIssue(
+        'ERP_WRITEBACK_ENABLED',
+        "ส่งผลนับกลับ ERP ได้เฉพาะ ERP_DRIVER=sql เท่านั้น — driver อื่นไม่มีเส้นทางเขียน",
+      );
+    }
+    if (!config.ERP_SQL_WRITE_USER || !config.ERP_SQL_WRITE_PASSWORD) {
+      addIssue(
+        'ERP_SQL_WRITE_USER',
+        'เปิด ERP_WRITEBACK_ENABLED แล้วต้องตั้ง ERP_SQL_WRITE_USER และ ERP_SQL_WRITE_PASSWORD ด้วย',
+      );
+    }
+    // 🚫 กฎเหล็กชั้นที่ 1: บัญชีอ่านต้องพิสูจน์ได้ว่าเขียนไม่ได้ ถ้าใช้บัญชีเดียวกับ
+    //    เส้นทางเขียน การพิสูจน์นั้นหมดความหมาย และ boot probe จะปฏิเสธการ start
+    if (
+      config.ERP_SQL_WRITE_USER &&
+      config.ERP_SQL_USER &&
+      config.ERP_SQL_WRITE_USER.trim().toLowerCase() === config.ERP_SQL_USER.trim().toLowerCase()
+    ) {
+      addIssue(
+        'ERP_SQL_WRITE_USER',
+        'ต้องเป็นคนละบัญชีกับ ERP_SQL_USER — บัญชีที่ใช้อ่านต้องไม่มีสิทธิ์เขียนเด็ดขาด',
+      );
+    }
+    if (config.ERP_SQL_WRITE_USER && config.ERP_SQL_WRITE_USER.trim().toLowerCase() === 'sa') {
+      addIssue('ERP_SQL_WRITE_USER', 'ห้ามใช้บัญชี sa ต่อ ERP ไม่ว่ากรณีใด');
+    }
   }
 
   if (config.ERP_DRIVER === 'sql') {
