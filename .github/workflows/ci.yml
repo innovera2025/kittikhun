@@ -22,12 +22,12 @@ jobs:
       postgres:
         image: postgres:16-alpine
         env:
-          POSTGRES_USER: kittikhun
+          POSTGRES_USER: tcl
           POSTGRES_PASSWORD: testpw
-          POSTGRES_DB: kittikhun_test
+          POSTGRES_DB: tcl_test
         ports: ['5432:5432']
         options: >-
-          --health-cmd "pg_isready -U kittikhun -d kittikhun_test"
+          --health-cmd "pg_isready -U tcl -d tcl_test"
           --health-interval 5s --health-timeout 5s --health-retries 20
 
     defaults:
@@ -54,7 +54,7 @@ jobs:
       - name: เทสต์ทั้งหมด (unit + integration)
         run: npx jest
         env:
-          TEST_DATABASE_URL: postgres://kittikhun:testpw@localhost:5432/kittikhun_test
+          TEST_DATABASE_URL: postgres://tcl:testpw@localhost:5432/tcl_test
 
       - name: คอมไพล์
         run: npm run build
