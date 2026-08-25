@@ -180,6 +180,37 @@ describeWithDb('auth — วงจรจริงกับ Postgres', () => {
       );
     });
 
+    it("⭐ throttle_until = 'infinity' → THROTTLED ไม่ใช่ 500", async () => {
+      // ใช้ปิดบัญชีถาวรโดยไม่ต้องลบ (ผลการนับอ้าง emp_id อยู่ ลบไม่ได้)
+      // timestamptz เป็น infinity ได้ และ node-pg คืนค่าเป็น number ไม่ใช่ Date
+      // เดิมโค้ดเรียก .getTime() บนตัวเลข → TypeError → endpoint login ตอบ 500
+      await seedUser();
+      await db.query(`UPDATE users SET throttle_until = 'infinity' WHERE emp_id = '52104'`);
+      expect(await codeOf(auth.login({ empId: '52104', pin: PIN, deviceId: DEVICE }))).toBe(
+        AuthErrorCode.THROTTLED,
+      );
+    });
+
+    it("throttle_until = '-infinity' (อดีต) → ผ่านได้ตามปกติ", async () => {
+      await seedUser();
+      await db.query(`UPDATE users SET throttle_until = '-infinity' WHERE emp_id = '52104'`);
+      await expect(
+        auth.login({ empId: '52104', pin: PIN, deviceId: DEVICE }),
+      ).resolves.toBeDefined();
+    });
+
+    it('เวลารอที่ส่งกลับต้องเป็นตัวเลขจริง ไม่ใช่ Infinity (JSON แปลงเป็น null)', async () => {
+      await seedUser();
+      await db.query(`UPDATE users SET throttle_until = 'infinity' WHERE emp_id = '52104'`);
+      try {
+        await auth.login({ empId: '52104', pin: PIN, deviceId: DEVICE });
+        throw new Error('ควรถูกปฏิเสธ');
+      } catch (err) {
+        const retry = (err as { retryAfterMs?: number }).retryAfterMs;
+        expect(Number.isFinite(retry)).toBe(true);
+      }
+    });
+
     it('⭐ บัญชีไม่ถูกล็อค — PIN ถูกหลังพ้นช่วงหน่วง ยัง login ได้และตัวนับรีเซ็ต', async () => {
       await seedUser();
       await codeOf(auth.login({ empId: '52104', pin: '111112', deviceId: DEVICE }));

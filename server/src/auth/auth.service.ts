@@ -42,7 +42,12 @@ interface UserRow {
   role_version: number;
   must_change_pin: boolean;
   failed_attempts: number;
-  throttle_until: Date | null;
+  /**
+   * ⚠️ `timestamptz` ของ Postgres เป็น `infinity` / `-infinity` ได้ ซึ่ง node-pg
+   *    แปลงกลับมาเป็น **number** ไม่ใช่ `Date` — เคยทำให้ login ตอบ 500 เพราะโค้ด
+   *    เรียก `.getTime()` บนตัวเลข (ใช้ 'infinity' ปิดบัญชีถาวรเป็นเรื่องปกติ)
+   */
+  throttle_until: Date | number | null;
 }
 
 /**
@@ -195,10 +200,27 @@ export class AuthService {
    * (`login` และ `changePin`) ไม่งั้นเส้นทางที่ลืมเรียกจะกลายเป็นช่องเดา PIN แบบไม่จำกัด
    */
   private assertNotThrottled(user: UserRow): void {
-    const until = user.throttle_until?.getTime();
-    if (until !== undefined && until > Date.now()) {
-      throw new AuthError(AuthErrorCode.THROTTLED, undefined, until - Date.now());
-    }
+    const until = AuthService.throttleUntilMs(user.throttle_until);
+    if (until === null) return;
+
+    const remaining = until - Date.now();
+    if (remaining <= 0) return;
+
+    // ตัดที่เพดานเสมอ: `infinity` ทำให้ค่านี้เป็น Infinity ซึ่ง JSON.stringify
+    // แปลงเป็น null → เครื่องลูกข่ายอ่านเวลารอไม่ได้
+    throw new AuthError(
+      AuthErrorCode.THROTTLED,
+      undefined,
+      Math.min(remaining, this.throttleMaxMs),
+    );
+  }
+
+  /** แปลง `throttle_until` เป็นมิลลิวินาที — รองรับทั้ง `Date`, ±`infinity` และ null */
+  private static throttleUntilMs(value: Date | number | null | undefined): number | null {
+    if (value === null || value === undefined) return null;
+    if (typeof value === 'number') return value; // Infinity / -Infinity จาก timestamptz
+    const ms = value.getTime();
+    return Number.isNaN(ms) ? null : ms;
   }
 
   /** ทำงานเทียบเท่า argon2.verify เพื่อให้เวลาตอบกลับใกล้เคียงกัน */
