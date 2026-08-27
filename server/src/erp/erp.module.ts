@@ -1,4 +1,12 @@
-import { Global, Inject, Logger, Module, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import {
+  Global,
+  Inject,
+  Logger,
+  Module,
+  OnModuleDestroy,
+  OnModuleInit,
+  Optional,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 import { ERP_ADAPTER, ErpAdapter } from './erp-adapter';
@@ -64,6 +72,8 @@ import type { AppConfig } from '../config/env.config';
           encrypt: cfg.get('ERP_SQL_ENCRYPT', { infer: true }),
           trustServerCert: cfg.get('ERP_SQL_TRUST_SERVER_CERT', { infer: true }),
           timeoutMs: cfg.get('ERP_TIMEOUT_MS', { infer: true }),
+          poolMax: cfg.get('ERP_SQL_POOL_MAX', { infer: true }),
+          dtlVoucherNo: cfg.get('ERP_WRITEBACK_DTL_VOUCHERNO', { infer: true }),
         });
       },
     },
@@ -76,6 +86,8 @@ export class ErpModule implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly cfg: ConfigService<AppConfig, true>,
     @Inject(ERP_ADAPTER) private readonly erp: ErpAdapter,
+    // `null` เมื่อ ERP_WRITEBACK_ENABLED=false — provider คืน null ให้โดยตั้งใจ
+    @Optional() @Inject(ERP_COUNT_WRITER) private readonly countWriter?: ErpCountWriter | null,
   ) {}
 
   /**
@@ -109,10 +121,51 @@ export class ErpModule implements OnModuleInit, OnModuleDestroy {
           `${err instanceof Error ? err.message : String(err)}`,
       );
     }
+
+    await this.verifyWriteAccount();
+  }
+
+  /**
+   * ตรวจบัญชีเขียนตอน boot — ทำเฉพาะเมื่อเปิด `ERP_WRITEBACK_ENABLED`
+   *
+   * ⚠️ ก่อนหน้านี้ฝั่งเขียนไม่มีการตรวจใด ๆ ตอน start ต่างจากฝั่งอ่านที่พิสูจน์
+   *    ตัวเองทุกครั้ง → รหัสผ่านผิดหรือสิทธิ์กว้างเกินขอบเขตจะรู้ตัวตอนที่ admin
+   *    กดส่งเอกสารจริงแล้วเท่านั้น
+   *
+   * ขอบเขตผิด = หยุด boot (เหมือนฝั่งอ่านที่เขียนได้แล้วห้าม start)
+   * ต่อไม่ได้ = ปล่อยผ่านแบบ degraded (ERP ล่มชั่วคราวเป็นเรื่องปกติของคลัง)
+   */
+  private async verifyWriteAccount(): Promise<void> {
+    if (!this.countWriter) {
+      this.logger.log('เส้นทางเขียนกลับ ERP: ปิดอยู่ (ERP_WRITEBACK_ENABLED=false)');
+      return;
+    }
+    if (!this.countWriter.verifyWriteScope) {
+      this.logger.warn('เส้นทางเขียนกลับ ERP: เปิดอยู่แต่ implementation นี้ตรวจสิทธิ์ตอน boot ไม่ได้');
+      return;
+    }
+
+    try {
+      await this.countWriter.verifyWriteScope();
+      this.logger.log('เส้นทางเขียนกลับ ERP: เปิดอยู่ และขอบเขตสิทธิ์ของบัญชีเขียนถูกต้อง');
+    } catch (err) {
+      if (isStartupBlocker(err)) throw err;
+      this.logger.error(
+        `ตรวจบัญชีเขียนของ ERP ตอน boot ไม่ได้ — start ต่อแบบ degraded ` +
+          `(กดส่งเอกสารจะล้มจนกว่าจะต่อได้): ` +
+          `${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   /** ปิด connection pool ของ ERP ตอน shutdown (main.ts เปิด enableShutdownHooks ไว้แล้ว) */
   async onModuleDestroy(): Promise<void> {
+    await this.countWriter?.close().catch((err: unknown) => {
+      this.logger.warn(
+        `ปิด connection ของเส้นทางเขียน ERP ไม่สำเร็จ: ` +
+          `${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
     await this.erp.close().catch((err: unknown) => {
       this.logger.warn(
         `ปิด connection ของ ERP ไม่สำเร็จ: ${err instanceof Error ? err.message : String(err)}`,
@@ -132,6 +185,9 @@ function isStartupBlocker(err: unknown): boolean {
   return (
     code === 'ERP_WRITE_ALLOWED' ||
     code === 'ERP_PROBE_INCONCLUSIVE' ||
+    code === 'ERP_WRITE_SCOPE_TOO_WIDE' ||
+    code === 'ERP_WRITE_SCOPE_INSUFFICIENT' ||
+    code === 'ERP_WRITE_PROBE_INCONCLUSIVE' ||
     code === 'ERP_THAI_DECODE' ||
     code === 'ERP_CONFIG'
   );

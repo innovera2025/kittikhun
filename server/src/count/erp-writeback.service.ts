@@ -9,10 +9,14 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 
+import { ConfigService } from '@nestjs/config';
+
+import type { AppConfig } from '../config/env.config';
 import { PostgresService } from '../db/postgres.service';
 import {
   ERP_COUNT_WRITER,
   type ErpCountLine,
+  type ErpCountWriteResult,
   type ErpCountWriter,
 } from '../erp/erp-count-writer';
 
@@ -43,6 +47,14 @@ import {
 /** สถานะที่ถือว่า "มีคนนับแล้ว" และส่งเข้า ERP ได้ */
 const SENDABLE_STATUSES = ['match', 'over', 'short', 'conflict'] as const;
 
+/**
+ * namespace ของ advisory lock ที่กันสองคำขอส่งรอบเดียวกันพร้อมกัน
+ *
+ * ใช้รูปแบบสองจำนวนเต็ม `pg_try_advisory_lock(ns, hashtext(sessionId))`
+ * เพื่อไม่ให้ชนกับ key ของงานอื่น (sync ใช้ 872001)
+ */
+const LOCK_NAMESPACE = 872_002;
+
 type VarianceRow = {
   sku: string;
   name: string | null;
@@ -69,6 +81,8 @@ export type WritebackResult = {
   voucherNo: string;
   rowCount: number;
   skippedNotCounted: number;
+  /** `true` = เอกสารอยู่ใน ERP อยู่ก่อนแล้ว รอบนี้แค่ไปเก็บเลขกลับมา ไม่ได้เขียนซ้ำ */
+  reconciled: boolean;
 };
 
 export type WritebackStatus = {
@@ -89,10 +103,50 @@ export class ErpWritebackService {
   constructor(
     private readonly db: PostgresService,
     @Optional() @Inject(ERP_COUNT_WRITER) private readonly writer?: ErpCountWriter,
+    // `@Optional()` เพื่อให้เทสต์สร้าง service ตรง ๆ ได้โดยไม่ต้องมี Nest container
+    @Optional() private readonly cfg?: ConfigService<AppConfig, true>,
   ) {}
 
-  /** ส่งรอบนับหนึ่งรอบเข้า ERP — คืนเลขเอกสารที่ ERP ได้รับ */
+  /**
+   * ส่งรอบนับหนึ่งรอบเข้า ERP — คืนเลขเอกสารที่ ERP ได้รับ
+   *
+   * ⚠️ **mutex จริงของทั้งกระบวนการอยู่ที่ advisory lock ตรงนี้** ไม่ใช่ที่สถานะในตาราง
+   *
+   * เหตุผล: สถานะในตารางกันได้แค่ ณ จังหวะที่ `claim()` ทำงาน แต่การเขียนเอกสาร
+   * ใช้เวลาได้นาน (`ERP_TIMEOUT_MS` เป็นเพดาน **ต่อ statement** และเราเขียนทีละแถว)
+   * ถ้าใช้ lease อิงเวลา คนที่สองจะเข้ามาได้ทั้งที่คนแรกยังเขียนอยู่ และ
+   * `findDocumentBySession()` มองไม่เห็น transaction ที่ยังไม่ commit → ได้เอกสารสองใบ
+   *
+   * advisory lock เป็น session-scope: ถือข้ามงานยาวได้โดยไม่ต้องเปิด transaction ค้าง
+   * ทำงานข้าม instance ของ API และถ้า process ตาย connection ปิด Postgres ปลดล็อกให้เอง
+   * — จึงไม่ต้องเดาอายุ lease ให้ถูก
+   */
   async send(sessionId: string, actorEmpId: string): Promise<WritebackResult> {
+    return this.db.withClient(async (client) => {
+      const locked = await client.query<{ locked: boolean }>(
+        `SELECT pg_try_advisory_lock($1::int, hashtext($2)::int) AS locked`,
+        [LOCK_NAMESPACE, sessionId],
+      );
+      if (locked.rows[0]?.locked !== true) {
+        throw new ConflictException({
+          code: 'ERP_WRITEBACK_IN_PROGRESS',
+          message: 'รอบนี้กำลังถูกส่งอยู่จากอีกคำขอหนึ่ง — รอให้คำขอนั้นจบก่อน',
+        });
+      }
+      try {
+        return await this.sendLocked(sessionId, actorEmpId);
+      } finally {
+        await client
+          .query(`SELECT pg_advisory_unlock($1::int, hashtext($2)::int)`, [
+            LOCK_NAMESPACE,
+            sessionId,
+          ])
+          .catch(() => undefined);
+      }
+    });
+  }
+
+  private async sendLocked(sessionId: string, actorEmpId: string): Promise<WritebackResult> {
     if (!this.writer) {
       throw new ServiceUnavailableException({
         code: 'ERP_WRITEBACK_DISABLED',
@@ -101,6 +155,7 @@ export class ErpWritebackService {
     }
 
     const session = await this.loadClosedSession(sessionId);
+    this.assertOwnWarehouse(session);
     const { lines, skippedNotCounted } = await this.buildLines(sessionId);
 
     if (lines.length === 0) {
@@ -112,43 +167,57 @@ export class ErpWritebackService {
       });
     }
 
+    // สถานะก่อนจอง — บอกว่านี่เป็นการ "ส่งซ้ำ" หรือ "ส่งครั้งแรก"
+    const previous = await this.status(sessionId);
+
     // จองสิทธิ์ส่งก่อนยิงจริง: แถวนี้คือด่านเดียวที่กันส่งซ้ำได้
     await this.claim(sessionId, actorEmpId);
 
-    const actor = await this.loadActor(actorEmpId);
-    const countDate = session.closed_at ?? session.opened_at;
+    // ⚠️ ส่งซ้ำต้องถาม ERP ก่อนเสมอ — ถ้าครั้งก่อน commit สำเร็จแต่สายขาดตอนตอบกลับ
+    //    ฝั่งเราจะบันทึกเป็น failed แล้วยอมให้ส่งใหม่ ซึ่งจะได้เอกสารสองใบใน ERP
+    //    โดยไม่มีอะไรฟ้อง (ปลายทางไม่มี unique บน VoucherNo/TransactionNo)
+    if (previous !== null) {
+      const existing = await this.reconcile(sessionId);
+      if (existing) {
+        await this.markSent(sessionId, existing, session.closed_at ?? session.opened_at);
+        this.logger.warn(
+          `รอบ ${sessionId} มีเอกสารอยู่ใน ERP แล้ว (${existing.voucherNo}) — ` +
+            'เก็บเลขเอกสารกลับมาแทนการเขียนซ้ำ',
+        );
+        return { sessionId, ...existing, skippedNotCounted, reconciled: true };
+      }
+    }
 
+    // ⚠️ ทุกช่องเวลาของเอกสารต้องมาจาก "จุดเดียวกัน" คือเวลาปิดรอบ
+    //    ก่อนหน้านี้ VoucherDate ใช้ new Date() ตอนกดส่ง ทำให้รอบที่ปิดปลายเดือน
+    //    แต่กดส่งเดือนถัดไปได้ VoucherNo เป็นเดือนใหม่ คู่กับ CountDate/CountYear เดือนเก่า
+    const countDate = session.closed_at ?? session.opened_at;
+    // ERP มีช่องผู้ตรวจนับช่องเดียว แต่รอบของเรามีผู้นับได้หลายคน → ใช้ผู้ปิดรอบ
+    // ซึ่งเป็นผู้รับผิดชอบผลของทั้งรอบ (ของจริงใน ERP บางใบก็เว้นว่าง)
+    const empId = session.closed_by ?? actorEmpId;
+    // ⚠️ ชื่อต้องเป็นชื่อของ empId คนเดียวกัน ไม่ใช่ชื่อคนกดส่ง — เคยผิดตรงนี้
+    //    ทำให้หัวเอกสารได้รหัสคนหนึ่งกับชื่ออีกคนหนึ่งเมื่อคนกดส่งไม่ใช่คนปิดรอบ
+    const actor = await this.loadActor(empId);
+
+    let written: ErpCountWriteResult;
     try {
       const result = await this.writer.writeCountDocument(
         {
-          voucherDate: new Date(),
+          voucherDate: countDate,
           countDate,
-          // ⚠️ รอบของเรามีผู้นับได้หลายคน แต่ ERP มีช่องเดียว → ใช้ผู้ปิดรอบ
-          //    ซึ่งเป็นผู้รับผิดชอบผลของทั้งรอบ (ของจริงใน ERP บางใบก็เว้นว่าง)
-          empId: session.closed_by ?? actorEmpId,
+          empId,
           empName: actor?.name ?? null,
           countNo: '1',
           countYear: String(countDate.getFullYear()),
           countNumber: 1,
-          remark: `จากระบบ TCL Mobile · รอบ ${sessionId}`,
+          remark: 'จากระบบ TCL Mobile',
           entryBy: actorEmpId,
+          sessionId,
         },
         lines,
       );
 
-      await this.db.query(
-        `UPDATE erp_writeback
-            SET status = 'sent', transaction_no = $2, voucher_no = $3,
-                row_count = $4, last_error = NULL, sent_at = now()
-          WHERE session_id = $1`,
-        [sessionId, result.transactionNo, result.voucherNo, result.rowCount],
-      );
-
-      this.logger.log(
-        `ส่งรอบ ${sessionId} เข้า ERP แล้ว: ${result.voucherNo} ` +
-          `(${result.rowCount} รายการ · ข้ามที่ยังไม่ได้นับ ${skippedNotCounted})`,
-      );
-      return { sessionId, ...result, skippedNotCounted };
+      written = result;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       // ปล่อยสถานะเป็น failed ไว้ ไม่ลบแถวทิ้ง — ต้องเห็นว่าเคยพยายามส่งแล้วล้ม
@@ -162,6 +231,17 @@ export class ErpWritebackService {
         message: `ส่งเข้า ERP ไม่สำเร็จ: ${message}`,
       });
     }
+
+    // ⚠️ ถึงตรงนี้ = ERP commit ไปแล้ว **ห้าม**ให้เส้นทางไหนมาร์กว่า failed อีก
+    //    ถ้าบันทึกสถานะฝั่งเราล้ม ให้ดังไว้ใน log แล้วตอบสำเร็จ — รอบถัดไปที่กดส่ง
+    //    จะไป reconcile เจอเอกสารเดิมแล้วซ่อมสถานะให้เอง
+    await this.markSent(sessionId, written, countDate);
+
+    this.logger.log(
+      `ส่งรอบ ${sessionId} เข้า ERP แล้ว: ${written.voucherNo} ` +
+        `(${written.rowCount} รายการ · ข้ามที่ยังไม่ได้นับ ${skippedNotCounted})`,
+    );
+    return { sessionId, ...written, skippedNotCounted, reconciled: false };
   }
 
   /** สถานะการส่งของรอบหนึ่ง — `null` = ยังไม่เคยส่ง */
@@ -222,17 +302,21 @@ export class ErpWritebackService {
   /**
    * จองสิทธิ์ส่ง — `INSERT` ที่ชนคีย์แปลว่าเคยส่งหรือกำลังส่งอยู่
    *
-   * รอบที่เคย `failed` ให้ลองใหม่ได้ แต่ `sent` แล้วห้ามซ้ำเด็ดขาด
+   * `sent` แล้วห้ามซ้ำเด็ดขาด — สถานะอื่น (`failed` / `queued` ที่เจ้าของตายไปแล้ว)
+   * ลองใหม่ได้ เพราะผู้เรียกถือ advisory lock อยู่แล้ว จึงรู้แน่ว่าไม่มีใครกำลังส่งอยู่
+   *
+   * ⚠️ ต้องเรียกจาก {@link sendLocked} เท่านั้น — เรียกโดยไม่ถือล็อกจะเปิดช่องเอกสารซ้ำ
    */
   private async claim(sessionId: string, actorEmpId: string): Promise<void> {
     const claimed = await this.db.query<{ session_id: string }>(
-      `INSERT INTO erp_writeback (session_id, status, attempts, requested_by)
-            VALUES ($1, 'queued', 1, $2)
+      `INSERT INTO erp_writeback (session_id, status, attempts, requested_by, claimed_at)
+            VALUES ($1, 'queued', 1, $2, now())
        ON CONFLICT (session_id) DO UPDATE
               SET status = 'queued',
                   attempts = erp_writeback.attempts + 1,
-                  requested_by = EXCLUDED.requested_by
-            WHERE erp_writeback.status = 'failed'
+                  requested_by = EXCLUDED.requested_by,
+                  claimed_at = now()
+            WHERE erp_writeback.status <> 'sent'
         RETURNING session_id`,
       [sessionId, actorEmpId],
     );
@@ -241,11 +325,98 @@ export class ErpWritebackService {
       const current = await this.status(sessionId);
       throw new ConflictException({
         code: 'ERP_WRITEBACK_ALREADY_SENT',
-        message:
-          current?.status === 'sent'
-            ? `รอบนี้ส่งเข้า ERP ไปแล้วเป็นเอกสาร ${current.voucherNo} — ส่งซ้ำไม่ได้`
-            : 'รอบนี้กำลังถูกส่งอยู่ รอให้รอบก่อนหน้าจบก่อน',
+        message: `รอบนี้ส่งเข้า ERP ไปแล้วเป็นเอกสาร ${current?.voucherNo ?? '(ไม่ทราบเลขที่)'} — ส่งซ้ำไม่ได้`,
       });
+    }
+  }
+
+  /**
+   * รอบที่ส่งต้องเป็นของคลังเดียวกับ deployment นี้
+   *
+   * ⚠️ ยอดคงเหลือที่ตรึงไว้ (`frozen_on_hand`) คำนวณจาก `WAREHOUSE_CODE` ของเครื่องนี้
+   *    ถ้าปล่อยให้ส่งรอบของคลังอื่น เอกสารใน ERP จะมียอดระบบของคนละคลัง
+   */
+  private assertOwnWarehouse(session: SessionRow): void {
+    const expected = this.cfg?.get('WAREHOUSE_CODE', { infer: true });
+    if (!expected) return;
+    if (session.warehouse_code !== expected) {
+      throw new BadRequestException({
+        code: 'SESSION_WRONG_WAREHOUSE',
+        message:
+          `รอบนี้เป็นของคลัง ${session.warehouse_code} แต่ระบบนี้ดูแลคลัง ${expected} — ` +
+          'ส่งได้เฉพาะรอบของคลังตัวเอง',
+      });
+    }
+  }
+
+  /**
+   * ถาม ERP ว่ารอบนี้มีเอกสารอยู่แล้วหรือยัง — ใช้ก่อนเขียนซ้ำเท่านั้น
+   *
+   * ⚠️ ถามไม่ได้ **ไม่เท่ากับ** ไม่มีเอกสาร จึงต้องหยุดทั้งกระบวนการ
+   *    เขียนซ้ำโดยไม่รู้สถานะปลายทาง = เสี่ยงได้เอกสารสองใบที่ไม่มีใครฟ้อง
+   */
+  private async reconcile(sessionId: string): Promise<ErpCountWriteResult | null> {
+    if (!this.writer) return null;
+    try {
+      return await this.writer.findDocumentBySession(sessionId);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await this.db.query(
+        `UPDATE erp_writeback SET status = 'failed', last_error = $2 WHERE session_id = $1`,
+        [sessionId, `reconcile: ${message}`.slice(0, 2000)],
+      );
+      this.logger.error(`ตรวจเอกสารเดิมของรอบ ${sessionId} ใน ERP ไม่ได้: ${message}`);
+      throw new ServiceUnavailableException({
+        code: 'ERP_WRITEBACK_RECONCILE_FAILED',
+        message:
+          'ตรวจกับ ERP ไม่ได้ว่ารอบนี้เคยส่งเข้าไปแล้วหรือยัง จึงไม่ยอมเขียนซ้ำ ' +
+          `(กันเอกสารซ้ำ): ${message}`,
+      });
+    }
+  }
+
+  /** บันทึกว่าส่งสำเร็จ — ทั้งบนแถว writeback และบนตัวรอบนับเอง */
+  private async markSent(
+    sessionId: string,
+    result: ErpCountWriteResult,
+    countDate: Date,
+  ): Promise<void> {
+    try {
+      await this.db.query(
+        `UPDATE erp_writeback
+            SET status = 'sent', transaction_no = $2, voucher_no = $3,
+                row_count = $4, last_error = NULL, sent_at = now()
+          WHERE session_id = $1`,
+        [sessionId, result.transactionNo, result.voucherNo, result.rowCount],
+      );
+    } catch (err) {
+      // เอกสารอยู่ใน ERP แล้ว แต่บันทึกสถานะไม่ได้ — แถวจะค้าง queued
+      // ครั้งหน้าที่กดส่ง reconcile จะเจอเอกสารเดิมแล้วซ่อมให้เอง
+      this.logger.error(
+        `เอกสาร ${result.voucherNo} เข้า ERP แล้วแต่บันทึกสถานะของรอบ ${sessionId} ไม่สำเร็จ: ` +
+          `${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
+    // เลขเอกสารต้องกลับมาอยู่บนตัวรอบด้วย ไม่งั้นแอปเห็น erpVoucherNo เป็น null ตลอด
+    // และ ux_count_sessions_erp_txn (ด่านกันเอกสารซ้ำชั้นที่สองที่มีอยู่แล้ว) ไม่ถูกใช้เลย
+    try {
+      await this.db.query(
+        `UPDATE count_sessions
+            SET erp_transaction_no = $2,
+                erp_voucher_no = $3,
+                erp_count_date = $4::date
+          WHERE id = $1`,
+        [sessionId, String(result.transactionNo), result.voucherNo, countDate],
+      );
+    } catch (err) {
+      // ชนคีย์ = มีรอบอื่นอ้าง TransactionNo เดียวกันอยู่แล้ว → เอกสารใน ERP ปนกันแน่นอน
+      // ไม่ throw เพราะเอกสารเข้า ERP ไปแล้ว แต่ต้องดังพอให้มีคนไปตาม
+      this.logger.error(
+        `บันทึกเลขเอกสาร ERP ลงรอบ ${sessionId} ไม่สำเร็จ ` +
+          `(TransactionNo=${result.transactionNo} · ${result.voucherNo}): ` +
+          `${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 

@@ -1,4 +1,8 @@
-import { assertCountWriteSql, ErpWriteSqlViolationError } from '../src/erp/erp-count-writer';
+import {
+  assertCountReadSql,
+  assertCountWriteSql,
+  ErpWriteSqlViolationError,
+} from '../src/erp/erp-count-writer';
 import { erpDifQty, MssqlCountWriter, round2 } from '../src/erp/drivers/mssql-count-writer';
 
 /**
@@ -118,6 +122,159 @@ describe('เส้นทางเขียนกลับ ERP', () => {
     it('ปฏิเสธคำสั่งว่างและคอมเมนต์ล้วน', () => {
       expect(reasonOf('   ')).toBe('EMPTY_STATEMENT');
       expect(reasonOf('-- แค่คอมเมนต์')).toBe('EMPTY_STATEMENT');
+    });
+
+    it('⭐ เขียนลงตารางที่อนุญาตแต่ "อ่าน" ตารางอื่นของ ERP ต้องไม่ผ่าน', () => {
+      // เคยหลุด: guard ตรวจแค่ว่ามีตารางที่อนุญาตอย่างน้อยหนึ่งตัว
+      expect(
+        reasonOf('INSERT INTO tbl_CountDtl(ItemCode) SELECT ItemCode FROM InventoryItem'),
+      ).toBe('TABLE_NOT_ALLOWED');
+      expect(
+        reasonOf('UPDATE tbl_CountHdr SET Remark = (SELECT TOP 1 ItemName FROM dbo.InventoryItem)'),
+      ).toBe('TABLE_NOT_ALLOWED');
+      expect(reasonOf('INSERT INTO tbl_CountDtl(a) SELECT a FROM tbl_CountHdr')).toBe('ALLOWED');
+    });
+  });
+
+  describe('⭐ statement guard ของการค้นเอกสารเดิม (ฝั่งอ่านของเส้นทางเขียน)', () => {
+    const reasonOf = (sql: string): string => {
+      try {
+        assertCountReadSql(sql);
+        return 'ALLOWED';
+      } catch (err) {
+        return err instanceof ErpWriteSqlViolationError ? err.reason : 'UNKNOWN';
+      }
+    };
+
+    it('ยอมให้ SELECT จากตารางรอบนับเท่านั้น', () => {
+      expect(
+        reasonOf(
+          `SELECT TOP (1) h.TransactionNo, h.VoucherNo,
+             (SELECT COUNT(*) FROM tbl_CountDtl AS d WHERE d.TransactionNo = h.TransactionNo) AS n
+             FROM tbl_CountHdr AS h WHERE h.Remark LIKE @pattern ORDER BY h.Roworder DESC`,
+        ),
+      ).toBe('ALLOWED');
+    });
+
+    it('⭐ ปฏิเสธการอ่านตารางอื่นของ ERP ผ่าน pool ของบัญชีเขียน', () => {
+      expect(reasonOf('SELECT ItemCode FROM dbo.InventoryItem')).toBe('TABLE_NOT_ALLOWED');
+      expect(reasonOf('SELECT * FROM tbl_CountHdr h JOIN InventoryItem i ON 1=1')).toBe(
+        'TABLE_NOT_ALLOWED',
+      );
+    });
+
+    it('⭐ ปฏิเสธคำสั่งเขียนทุกชนิดในเส้นทางนี้', () => {
+      expect(reasonOf('INSERT INTO tbl_CountHdr(a) VALUES(1)')).toBe('NOT_SELECT');
+      expect(reasonOf('SELECT 1 FROM tbl_CountHdr WHERE 1=(SELECT 1) UPDATE tbl_CountHdr SET a=1')).toBe(
+        'FORBIDDEN_KEYWORD',
+      );
+      expect(reasonOf('SELECT 1 FROM tbl_CountHdr; DROP TABLE tbl_CountHdr')).toBe(
+        'MULTIPLE_STATEMENTS',
+      );
+    });
+  });
+
+  describe('⭐ ช่องโหว่ที่รีวิวจับได้ — ต้องปิดถาวร', () => {
+    const writeReason = (sql: string): string => {
+      try {
+        assertCountWriteSql(sql);
+        return 'ALLOWED';
+      } catch (err) {
+        return err instanceof ErpWriteSqlViolationError ? err.reason : 'UNKNOWN';
+      }
+    };
+    const readReason = (sql: string): string => {
+      try {
+        assertCountReadSql(sql);
+        return 'ALLOWED';
+      } catch (err) {
+        return err instanceof ErpWriteSqlViolationError ? err.reason : 'UNKNOWN';
+      }
+    };
+
+    it('⭐ ซ่อน `--` ไว้ใน string literal เพื่อให้ guard ตรวจคนละสตริงกับที่ SQL Server ได้รับ', () => {
+      // guard เดิมตัดตั้งแต่ `--` ในข้อมูล ทำให้มองไม่เห็น `; DROP TABLE` ที่ตามมา
+      expect(writeReason(`UPDATE tbl_CountHdr SET Remark = '--' ; DROP TABLE tbl_CountDtl`)).toBe(
+        'MULTIPLE_STATEMENTS',
+      );
+      expect(
+        readReason(`SELECT VoucherNo FROM tbl_CountHdr WHERE Remark = '--' ; DELETE FROM tbl_CountDtl`),
+      ).toBe('MULTIPLE_STATEMENTS');
+      expect(
+        writeReason(`INSERT INTO RunningNumber(Name,Number) VALUES('--',1) ; EXEC xp_cmdshell 'dir'`),
+      ).toBe('MULTIPLE_STATEMENTS');
+      expect(
+        writeReason(`UPDATE RunningNumber SET Number = 1 WHERE Name = '/*' AND 1=1 ; DROP TABLE x`),
+      ).toBe('MULTIPLE_STATEMENTS');
+    });
+
+    it('คำในข้อมูลต้องไม่ไปชนกฎ (literal ถูกกลบก่อนตรวจ)', () => {
+      expect(
+        writeReason(`INSERT INTO tbl_CountDtl(RemarkDtl) VALUES('ยอดจาก InventoryItem ตอน update')`),
+      ).toBe('ALLOWED');
+    });
+
+    it('⭐ SELECT … INTO และ OUTPUT … INTO สร้าง/เขียนตารางนอกขอบเขตได้', () => {
+      expect(readReason('SELECT * INTO ErpBackdoor FROM tbl_CountHdr')).toBe('FORBIDDEN_KEYWORD');
+      expect(readReason('SELECT * INTO dbo.ErpBackdoor FROM tbl_CountHdr')).toBe(
+        'FORBIDDEN_KEYWORD',
+      );
+      expect(
+        writeReason(
+          'INSERT INTO tbl_CountHdr(TransactionNo) OUTPUT INSERTED.TransactionNo INTO AuditLeak VALUES(1)',
+        ),
+      ).toBe('FORBIDDEN_KEYWORD');
+    });
+
+    it('⭐ comma-join และ CROSS/OUTER APPLY อ่านตารางอื่นของ ERP ได้', () => {
+      expect(readReason('SELECT * FROM tbl_CountHdr AS h, InventoryItem AS i WHERE 1=1')).toBe(
+        'COMMA_JOIN',
+      );
+      expect(
+        writeReason('INSERT INTO tbl_CountDtl(ItemCode) SELECT i.ItemCode FROM tbl_CountHdr h, InventoryItem i'),
+      ).toBe('COMMA_JOIN');
+      expect(readReason('SELECT h.VoucherNo FROM tbl_CountHdr AS h CROSS APPLY InventoryItem AS i')).toBe(
+        'TABLE_NOT_ALLOWED',
+      );
+    });
+
+    it('⭐ ชื่อตารางในวงเล็บเหลี่ยม / unicode / เครื่องหมายคำพูดคู่ ต้องถูกตรวจด้วย', () => {
+      expect(readReason('SELECT * FROM tbl_CountHdr AS h JOIN [2Secret] AS s ON 1=1')).toBe(
+        'TABLE_NOT_ALLOWED',
+      );
+      expect(readReason('SELECT * FROM tbl_CountHdr AS h JOIN Ínventory AS i ON 1=1')).toBe(
+        'TABLE_NOT_ALLOWED',
+      );
+      expect(readReason('SELECT * FROM tbl_CountHdr AS h JOIN "InventoryItem" AS i ON 1=1')).toBe(
+        'TABLE_NOT_ALLOWED',
+      );
+    });
+
+    it('subquery ในวงเล็บยังใช้ได้ตามปกติ', () => {
+      expect(
+        readReason('SELECT * FROM (SELECT TransactionNo FROM tbl_CountHdr) AS x WHERE 1=1'),
+      ).toBe('ALLOWED');
+    });
+  });
+
+  describe('มาร์กเกอร์รอบนับใน Remark', () => {
+    it('รูปแบบไม่มีอักขระพิเศษของ LIKE (ห้ามใช้วงเล็บเหลี่ยม)', () => {
+      const marker = MssqlCountWriter.sessionMarker('CS-2608-0001');
+      expect(marker).toBe('TCL#CS-2608-0001#');
+      expect(marker).not.toMatch(/[[\]%_]/);
+    });
+
+    it('ต่อท้ายข้อความเดิม และไม่ประทับซ้ำ', () => {
+      const once = MssqlCountWriter.stampSession('จากระบบ TCL Mobile', 'CS-1');
+      expect(once).toBe('จากระบบ TCL Mobile TCL#CS-1#');
+      expect(MssqlCountWriter.stampSession(once, 'CS-1')).toBe(once);
+      expect(MssqlCountWriter.stampSession(null, 'CS-1')).toBe('TCL#CS-1#');
+    });
+
+    it("⭐ รหัสรอบที่มี '#' ต้องถูกปฏิเสธ — ไม่งั้นมาร์กเกอร์ของคนละรอบเป็น substring กัน", () => {
+      // id `A#B` → `TCL#A#B#` ซึ่ง LIKE '%TCL#A#%' ของรอบ `A` จับได้
+      expect(() => MssqlCountWriter.sessionMarker('A#B')).toThrow();
+      expect(() => MssqlCountWriter.stampSession(null, 'A#B')).toThrow();
     });
   });
 });

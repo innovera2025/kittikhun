@@ -60,6 +60,22 @@ export class PostgresService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** รันหลาย statement ใน transaction เดียว (rollback อัตโนมัติเมื่อ throw) */
+  /**
+   * ยืม client หนึ่งตัวจาก pool โดย **ไม่** เปิด transaction
+   *
+   * ใช้กับ session-level advisory lock ที่ต้องถือข้ามงานยาว ๆ (เช่นการเขียน
+   * เอกสารเข้า ERP) — เปิด transaction ค้างไว้นานขนาดนั้นจะขวาง vacuum
+   * ข้อดีของ session lock: process ตายเมื่อไหร่ connection ปิด Postgres ปลดล็อกให้เอง
+   */
+  async withClient<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
+    const client = await this.pool.connect();
+    try {
+      return await fn(client);
+    } finally {
+      client.release();
+    }
+  }
+
   async transaction<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
     const client = await this.pool.connect();
     try {

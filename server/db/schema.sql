@@ -3,10 +3,15 @@
 -- =============================================================================
 -- อ้างอิง: docs/architecture.md §4.1 · docs/erp-integration.md §5 · docs/erp-tcl-findings.md
 --
--- 🚫 กฎเหล็ก: ระบบนี้ "ไม่เขียนกลับ ERP" โดยเด็ดขาด
---    ERP (SQL Server db_TCL) = อ่านอย่างเดียว → ยอดระบบไหลเข้า items_cache / count_snapshot
+-- 🚫 กฎเหล็ก (ขอบเขตการเขียนกลับ ERP):
+--    เขียนกลับได้เฉพาะ tbl_CountHdr / tbl_CountDtl / RunningNumber ผ่านเส้นทาง erp_writeback เท่านั้น
+--    ห้ามเขียนกลับอะไรที่กระทบยอดคงเหลือหรือ master data โดยเด็ดขาด
+--    ERP (SQL Server db_TCL) = อ่านอย่างเดียวสำหรับทุกเส้นทางที่เหลือ
+--      → ยอดระบบไหลเข้า items_cache / count_snapshot
 --    พนักงานกรอกค่าที่นับได้ → server คำนวณส่วนต่าง → เก็บผลถาวรที่ closed_variance
---    ห้ามมีตาราง erp_post_outbox หรืออะไรที่ทำหน้าที่คิวเขียนกลับ ERP (มี guard ท้ายไฟล์)
+--    → หลังปิดรอบจึงส่งผลนับ (เอกสารนับ ไม่ใช่การปรับสต็อก) กลับผ่าน erp_writeback
+--    ห้ามมีตาราง erp_post_outbox หรือคิว/ตารางเขียนกลับ ERP แบบอื่นนอกเหนือ erp_writeback
+--    (มี guard ท้ายไฟล์ ที่ allowlist ชื่อ erp_writeback ไว้อย่างชัดแจ้ง)
 --
 -- คุณสมบัติของไฟล์นี้:
 --   • idempotent ทั้งไฟล์ (CREATE ... IF NOT EXISTS + DO block สำหรับ enum/trigger/index)
@@ -370,7 +375,7 @@ CREATE TABLE IF NOT EXISTS closed_variance (
   )
 );
 
-COMMENT ON TABLE  closed_variance IS 'ผลส่วนต่างถาวร ณ จุดปิดรอบ (materialized) — รายงานสุดท้ายของระบบ; ไม่ส่งกลับ ERP ตามกฎเหล็ก';
+COMMENT ON TABLE  closed_variance IS 'ผลส่วนต่างถาวร ณ จุดปิดรอบ (materialized) — รายงานสุดท้ายของระบบ; ตัวตารางนี้ไม่ถูกเขียนกลับ ERP โดยตรง การส่งผลนับกลับทำผ่าน erp_writeback → tbl_CountHdr / tbl_CountDtl เท่านั้น (ไม่ปรับยอดคงเหลือใน ERP)';
 COMMENT ON COLUMN closed_variance.diff IS 'final_counted_qty − frozen_on_hand (generated) : + = เกิน, − = ขาด, 0 = ตรง';
 COMMENT ON COLUMN closed_variance.status IS 'conflict = admin ตัดสินจากหลายเครื่อง (chosen_submission บอกว่าเลือกแถวไหน) — ห้าม auto-resolve';
 COMMENT ON COLUMN closed_variance.sku IS 'ไม่ผูก FK ไป items_cache โดยเจตนา: รายงานส่วนต่างต้องอยู่ถาวรแม้อนาคตจะ purge สินค้าที่ tombstone แล้ว';
@@ -392,6 +397,9 @@ CREATE TABLE IF NOT EXISTS erp_writeback (
   last_error      text,
   requested_by    text        REFERENCES users(emp_id) ON UPDATE CASCADE ON DELETE SET NULL,
   created_at      timestamptz NOT NULL DEFAULT now(),
+  -- เวลาที่ "จองสิทธิ์ส่ง" ครั้งล่าสุด — ใช้เป็น lease กันแถวค้างสถานะ queued ตลอดกาล
+  -- (process ตายหลัง ERP commit แต่ก่อนอัปเดตสถานะ) ดู CLAIM_LEASE ใน erp-writeback.service.ts
+  claimed_at      timestamptz,
   sent_at         timestamptz,
   CONSTRAINT erp_writeback_status_ok  CHECK (status IN ('queued','sent','failed')),
   CONSTRAINT erp_writeback_attempts_ge CHECK (attempts >= 0),
@@ -403,10 +411,16 @@ CREATE TABLE IF NOT EXISTS erp_writeback (
   )
 );
 
+-- DB ที่ init ไปก่อนหน้านี้ยังไม่มีคอลัมน์ claimed_at — ต้องเพิ่มก่อน COMMENT
+-- ไม่งั้น psql -v ON_ERROR_STOP=1 จะหยุดทั้งไฟล์ที่บรรทัด COMMENT
+ALTER TABLE erp_writeback ADD COLUMN IF NOT EXISTS claimed_at timestamptz;
+UPDATE erp_writeback SET claimed_at = created_at WHERE claimed_at IS NULL;
+
 COMMENT ON TABLE  erp_writeback IS 'สถานะการส่งผลนับกลับ ERP — หนึ่งรอบต่อหนึ่งแถว (PK) คือกลไกกันส่งซ้ำเพียงชั้นเดียวที่มี';
 COMMENT ON COLUMN erp_writeback.transaction_no IS 'tbl_CountHdr.TransactionNo ที่เราออกให้จาก RunningNumber.CNTTr';
 COMMENT ON COLUMN erp_writeback.voucher_no IS 'tbl_CountHdr.VoucherNo รูปแบบ CNT-YYMM-NNNN';
 COMMENT ON COLUMN erp_writeback.row_count IS 'จำนวนแถวใน tbl_CountDtl ที่ส่งจริง — นับเฉพาะรายการที่มีคนนับ (not_counted ถูกตัดออก)';
+COMMENT ON COLUMN erp_writeback.claimed_at IS 'เวลาที่จองสิทธิ์ส่งครั้งล่าสุด — queued ที่เก่ากว่า lease ถือว่าเจ้าของตายแล้ว กดส่งใหม่ได้';
 
 -- 3.12 audit_log (APPEND-ONLY) -----------------------------------------------
 CREATE TABLE IF NOT EXISTS audit_log (
@@ -515,8 +529,25 @@ CREATE INDEX IF NOT EXISTS idx_devices_last_seen ON devices (last_seen_at DESC N
 CREATE INDEX IF NOT EXISTS idx_devices_queue ON devices (queue_depth DESC) WHERE queue_depth > 0;
 
 -- รอบนับ
-CREATE INDEX IF NOT EXISTS idx_count_sessions_open
-  ON count_sessions (warehouse_code, opened_at DESC) WHERE status = 'open';
+-- ⚠️ 1 คลัง = เปิดรอบได้ทีละ 1 รอบเท่านั้น — บังคับที่ฐานข้อมูล ไม่ใช่แค่เช็คในโค้ด
+--    count.service.ts (openSession) ดัก pg error 23505 แล้วตอบ SESSION_ALREADY_OPEN
+--    → ด่านนี้ต้องเป็น UNIQUE จริง ไม่งั้นสองเครื่องยิงพร้อมกันจะเปิดรอบซ้อนได้เงียบ ๆ
+--
+-- ชื่อ index เปลี่ยนจาก idx_count_sessions_open เป็น ux_count_sessions_open โดยเจตนา:
+--    ของเดิมเป็น non-unique และ CREATE ... IF NOT EXISTS จะข้ามชื่อเดิมไปเงียบ ๆ
+--    → ต้องใช้ชื่อใหม่ แล้วค่อย DROP ชื่อเดิมทิ้ง
+--    ⚠️ ลำดับสำคัญ: CREATE ก่อน DROP เสมอ — psql รันแบบ autocommit ทีละคำสั่ง
+--       ถ้า DROP ก่อนแล้ว CREATE ล้ม จะเหลือตารางที่ไม่มีด่านกันรอบซ้อนเลยสักตัว
+--
+-- ⚠️ ถ้าตอนนี้ในฐานข้อมูลมีรอบเปิดซ้อนของคลังเดียวกันค้างอยู่ CREATE UNIQUE INDEX จะล้ม
+--    ตั้งใจให้ล้ม (fail fast) เพื่อให้คนเห็นและไปปิดรอบซ้อนทิ้งด้วยมือ
+--    ห้ามแก้ด้วยการถอด UNIQUE ออกเพื่อให้ migration ผ่าน — นั่นคือการซ่อนปัญหา
+--    ตรวจรอบซ้อนก่อนได้ด้วย:
+--      SELECT warehouse_code, count(*) FROM count_sessions WHERE status = 'open'
+--       GROUP BY warehouse_code HAVING count(*) > 1;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_count_sessions_open
+  ON count_sessions (warehouse_code) WHERE status = 'open';
+DROP INDEX IF EXISTS idx_count_sessions_open;
 -- 1 รอบ ERP : 1 แถวของเรา (dedupe แล้วด้วย Roworder สูงสุด) — voucher_no ไม่มี unique โดยเจตนา
 CREATE UNIQUE INDEX IF NOT EXISTS ux_count_sessions_erp_txn
   ON count_sessions (erp_transaction_no) WHERE erp_transaction_no IS NOT NULL;
@@ -644,11 +675,19 @@ END
 $do$;
 
 -- =============================================================================
--- 7. Structural guard — กฎเหล็ก "ไม่เขียนกลับ ERP"
+-- 7. Structural guard — ขอบเขตการเขียนกลับ ERP
 -- =============================================================================
--- ถ้ามีใครเพิ่มคิวเขียนกลับ ERP เข้ามา migration ต้องล้มทันที (fail fast)
+-- ขอบเขตที่อนุญาต: เขียนได้เฉพาะ tbl_CountHdr / tbl_CountDtl / RunningNumber
+--   ผ่านเส้นทาง erp_writeback เท่านั้น · ห้ามเขียนกลับที่กระทบยอดคงเหลือหรือ master data
+-- ถ้ามีใครเพิ่มคิว/ตารางเขียนกลับ ERP แบบอื่นเข้ามา migration ต้องล้มทันที (fail fast)
+--
+-- หมายเหตุ: erp_writeback อยู่ใน allowlist "อย่างชัดแจ้ง" ด้านล่าง — ไม่ใช่รอดเพราะชื่อบังเอิญ
+--   ไม่ตรง pattern ที่ห้าม ถ้าจะเพิ่มเส้นทางเขียนกลับใหม่ ต้องมาใส่ชื่อในนี้พร้อมเหตุผล
+--   (การเพิ่มชื่อลง allowlist = การตัดสินใจเชิงสถาปัตยกรรม ต้องผ่านการรีวิว)
 DO $do$
 DECLARE
+  -- เส้นทางเขียนกลับที่อนุญาตโดยเจตนา (ขอบเขต: เอกสารนับ ไม่ใช่การปรับสต็อก)
+  allowed constant text[] := ARRAY['erp_writeback'];
   banned text;
 BEGIN
   SELECT string_agg(c.relname, ', ')
@@ -657,10 +696,11 @@ BEGIN
   JOIN pg_namespace n ON n.oid = c.relnamespace
   WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
     AND c.relkind IN ('r', 'p', 'v', 'm')
+    AND NOT (c.relname = ANY (allowed))
     AND (c.relname = 'erp_post_outbox' OR c.relname LIKE 'erp_push%' OR c.relname LIKE 'erp_adjust%');
 
   IF banned IS NOT NULL THEN
-    RAISE EXCEPTION 'ละเมิดกฎเหล็ก: พบ object สำหรับเขียนกลับ ERP (%) — ระบบนี้อ่าน ERP อย่างเดียว ห้ามมีคิว/ตารางเขียนกลับ', banned;
+    RAISE EXCEPTION 'ละเมิดขอบเขตเขียนกลับ ERP: พบ object (%) ที่ไม่ได้อยู่ใน allowlist — อนุญาตเขียนกลับได้เฉพาะ tbl_CountHdr / tbl_CountDtl / RunningNumber ผ่าน erp_writeback เท่านั้น ห้ามคิว/ตารางเขียนกลับแบบอื่น', banned;
   END IF;
 END
 $do$;
