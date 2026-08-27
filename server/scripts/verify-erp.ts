@@ -5,9 +5,16 @@
  *
  * ── 🚫 กฎเหล็ก: สคริปต์นี้ **อ่านอย่างเดียว** ──────────────────────────────
  *   - ไม่มีคำสั่ง CREATE / INSERT / UPDATE / DELETE ใด ๆ
- *   - จงใจ **ไม่** เรียก `MssqlDriver.verifyReadOnly()` เพราะเมธอดนั้นยิง
- *     `CREATE TABLE` + `INSERT` จริงเพื่อพิสูจน์สิทธิ์ — ถ้า login ปัจจุบันเขียนได้
- *     มันจะเขียนลง ERP จริง ที่นี่ใช้ metadata function ตรวจสิทธิ์แทน
+ *   - ทุก statement ต้องผ่าน `assertReadOnlySql()` (กฎเหล็กชั้นที่ 3 ตัวเดียวกับที่
+ *     driver ใช้) ก่อนถูกส่งเข้า connection ของ ERP เสมอ
+ *   - สคริปต์นี้ตรวจสิทธิ์เองด้วย metadata function ชุดเดียวกับ
+ *     `MssqlDriver.verifyReadOnly()` — เมธอดนั้น **ไม่เคยเขียนอะไรลง ERP**
+ *     ใช้ `IS_SRVROLEMEMBER` / `IS_ROLEMEMBER` / `HAS_PERMS_BY_NAME` ล้วน ๆ
+ *     (ดู server/src/erp/drivers/mssql.driver.ts) ผลลัพธ์ของ boot probe มี 3 ทาง:
+ *       · ตอบว่าเขียนได้ → `ERP_WRITE_ALLOWED` → ปฏิเสธการ start
+ *       · ตอบ NULL (สรุปไม่ได้) → `ERP_PROBE_INCONCLUSIVE` → ปฏิเสธการ start
+ *       · ต่อ ERP ไม่ได้ → `ERP_UNREACHABLE` → start ได้แบบ degraded
+ *     ที่นี่ไม่เรียกเมธอดนั้นตรง ๆ เพราะมันผูกกับ NestJS config ของ runtime
  *   - ไม่พิมพ์ host / user / password ออกทาง stdout
  *
  * ใช้เมื่อไหร่:
@@ -20,6 +27,8 @@ import { join } from 'node:path';
 
 import * as dotenv from 'dotenv';
 import * as sql from 'mssql';
+
+import { assertReadOnlySql } from '../src/erp/erp-adapter';
 
 const SERVER_DIR = join(__dirname, '..');
 const ENV_PATH = join(SERVER_DIR, `.${'env'}`);
@@ -34,6 +43,15 @@ const out = (s = ''): void => {
   console.log(s);
 };
 const yes = (v: unknown): boolean => v === 1 || v === true;
+
+/**
+ * ด่านเดียวกับที่ driver ใช้ — statement ไหนไม่ผ่านจะ throw ก่อนถึง ERP
+ * สคริปต์นี้เป็น connection ที่ต่อ ERP นอก runtime จึงต้องเรียกเอง ทุกครั้ง ทุก statement
+ */
+const guarded = (statement: string): string => {
+  assertReadOnlySql(statement);
+  return statement;
+};
 
 interface Diag {
   rows_isclosed_null: number;
@@ -71,7 +89,12 @@ async function main(): Promise<void> {
       trustServerCertificate: get('ERP_SQL_TRUST_SERVER_CERT', 'true').toLowerCase() !== 'false',
     },
     connectionTimeout: Number(get('ERP_TIMEOUT_MS', '20000')),
-    requestTimeout: 120_000,
+    // ⏱️ ยาวกว่างบของ runtime (ERP_TIMEOUT_MS) โดยตั้งใจ: สคริปต์นี้ทำ full scan
+    //    ของ ledger ทั้งคลังและวนเทียบทุกรอบนับ ซึ่งกินเวลาเป็นนาทีบน db_TCL จริง
+    //    ต่างจาก runtime ที่มีคนรอหน้าจอจึงต้องตัดจบเร็ว — ปรับได้ผ่าน env ถ้าเครื่องช้ากว่านี้
+    requestTimeout: Number(get('ERP_VERIFY_TIMEOUT_MS', '120000')),
+    // ต่อไม่เกิน 2 connection: สคริปต์ยิงทีละ query อยู่แล้ว และ ERP เป็นเครื่อง production
+    pool: { max: 2, min: 0, idleTimeoutMillis: 30_000 },
   }).connect();
   out('✅ เชื่อมต่อ ERP สำเร็จ');
   out();
@@ -79,7 +102,7 @@ async function main(): Promise<void> {
   // ── 1. สิทธิ์ของ login (กฎเหล็กชั้นที่ 1) ────────────────────────────
   out('── สิทธิ์ของ login (ตรวจด้วย metadata ไม่ได้ลองเขียน) ──');
   const perms = (
-    await pool.request().query<Perms>(`
+    await pool.request().query<Perms>(guarded(`
       SELECT IS_SRVROLEMEMBER('sysadmin')                     AS is_sysadmin,
              IS_ROLEMEMBER('db_owner')                        AS is_db_owner,
              IS_ROLEMEMBER('db_datareader')                   AS is_db_datareader,
@@ -87,7 +110,7 @@ async function main(): Promise<void> {
              HAS_PERMS_BY_NAME(DB_NAME(),'DATABASE','INSERT') AS can_insert,
              HAS_PERMS_BY_NAME(DB_NAME(),'DATABASE','UPDATE') AS can_update,
              HAS_PERMS_BY_NAME(DB_NAME(),'DATABASE','DELETE') AS can_delete,
-             HAS_PERMS_BY_NAME(DB_NAME(),'DATABASE','SELECT') AS can_select`)
+             HAS_PERMS_BY_NAME(DB_NAME(),'DATABASE','SELECT') AS can_select`))
   ).recordset[0];
 
   const writable =
@@ -113,11 +136,18 @@ async function main(): Promise<void> {
 
   // ── 2. diagnostic ของสูตร ────────────────────────────────────────────
   out('── diagnostic ของสูตรยอดคงเหลือ ──');
+  // ต้นฉบับเขียนไว้ให้ sqlcmd (`'$(warehouse)'`) — ที่นี่แปลง token นั้นเป็นตัวแปร @warehouse
+  // แล้วผูกค่าแบบ parameter แทนการแทนสตริงลง SQL ตรง ๆ (กันรหัสคลังแปลกปลอมเข้าไปในคำสั่ง)
   const diagSql = readFileSync(join(SERVER_DIR, 'sql/erp/verify-balance.sql'), 'utf8').replace(
-    /\$\(warehouse\)/g,
-    WAREHOUSE.replace(/'/g, "''"),
+    /'?\$\(warehouse\)'?/g,
+    '@warehouse',
   );
-  const diag = (await pool.request().query<Diag>(diagSql)).recordset[0];
+  const diag = (
+    await pool
+      .request()
+      .input('warehouse', sql.NVarChar(50), WAREHOUSE)
+      .query<Diag>(guarded(diagSql))
+  ).recordset[0];
   out(`  เอกสารที่ IsClosed เป็น NULL : ${diag.rows_isclosed_null}`);
   out(`  เอกสารที่ Approved เป็น NULL : ${diag.rows_approved_null}`);
   out(`  สินค้าที่ยังใช้งาน           : ${diag.items_active}`);
@@ -140,13 +170,13 @@ async function main(): Promise<void> {
       tno: number;
       vno: string;
       countDate: Date;
-    }>(`
+    }>(guarded(`
       SELECT h.TransactionNo AS tno, LTRIM(RTRIM(h.VoucherNo)) AS vno, h.CountDate AS countDate
         FROM dbo.tbl_CountHdr h WITH (NOLOCK)
         JOIN dbo.tbl_CountDtl d WITH (NOLOCK) ON d.TransactionNo = h.TransactionNo
        GROUP BY h.TransactionNo, h.VoucherNo, h.CountDate
       HAVING MAX(LTRIM(RTRIM(d.Warehouse))) = @wh
-       ORDER BY h.CountDate`)
+       ORDER BY h.CountDate`))
   ).recordset;
 
   if (sessions.length === 0) {
@@ -155,11 +185,11 @@ async function main(): Promise<void> {
 
   for (const s of sessions) {
     const ref = (
-      await pool.request().input('tno', sql.Int, s.tno).query<{ sku: string; qty: number }>(`
+      await pool.request().input('tno', sql.Int, s.tno).query<{ sku: string; qty: number }>(guarded(`
         SELECT LTRIM(RTRIM(ItemCode)) AS sku, SUM(MainQty) AS qty
           FROM dbo.tbl_CountDtl WITH (NOLOCK)
          WHERE TransactionNo = @tno
-         GROUP BY LTRIM(RTRIM(ItemCode))`)
+         GROUP BY LTRIM(RTRIM(ItemCode))`))
     ).recordset;
 
     // ⚠️ CountDate ไม่มีเวลากำกับ (เที่ยงคืนเสมอ) → ยอดที่ ERP freeze คือยอดถึง
@@ -170,7 +200,11 @@ async function main(): Promise<void> {
     const req = pool.request();
     req.input('warehouse', sql.NVarChar(50), WAREHOUSE);
     req.input('asOf', sql.DateTime2, asOf);
-    const calc = (await req.query<{ ItemCode: string; on_hand: number | null }>(SCRIPT)).recordset;
+    // script อ้าง @skus ด้วย (NULL = ทั้งคลัง) — driver ผูกให้เสมอ ที่นี่ก็ต้องผูก
+    // ไม่งั้น SQL Server ตอบ "Must declare the scalar variable @skus" ทุกครั้ง
+    req.input('skus', sql.NVarChar(sql.MAX), null);
+    const calc = (await req.query<{ ItemCode: string; on_hand: number | null }>(guarded(SCRIPT)))
+      .recordset;
     const bySku = new Map(calc.map((r) => [String(r.ItemCode), r.on_hand]));
 
     let match = 0;
