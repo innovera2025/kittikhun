@@ -37,8 +37,10 @@ const SessionIdSchema = z
   .string()
   .trim()
   .min(1, 'รหัสรอบนับไม่ถูกต้อง')
+  // '#' ถูกกันไว้ด้วยเพราะเป็นตัวคั่นของมาร์กเกอร์ `TCL#<id>#` ที่ประทับใน
+  // tbl_CountHdr.Remark — ถ้าอยู่ในตัว id จะทำให้ค้นเอกสารข้ามรอบกันได้
   // eslint-disable-next-line no-control-regex
-  .regex(/^[^\u0000-\u001F"\\]+$/, 'รหัสรอบนับไม่ถูกต้อง')
+  .regex(/^[^\u0000-\u001F"\\#]+$/, 'รหัสรอบนับไม่ถูกต้อง')
   .max(64, 'รหัสรอบนับไม่ถูกต้อง');
 
 const SkuSchema = z.string().trim().min(1, 'รหัสสินค้าไม่ถูกต้อง').max(64, 'รหัสสินค้าไม่ถูกต้อง');
@@ -322,8 +324,14 @@ export class CountController {
     return this.writeback.send(sessionId, user.empId);
   }
 
-  /** สถานะการส่งเข้า ERP ของรอบหนึ่ง — `null` = ยังไม่เคยส่ง */
+  /**
+   * สถานะการส่งเข้า ERP ของรอบหนึ่ง — `null` = ยังไม่เคยส่ง
+   *
+   * ⚠️ ต้องเป็น admin เหมือน POST — ค่าที่คืนมีเลขเอกสารของ ERP และ `lastError`
+   *    ซึ่งเป็นข้อความ error ดิบของ SQL Server (มีชื่อ host/database ปนได้)
+   */
   @Get(':id/erp-writeback')
+  @Roles('admin')
   async erpWritebackStatus(@Param('id') idParam: string): Promise<WritebackStatus | null> {
     const sessionId = parseOrThrow(SessionIdSchema, idParam, 'รหัสรอบนับไม่ถูกต้อง');
     return this.writeback.status(sessionId);
