@@ -26,7 +26,7 @@
 
 | # | ข้อกำหนด | บังคับด้วยอะไร |
 |---|---|---|
-| 1 | login ที่ต่อ ERP ต้องมีสิทธิ์ **`db_datareader` เท่านั้น** (หรือ GRANT SELECT เฉพาะ object ที่ใช้) — บัญชีระดับ `sysadmin`/`db_owner` ใช้ไม่ได้ | boot probe ใน `MssqlDriver.verifyReadOnly()` ยิง INSERT ทดสอบ · เขียนสำเร็จ = **ปฏิเสธการ start** |
+| 1 | login ที่ต่อ ERP ต้องมีสิทธิ์ **`db_datareader` เท่านั้น** (หรือ GRANT SELECT เฉพาะ object ที่ใช้) — บัญชีระดับ `sysadmin`/`db_owner` ใช้ไม่ได้ | boot probe ใน `MssqlDriver.verifyReadOnly()` ถามสิทธิ์จาก metadata ล้วน (ไม่เขียนอะไรลง ERP) · พบสิทธิ์เขียน = **ปฏิเสธการ start** |
 | 2 | พอร์ตของ ERP ต้องเข้าถึงได้เฉพาะจากเซิร์ฟเวอร์แอป — จำกัดด้วย firewall หรือเชื่อมผ่าน VPN/LAN | นอกขอบเขตโค้ด — งานของผู้ดูแลระบบ |
 | 3 | ตั้ง `ERP_SQL_ENCRYPT=true` (+ `ERP_SQL_TRUST_SERVER_CERT=true` ถ้าเป็น self-signed) เพื่อไม่ให้ credential/ข้อมูลวิ่งแบบไม่เข้ารหัส | คอนฟิกที่ระดับ environment — ค่า default คือ `false` จึงต้องตั้งเอง |
 | 4 | ค่าเชื่อมต่อจริงต้องไม่หลุดเข้า repo | ✅ `.gitignore` กันไฟล์ environment ทุกแบบ + `config/` — ตรวจแล้วว่าไม่มีไฟล์ความลับถูก track |
@@ -100,7 +100,7 @@
 
 ### 6.2 ยอดคงเหลือ → **รอ script ของเจ้าของโปรเจคเป็นตัวกำหนด** ✅
 
-- Driver `sql` จะรัน `.sql` จาก script นั้นตามรอบ (`ERP_SQL_ITEMS_SQL_FILE` / `ERP_SQL_STOCK_SQL_FILE`)
+- Driver `sql` จะรัน `.sql` จาก script นั้นตามรอบ (`ERP_SQL_ITEMS_SQL_FILE` — ยอดคงเหลือมาพร้อม item master ใน query เดียว ไม่มีไฟล์/รอบแยกสำหรับยอด)
 - สิ่งที่ต้องดูจาก script เมื่อได้รับ: สูตรยอดคงเหลือ, การกรองคลัง, คอลัมน์ที่ให้มาครบไหม, เวลาที่ใช้รัน
 
 ### 6.3 รอบนับ → **ดึงรอบนับ/รายการจาก ERP มาให้พนักงานนับในมือถือ** ✅

@@ -30,7 +30,7 @@ import { z } from 'zod';
  * - `barcodes` = ฉลาก Code128 ที่พิมพ์จาก `ItemCode` + EAN-13/ITF-14 ที่มีจริง (`BarCodeUnits` 1.9%)
  * - `onHand` = `tbl_CountDtl.MainQty` (ยอดระบบในรอบนับ) — ERP ไม่มีตารางยอดคงเหลือสำเร็จ
  * - `loc` (`Shelf`) · `nameEn` (`ItemNameEng`) · `reserved` (`PendingQTY`) · `lot` ว่าง 100% → undefined
- * - `rop` = `MinStock` มีราว 29% → undefined ได้ (UI ซ่อน tile เมื่อไม่มีค่า)
+ * - `rop` = `MinStock` มี 26.8% (143 จาก 533 แถว) → undefined ได้ (UI ซ่อน tile เมื่อไม่มีค่า)
  * - `warehouseCode` ต้อง LTRIM/RTRIM แล้ว (คอลัมน์ Warehouse เป็น nvarchar padded)
  *   คลังจริง: `WHRM` `WHFG` `WHWIP` `WHNG`
  */
