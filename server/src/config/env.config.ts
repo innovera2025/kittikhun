@@ -239,9 +239,6 @@ const commonShape = {
   ERP_SYNC_CRON: envStr('cron ดึง item master เช่น */30 * * * *', {
     pattern: CRON_RE,
   }).default('*/30 * * * *'),
-  ERP_SYNC_STOCK_CRON: envStr('cron ดึงยอดสต็อก เช่น */5 * * * *', {
-    pattern: CRON_RE,
-  }).default('*/5 * * * *'),
   ERP_SYNC_OVERLAP_S: envInt({
     min: 0,
     max: 86_400,
@@ -294,14 +291,6 @@ const sqlSharedShape = {
     max: 512,
     pattern: ABS_SQL_FILE_RE,
   }).optional(),
-  ERP_SQL_STOCK_VIEW: envStr('ชื่อ view/ตารางยอดสต็อก เช่น dbo.v_stock_onhand', {
-    max: 256,
-    pattern: SQL_OBJECT_RE,
-  }).optional(),
-  ERP_SQL_STOCK_SQL_FILE: envStr('พาธเต็มของไฟล์ .sql เช่น /config/inventory-stock.sql', {
-    max: 512,
-    pattern: ABS_SQL_FILE_RE,
-  }).optional(),
   ERP_SQL_CHARSET: envEnum(
     ERP_SQL_CHARSETS,
     'charset ของคอลัมน์ ERP (db_TCL เป็น NVARCHAR → utf8)',
@@ -340,6 +329,10 @@ const writebackShape = {
     max: 128,
   }).optional(),
   ERP_SQL_WRITE_PASSWORD: envStr('รหัสผ่านของ ERP_SQL_WRITE_USER', { max: 256 }).optional(),
+  ERP_WRITEBACK_DTL_VOUCHERNO: envBool(
+    false,
+    'true = ใส่ VoucherNo ลง tbl_CountDtl ด้วย (เปิดเมื่อฝ่าย ERP ยืนยันว่ามีคอลัมน์นี้)',
+  ),
 } as const;
 
 /** driver อื่นไม่บังคับ แต่ยังประกาศคีย์ไว้ให้ ConfigService อ่านได้ */
@@ -560,7 +553,6 @@ function crossFieldRules(config: AppConfig, ctx: z.RefinementCtx): void {
   if (config.ERP_DRIVER === 'sql') {
     // แหล่ง query: เลือก view หรือไฟล์ .sql อย่างใดอย่างหนึ่ง (items บังคับ, stock ไม่บังคับ)
     checkSqlSource(addIssue, 'ITEMS', config.ERP_SQL_ITEMS_VIEW, config.ERP_SQL_ITEMS_SQL_FILE, true);
-    checkSqlSource(addIssue, 'STOCK', config.ERP_SQL_STOCK_VIEW, config.ERP_SQL_STOCK_SQL_FILE, false);
     if (config.ERP_SQL_DIALECT !== 'mssql') {
       addIssue(
         'ERP_SQL_DIALECT',
