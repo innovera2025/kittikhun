@@ -348,7 +348,13 @@ flutter build apk --release \
 >
 > **ตรวจว่า build ถูกต้องก่อนแจก** — เปิดหน้า login: ถ้ายังมีชิป `WH-BKK-02` ข้าง `v4.0`
 > แปลว่าเป็น fixture build (ชิปนี้เรนเดอร์เฉพาะตอน `!isConfigured` — `login_screen.dart:399-402`)
-> หรือตรวจจากไฟล์: `unzip -p build/app/outputs/flutter-apk/app-release.apk lib/arm64-v8a/libapp.so | strings | grep -c 'tcl.krs.co.th'` ต้องมากกว่า 0
+> หรือตรวจจากไฟล์ APK ตรง ๆ (ต้องได้มากกว่า 0):
+> ```bash
+> unzip -p build/app/outputs/flutter-apk/app-release.apk lib/arm64-v8a/libapp.so \
+>   | grep -ao 'stock\.example\.com' | wc -l
+> ```
+> ⚠️ อย่าใช้ `| strings |` ในคำสั่งนี้ — `strings` บน macOS อ่าน stdin ไม่ได้ จะคืน 0 เสมอ
+> ทำให้เข้าใจผิดว่า build พลาดทั้งที่ถูกต้องแล้ว ใช้ `grep -a` ตรง ๆ กับสตรีมไบนารี
 >
 > ⚠️ ต้องมี keystore สำหรับ release build (ยังไม่ได้ตั้ง — ดู "งานที่รออยู่" ข้อ 5 ใน README)
 > ระหว่างทดสอบใช้ `flutter run --dart-define=...` กับมือถือที่เสียบสายได้เลย ไม่ต้องมี keystore
