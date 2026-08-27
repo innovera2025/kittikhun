@@ -334,9 +334,22 @@ BACKUP_SSH_KEY=/keys/id_ed25519
 ```bash
 cd app
 flutter build apk --release \
-  --dart-define=API_BASE_URL=https://stock.example.com/api
+  --dart-define=API_BASE_URL=https://stock.example.com
 ```
 
+> 🔴 **ลืมใส่ `--dart-define=API_BASE_URL` แล้วแอปจะไม่พังแบบเห็นชัด — มันจะเงียบ**
+> `ApiConfig.baseUrl` มี `defaultValue: ''` (`app/lib/data/api_client.dart:39-42`) ค่าว่าง =
+> `isConfigured` เป็น false = แอปเข้าโหมด fixture ทั้งเครื่อง: ขึ้นคลัง `WH-BKK-02`
+> ผู้ใช้ `Tcl S./ADMIN` สแกนอะไรก็ "ไม่พบ" (ค้นใน fixture 5 ตัว ไม่ยิงเน็ตเลย) และ
+> **login ไม่ตรวจ PIN** — ห้ามแจก build แบบนี้ให้ใครเด็ดขาด
+>
+> **ห้ามต่อ `/api` ท้าย URL** — API เสิร์ฟที่ root (ตรวจแล้วกับเครื่องจริง 27 ส.ค. 2569:
+> `/healthz` → 200 · `/api/healthz` → 404) และแอปต่อ path เช่น `/auth/login` ท้าย baseUrl ตรง ๆ
+>
+> **ตรวจว่า build ถูกต้องก่อนแจก** — เปิดหน้า login: ถ้ายังมีชิป `WH-BKK-02` ข้าง `v4.0`
+> แปลว่าเป็น fixture build (ชิปนี้เรนเดอร์เฉพาะตอน `!isConfigured` — `login_screen.dart:399-402`)
+> หรือตรวจจากไฟล์: `unzip -p build/app/outputs/flutter-apk/app-release.apk lib/arm64-v8a/libapp.so | strings | grep -c 'tcl.krs.co.th'` ต้องมากกว่า 0
+>
 > ⚠️ ต้องมี keystore สำหรับ release build (ยังไม่ได้ตั้ง — ดู "งานที่รออยู่" ข้อ 5 ใน README)
 > ระหว่างทดสอบใช้ `flutter run --dart-define=...` กับมือถือที่เสียบสายได้เลย ไม่ต้องมี keystore
 
