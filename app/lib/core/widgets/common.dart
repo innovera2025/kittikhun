@@ -330,6 +330,90 @@ class FieldBox extends StatelessWidget {
       );
 }
 
+/// ปุ่ม − / + ของ stepper — 44×44
+class StepperButton extends StatelessWidget {
+  const StepperButton({super.key, required this.glyph, required this.onTap});
+
+  final String glyph;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      label: glyph == '+' ? 'เพิ่มจำนวน' : 'ลดจำนวน',
+      child: Tappable(
+        onTap: onTap,
+        radius: TclTokens.rStepper,
+        child: Container(
+          width: TclTokens.hStepper,
+          height: TclTokens.hStepper,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: TclTokens.s07,
+            border: Border.all(color: TclTokens.b16),
+            borderRadius: BorderRadius.circular(TclTokens.rStepper),
+          ),
+          child: Text(
+            glyph,
+            style: TclTokens.thai(
+              size: 20,
+              color: TclTokens.tBody,
+              height: 1,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// ช่องกรอกจำนวนที่นับได้ — กว้าง 88 · โฟกัสแล้วขอบเป็น accent
+class CountField extends StatelessWidget {
+  const CountField({
+    super.key,
+    required this.controller,
+    required this.focused,
+    required this.onFocusChange,
+    required this.onChanged,
+  });
+
+  final TextEditingController controller;
+  final bool focused;
+  final ValueChanged<bool> onFocusChange;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 88,
+      child: Focus(
+        onFocusChange: onFocusChange,
+        child: AnimatedContainer(
+          duration: TclTokens.dKeypad,
+          height: TclTokens.hStepper,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: TclTokens.s10,
+            border: Border.all(
+              color: focused ? TclTokens.accent : TclTokens.b16,
+            ),
+            borderRadius: BorderRadius.circular(TclTokens.rCountInput),
+          ),
+          child: TokenTextField(
+            controller: controller,
+            onChanged: onChanged,
+            hint: 'นับได้',
+            textAlign: TextAlign.center,
+            keyboardType: TextInputType.number,
+            style: TclTokens.statValue(TclTokens.tBrightest),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// ไอคอนกล่องแบรนด์ (แถบบาร์โค้ด 5 เส้นบนพื้น gradient)
 class BrandMark extends StatelessWidget {
   const BrandMark({super.key, required this.size, required this.radius});

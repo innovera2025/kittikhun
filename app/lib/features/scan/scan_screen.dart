@@ -11,6 +11,7 @@ import '../../core/widgets/common.dart';
 import '../../data/fixtures.dart';
 import '../../data/models.dart';
 import '../../state/app_state.dart';
+import '../count/submit_drafts.dart';
 
 // ════════════════════════════════════════════════════════════════════
 // ค่าเรขาคณิตที่ถอดตรงจาก design (§2.3) — ไม่ใช่ token สี/รัศมี/เงา/ฟอนต์
@@ -77,6 +78,9 @@ const double _specRowGap = 14;
 const int _specKeyFlex = 3;
 const int _specValueFlex = 2;
 const double _removeMinWidth = 96;
+
+/// ระยะระหว่าง `−` / ช่องกรอก / `+` / หน่วย — ค่าเดียวกับแถว stepper ของจอนับ
+const double _stepperGap = 10;
 
 /// dialog กรอกรหัสมือ — ใช้มิติเดียวกับ bottom sheet ของ design (§2.7)
 const double _dialogPad = 22;
@@ -262,6 +266,8 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
         if (state.hasScans) camera else Expanded(child: camera),
         _toolbar(state),
         Expanded(child: _resultList(state)),
+        // ปุ่มส่งเอกสาร — ซ่อนตัวเองเมื่อยังไม่มีบรรทัดที่คีย์ (ลิสต์ได้ความสูงเต็ม)
+        const SubmitDraftsBar(),
       ],
     );
   }
@@ -544,18 +550,14 @@ class _ScanCard extends ConsumerWidget {
     final expanded = expandedSku == item.sku;
 
     final onHand = item.onHand;
-    // ERP ไม่มียอด → ไม่แสดงตัวเลขและไม่เดาสถานะ (erp-tcl-findings §7 ข้อ 5)
-    final tone = onHand == null
-        ? null
-        : TclTokens.toneOf(onHand: onHand, rop: item.rop ?? 0);
-    final toneColor = tone == null
-        ? TclTokens.s11
-        : TclTokens.toneColor(tone);
+    // แถบสีของการ์ดอ้าง **สถานะการนับ** ไม่ใช่ระดับสต็อกเทียบ ROP อีกต่อไป:
+    // ERP มี MinStock แค่ ~29% ของรายการ แถบส้ม/แดงที่ไม่มีตัวเลขจุดสั่งซื้อ
+    // อธิบายกำกับจึงอ่านไม่ออก และจอนี้กลายเป็นจอ "นับ" แล้ว ไม่ใช่จอเช็คสต็อก
+    final variance = _varianceFor(ref, item);
+    final toneColor = _countToneColor(variance);
 
-    final subtitle = [
-      if (tone != null) TclTokens.toneLabel(tone),
-      if (item.loc != null) item.loc!,
-    ].join(' · ');
+    // ERP จริงไม่มี Shelf (ว่าง 100%) → ส่วนใหญ่บรรทัดนี้จะไม่ขึ้นเลย
+    final subtitle = item.loc ?? '';
 
     return GradientCard(
       gradient: TclTokens.scanCardBg,
@@ -607,9 +609,7 @@ class _ScanCard extends ConsumerWidget {
                     children: [
                       Text(
                         _qty(onHand),
-                        style: TclTokens.qtyHuge(
-                          tone == null ? TclTokens.tMuted : toneColor,
-                        ),
+                        style: TclTokens.qtyHuge(toneColor),
                       ),
                       Text(
                         '${item.unit} คงเหลือ',
@@ -627,28 +627,77 @@ class _ScanCard extends ConsumerWidget {
               ),
             ),
           ),
-          if (expanded) _ScanCardDetail(item: item, toneColor: toneColor),
+          if (expanded)
+            _ScanCardDetail(
+              item: item,
+              variance: variance,
+              toneColor: toneColor,
+            ),
         ],
       ),
     );
   }
 }
 
-class _ScanCardDetail extends ConsumerWidget {
-  const _ScanCardDetail({required this.item, required this.toneColor});
+/// ครึ่งล่างของการ์ดที่กางออก — ยอดคงเหลือ/ผลต่าง + ช่องกรอกจำนวนที่นับได้
+///
+/// stateful เพราะถือ [TextEditingController] ต่อ 1 sku: ค่าที่กรอกอยู่ใน state
+/// ส่วนกลาง แต่ cursor/โฟกัสเป็นของ widget นี้ (กด +/− แล้ว cursor ต้องไม่เด้ง)
+class _ScanCardDetail extends ConsumerStatefulWidget {
+  const _ScanCardDetail({
+    required this.item,
+    required this.variance,
+    required this.toneColor,
+  });
 
   final Item item;
+  final Variance variance;
   final Color toneColor;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_ScanCardDetail> createState() => _ScanCardDetailState();
+}
+
+class _ScanCardDetailState extends ConsumerState<_ScanCardDetail> {
+  late final TextEditingController _ctrl;
+  bool _focused = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // กางการ์ดใหม่ต้องเห็นยอดที่เคยคีย์ไว้ (รวมที่ hydrate มาจาก SQLite)
+    _ctrl = TextEditingController(
+      text: ref.read(appProvider).counts[widget.item.sku] ?? '',
+    );
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  /// ดึงค่าจาก state เข้า controller เฉพาะเมื่อถูกเปลี่ยนจากภายนอก (กด +/−)
+  /// ตอนผู้ใช้พิมพ์เอง text ตรงกับ state อยู่แล้ว → ข้าม เพื่อไม่ให้ cursor เด้ง
+  void _syncFromState(String value) {
+    if (_ctrl.text == value) return;
+    _ctrl.value = TextEditingValue(
+      text: value,
+      selection: TextSelection.collapsed(offset: value.length),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final item = widget.item;
     final controller = ref.read(appProvider.notifier);
     final onHand = item.onHand;
-    final rop = item.rop;
-    // ไม่มี ROP → ไม่มีเกณฑ์เทียบ → ซ่อนแถบทั้งแถบ
-    final bar = (onHand == null || rop == null)
-        ? null
-        : TclTokens.stockBarFraction(onHand: onHand, rop: rop);
+    final canWrite = ref.watch(appProvider.select((s) => s.me.role.canWrite));
+
+    ref.listen(
+      appProvider.select((s) => s.counts[item.sku] ?? ''),
+      (_, next) => _syncFromState(next),
+    );
 
     final specs = <(String, String)>[
       if (item.vendor != null) ('ผู้ผลิต · Vendor', item.vendor!),
@@ -671,23 +720,27 @@ class _ScanCardDetail extends ConsumerWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (bar != null) ProgressBar(fraction: bar, color: toneColor),
-          if (bar != null) const SizedBox(height: _blockGap),
+          // 'จอง' (PendingQTY ว่าง 100%) · 'พร้อมขาย' (= onHand − จอง จึง null เสมอ)
+          // และ 'จุดสั่งซื้อ' ถูกถอดออก — สามช่องนั้นแสดง '—' ตลอดในข้อมูล ERP จริง
           Row(
             children: [
               Expanded(
-                child: _StatTile(label: 'จอง', value: _qty(item.reserved)),
+                child: _StatTile(label: 'ยอดคงเหลือ', value: _qty(onHand)),
               ),
               const SizedBox(width: _statTileGap),
               Expanded(
-                child: _StatTile(label: 'พร้อมขาย', value: _qty(item.free)),
-              ),
-              const SizedBox(width: _statTileGap),
-              Expanded(
-                child: _StatTile(label: 'จุดสั่งซื้อ', value: _qty(rop)),
+                child: _StatTile(
+                  label: 'ผลต่าง',
+                  // ทิศ "นับได้ − ยอดระบบ" ตาม Variance.signed (ข้อความสำหรับจอ
+                  // เท่านั้น — ไม่มีค่านี้ถูกส่งขึ้น server)
+                  value: widget.variance.signed,
+                  valueColor: widget.toneColor,
+                ),
               ),
             ],
           ),
+          const SizedBox(height: _blockGap),
+          _countRow(controller, onHand: onHand, canWrite: canWrite),
           if (specs.isNotEmpty) ...[
             const SizedBox(height: _blockGap),
             for (final (key, value) in specs)
@@ -696,15 +749,13 @@ class _ScanCardDetail extends ConsumerWidget {
           const SizedBox(height: _actionGap),
           Row(
             children: [
+              // กรอกจำนวนได้ในการ์ดนี้แล้ว ปุ่มกระโดดข้ามแท็บจึงไม่มีเหตุผล —
+              // สิ่งที่คนต้องการตรงนี้คือ "ลบค่าที่คีย์ผิด" (ค่าว่าง = ยังไม่ได้นับ
+              // ซึ่งถอนบรรทัดออกจากเอกสาร ต่างจาก '0' ที่แปลว่านับแล้วได้ศูนย์)
               Expanded(
-                child: PrimaryButton(
-                  label: 'นับสต็อกรายการนี้',
-                  onPressed: controller.goCount,
-                  height: TclTokens.hCardAction,
-                  radius: TclTokens.rCardAction,
-                  shadow: const [],
-                  // ปุ่มในการ์ดเป็น 15/600 ตาม design → อ่านขนาดจาก type scale
-                  fontSize: TclTokens.ctaSecondary().fontSize!,
+                child: SecondaryButton(
+                  label: 'ล้างค่าที่นับ',
+                  onPressed: () => controller.setScanCount(item, ''),
                 ),
               ),
               const SizedBox(width: _fabGap),
@@ -723,13 +774,73 @@ class _ScanCardDetail extends ConsumerWidget {
       ),
     );
   }
+
+  /// แถวกรอกจำนวนที่นับได้ — `−` / ช่องกรอก / `+` / หน่วย
+  ///
+  /// สองกรณีที่ **ไม่มีช่องกรอกเลย** (กั้นตั้งแต่จอ ไม่ใช่ไปบอกตอนกดส่ง):
+  /// - `onHand == null` — ERP ไม่มียอดให้เทียบ นับแล้วส่งไปก็ไม่มีความหมาย
+  ///   (null ≠ 0 · ห้ามแปลงเป็น 0 เด็ดขาด)
+  /// - viewer — สิทธิ์ดูอย่างเดียว
+  Widget _countRow(
+    AppController controller, {
+    required num? onHand,
+    required bool canWrite,
+  }) {
+    if (onHand == null) {
+      return Text(
+        'ไม่มียอดระบบ · นับรายการนี้ไม่ได้',
+        style: TclTokens.meta(TclTokens.tMuted),
+      );
+    }
+    if (!canWrite) {
+      return Text(
+        'ดูอย่างเดียว · viewer',
+        style: TclTokens.meta(TclTokens.tMuted),
+      );
+    }
+
+    final item = widget.item;
+    return Row(
+      children: [
+        StepperButton(
+          glyph: '−',
+          onTap: () => controller.decScanCount(item),
+        ),
+        const SizedBox(width: _stepperGap),
+        CountField(
+          controller: _ctrl,
+          focused: _focused,
+          onFocusChange: (f) => setState(() => _focused = f),
+          onChanged: (v) => controller.setScanCount(item, v),
+        ),
+        const SizedBox(width: _stepperGap),
+        StepperButton(
+          glyph: '+',
+          onTap: () => controller.incScanCount(item),
+        ),
+        const SizedBox(width: _stepperGap),
+        // 44 + 88 + 44 + gap 10×3 = 196px — ที่เหลือเป็นของหน่วยนับ
+        Expanded(
+          child: Text(
+            item.unit,
+            style: TclTokens.meta(),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ],
+    );
+  }
 }
 
 class _StatTile extends StatelessWidget {
-  const _StatTile({required this.label, required this.value});
+  const _StatTile({required this.label, required this.value, this.valueColor});
 
   final String label;
   final String value;
+
+  /// null = สี tBody เดิมของ [TclTokens.statValue] (ช่องที่ไม่ต้องเน้น)
+  final Color? valueColor;
 
   @override
   Widget build(BuildContext context) => GlassCard(
@@ -742,7 +853,12 @@ class _StatTile extends StatelessWidget {
       children: [
         Text(label, style: TclTokens.tiny(TclTokens.tMuted)),
         const SizedBox(height: _titleGap),
-        Text(value, style: TclTokens.statValue()),
+        Text(
+          value,
+          style: valueColor == null
+              ? TclTokens.statValue()
+              : TclTokens.statValue(valueColor!),
+        ),
       ],
     ),
   );
@@ -815,6 +931,26 @@ class _ScanEmptyState extends StatelessWidget {
       ],
     ),
   );
+}
+
+/// ผลต่างของการ์ด 1 ใบ — ยอดที่คีย์เทียบยอดระบบ **ที่จอโชว์อยู่**
+///
+/// watch เฉพาะค่าของ sku นี้ → คีย์การ์ดหนึ่งไม่ทำให้การ์ดอื่นทั้งลิสต์ rebuild
+/// `onHand == null` = ห้ามนับ → ไม่มีผลต่างให้พูดถึง
+Variance _varianceFor(WidgetRef ref, Item item) {
+  final entered = ref.watch(
+    appProvider.select((s) => s.counts[item.sku] ?? ''),
+  );
+  final onHand = item.onHand;
+  if (onHand == null) return Variance.notCounted;
+  return Variance.from(entered: entered, systemQty: onHand);
+}
+
+/// สีตามสถานะการนับ — สูตรเดียวกับ `_varianceTone` ของจอนับ
+/// (ยังไม่นับ = กลาง · ตรงกับระบบ = ok · ขาด/เกิน = warn)
+Color _countToneColor(Variance v) {
+  if (!v.isCounted) return TclTokens.tMuted;
+  return v.isMatch ? TclTokens.ok : TclTokens.warn;
 }
 
 /// ตัวเลขจำนวนแบบคั่นหลักพัน (design ใช้ `toLocaleString` → 1,240)

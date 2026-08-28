@@ -113,7 +113,7 @@ class Fixtures {
   static const Map<AppTab, (String, String)> heads = {
     AppTab.scan: ('คลัง $warehouseCode', 'สแกนบาร์โค้ด'),
     AppTab.search: ('คลัง $warehouseCode', 'ค้นหาสินค้า'),
-    AppTab.count: ('รอบตรวจนับ $sessionVoucherNo', 'นับสต็อก'),
+    AppTab.count: ('รายการที่คีย์ไว้', 'รอส่งเข้า ERP'),
     AppTab.team: ('คลัง $warehouseCode', 'สมาชิกและสิทธิ์'),
   };
 }
@@ -122,7 +122,7 @@ class Fixtures {
 enum AppTab {
   scan('สแกน'),
   search('ค้นหา'),
-  count('นับสต็อก'),
+  count('รอส่ง'),
   team('สมาชิก');
 
   const AppTab(this.label);

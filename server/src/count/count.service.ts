@@ -336,6 +336,19 @@ const SESSION_COLUMNS = `id, erp_transaction_no, erp_voucher_no, zone, warehouse
                          opened_at, closed_at, closed_by, erp_data_as_of,
                          erp_count_date::text AS erp_count_date, opened_on_stale_cache`;
 
+/**
+ * ⚠️ ทุก query ของ "เส้นทางรอบนับ" ต้องมีเงื่อนไขนี้เสมอ
+ *
+ * `count_sessions` เก็บสองอย่างในตารางเดียว: `kind='session'` = รอบนับปกติ (เปิด→นับ→ปิด)
+ * และ `kind='adhoc'` = เอกสารนับแบบไม่มีรอบ (1 ใบ ที่เกิดมาปิดแล้ว — ดู CountDocumentService)
+ * เอกสาร adhoc เกิดวันละหลายสิบใบ ถ้าไหลปนเข้ามาทางนี้ จอผู้ดูแลจะอ่านไม่รู้เรื่อง
+ * และตัวเลข "จำนวนรอบนับ" จะพุ่งเป็นร้อย
+ *
+ * ทางกลับกัน **รายงานส่วนต่าง (`variance`/`varianceCsv`) ต้องไม่กรองด้วยเงื่อนไขนี้**
+ * เพราะ `GET /count-sessions/:id/variance` เป็นเส้นทางเดียวที่อ่านผลของเอกสาร adhoc ได้
+ */
+const SESSION_KIND = `kind = 'session'`;
+
 /** เรียงรายงาน: เรื่องที่ต้องตัดสินใจขึ้นก่อน แล้วค่อยของที่ตรง (alias เป็นค่าคงที่ในโค้ด ไม่ใช่ input) */
 const varianceOrder = (alias: 'v' | 'c'): string => `CASE ${alias}.status
                           WHEN 'conflict'    THEN 0
@@ -372,7 +385,7 @@ export class CountService {
     const session = await this.db.one<SessionRow>(
       `SELECT ${SESSION_COLUMNS}
          FROM count_sessions
-        WHERE warehouse_code = $1 AND status = 'open'
+        WHERE warehouse_code = $1 AND status = 'open' AND ${SESSION_KIND}
         ORDER BY opened_at DESC
         LIMIT 1`,
       [wh],
@@ -458,8 +471,10 @@ export class CountService {
     }
 
     // 2.3 รอบนับต้องมีอยู่และยังเปิด
+    //     ⚠️ ยิงผลนับใส่ "เอกสาร adhoc" ไม่ได้ (id ชนกัน = คนละเส้นทาง) → SESSION_NOT_FOUND
+    //        เอกสาร adhoc รับบรรทัดทีเดียวตอนสร้างเท่านั้น ห้ามมีใครต่อท้ายทีหลัง
     const session = await this.db.one<{ status: CountSessionStatus }>(
-      `SELECT status FROM count_sessions WHERE id = $1`,
+      `SELECT status FROM count_sessions WHERE id = $1 AND ${SESSION_KIND}`,
       [id.data],
     );
     if (!session) return reject(SubmissionCode.SESSION_NOT_FOUND);
@@ -512,7 +527,12 @@ export class CountService {
 
   // ── 3. ส่วนต่าง ───────────────────────────────────────────────────────
 
-  /** รอบเปิด → v_variance (สด) · รอบปิด → closed_variance (แช่แข็งแล้ว) */
+  /**
+   * รอบเปิด → v_variance (สด) · รอบปิด → closed_variance (แช่แข็งแล้ว)
+   *
+   * ⚠️ **ห้ามกรอง `kind` ที่นี่** — เอกสาร adhoc เกิดมาปิดแล้วและมีแถวใน `closed_variance`
+   *    ครบตั้งแต่วินาทีแรก เส้นทางนี้จึงเป็นทางเดียวที่ผู้ดูแลอ่านผล/ดึง CSV ของเอกสารได้
+   */
   async variance(sessionId: string): Promise<VarianceRow[]> {
     const id = CountService.requireId(sessionId);
     const session = await this.db.one<{ status: CountSessionStatus }>(
@@ -656,8 +676,11 @@ export class CountService {
         warehouseCode,
       ]);
 
+      // เอกสาร adhoc เป็น 'closed' เสมอ (CHECK count_sessions_adhoc_born_closed) จึงไม่มีทาง
+      // มาบล็อกการเปิดรอบอยู่แล้ว — ใส่เงื่อนไข kind ไว้ให้อ่านแล้วเห็นเจตนาชัด
       const open = await client.query<{ id: string }>(
-        `SELECT id FROM count_sessions WHERE warehouse_code = $1 AND status = 'open' LIMIT 1`,
+        `SELECT id FROM count_sessions
+          WHERE warehouse_code = $1 AND status = 'open' AND ${SESSION_KIND} LIMIT 1`,
         [warehouseCode],
       );
       if (open.rows[0]) {
@@ -696,10 +719,12 @@ export class CountService {
       const id = parsed.data.id ?? CountService.newSessionId();
       try {
         await client.query(
+          // kind เขียนชัด ๆ ไม่พึ่ง DEFAULT ของคอลัมน์ — รอบนับกับเอกสาร adhoc
+          // อยู่ตารางเดียวกัน การอ่านโค้ดต้องบอกได้ทันทีว่าแถวนี้เป็นชนิดไหน
           `INSERT INTO count_sessions
-             (id, erp_transaction_no, zone, warehouse_code, status,
+             (id, kind, erp_transaction_no, zone, warehouse_code, status,
               erp_data_as_of, opened_on_stale_cache)
-           VALUES ($1, $2, $3, $4, 'open', $5::timestamptz, $6)`,
+           VALUES ($1, 'session', $2, $3, $4, 'open', $5::timestamptz, $6)`,
           [id, null, zone ?? null, warehouseCode, erpDataAsOf, stale],
         );
       } catch (err) {
@@ -776,11 +801,11 @@ export class CountService {
     return dto;
   }
 
-  /** อ่านรอบตาม id (ใช้ซ้ำจาก controller หน้ารายละเอียดรอบ) */
+  /** อ่านรอบตาม id (ใช้ซ้ำจาก controller หน้ารายละเอียดรอบ) — เฉพาะรอบนับ ไม่รวมเอกสาร adhoc */
   async session(sessionId: string): Promise<CountSessionDto | null> {
     const id = CountService.requireId(sessionId);
     const row = await this.db.one<SessionRow>(
-      `SELECT ${SESSION_COLUMNS} FROM count_sessions WHERE id = $1`,
+      `SELECT ${SESSION_COLUMNS} FROM count_sessions WHERE id = $1 AND ${SESSION_KIND}`,
       [id],
     );
     return row ? this.buildSessionDto(row) : null;
@@ -800,8 +825,9 @@ export class CountService {
     const id = CountService.requireId(sessionId);
 
     return this.db.transaction(async (client) => {
+      // ปิด "เอกสาร adhoc" ไม่ได้ — มันเกิดมาปิดแล้ว และไม่มี count_snapshot ให้ materialize
       const locked = await client.query<{ status: CountSessionStatus }>(
-        `SELECT status FROM count_sessions WHERE id = $1 FOR UPDATE`,
+        `SELECT status FROM count_sessions WHERE id = $1 AND ${SESSION_KIND} FOR UPDATE`,
         [id],
       );
       const session = locked.rows[0];
@@ -901,8 +927,9 @@ export class CountService {
     }
 
     await this.db.transaction(async (client) => {
+      // เอกสาร adhoc มี 1 บรรทัด/sku จากเครื่องเดียวเสมอ จึงไม่มี conflict ให้ตัดสิน
       const locked = await client.query<{ status: CountSessionStatus }>(
-        `SELECT status FROM count_sessions WHERE id = $1 FOR UPDATE`,
+        `SELECT status FROM count_sessions WHERE id = $1 AND ${SESSION_KIND} FOR UPDATE`,
         [id],
       );
       const session = locked.rows[0];
@@ -992,7 +1019,7 @@ export class CountService {
   async conflicts(sessionId: string): Promise<ConflictRow[]> {
     const id = CountService.requireId(sessionId);
     const exists = await this.db.one<{ id: string }>(
-      `SELECT id FROM count_sessions WHERE id = $1`,
+      `SELECT id FROM count_sessions WHERE id = $1 AND ${SESSION_KIND}`,
       [id],
     );
     if (!exists) {
@@ -1110,7 +1137,8 @@ export class CountService {
             device_seq, counted_at, payload_hash)
          SELECT $1::uuid, $2, $3, $4::numeric, $5, $6, $7::bigint, $8::timestamptz, $9
           WHERE EXISTS (
-            SELECT 1 FROM count_sessions WHERE id = $2 AND status = 'open' FOR SHARE
+            SELECT 1 FROM count_sessions
+             WHERE id = $2 AND status = 'open' AND ${SESSION_KIND} FOR SHARE
           )
          ON CONFLICT (idempotency_key) DO NOTHING
          RETURNING idempotency_key`,

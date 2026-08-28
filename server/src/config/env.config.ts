@@ -169,6 +169,20 @@ const commonShape = {
   APP_MIN_VERSION: envStr('เวอร์ชันแอปต่ำสุดแบบ semver เช่น 4.0.0', {
     pattern: SEMVER_RE,
   }).default('4.0.0'),
+  /**
+   * 🚨 สวิตช์ทดสอบชั่วคราว — ยอมให้ใช้บัญชี ERP สิทธิ์กว้าง (เช่น `sa`) ทั้งฝั่งอ่านและฝั่งเขียน
+   *
+   * มีไว้เพื่อทดสอบสายงานจริง (สแกน → เทียบยอด → กรอก → ส่งกลับ ERP) ก่อนที่ฝ่าย ERP
+   * จะสร้าง `tcl_reader` / `tcl_writer` ให้ เปิดแล้วกฎเหล็กชั้นที่ 1 และ 2 จะเหลือแค่
+   * คำเตือนใน log แทนการปฏิเสธ boot — ตัวตรวจอื่นทั้งหมด (ขอบเขตแคบเกิน · probe
+   * สรุปไม่ได้ · ภาษาไทยเพี้ยน) ยังหยุด boot เหมือนเดิมทุกประการ
+   *
+   * ⚠️ ห้ามเปิดบน production
+   */
+  ERP_UNSAFE_ALLOW_PRIVILEGED_ACCOUNT: envBool(
+    false,
+    '🚨 true = ยอมให้ใช้บัญชี ERP สิทธิ์กว้าง (sa) — สำหรับทดสอบเท่านั้น ห้ามใช้บน production',
+  ),
 
   // [2] ฐานข้อมูลของระบบ (Postgres ของเราเอง — ไม่ใช่ DB ของ ERP)
   POSTGRES_PASSWORD: envStr('รหัสผ่าน Postgres ของระบบนี้ (อย่างน้อย 8 ตัวอักษร)', { min: 8 }),
@@ -265,12 +279,11 @@ const sqlDatabase = envStr('ชื่อ database ของ ERP เช่น db_
 const sqlUserBase = envStr('login ที่มีสิทธิ์ SELECT เท่านั้น (db_datareader)');
 /**
  * กฎเหล็กชั้นที่ 1 (docs/erp-integration.md): ห้ามใช้บัญชี sa ต่อ ERP
- * ถ้าใช้ sa ระบบจะถูกปฏิเสธที่ boot probe (ชั้นที่ 2) อยู่แล้ว — ดักที่นี่เพื่อบอกเหตุผลตรง ๆ
+ * ถ้าใช้ sa ระบบจะถูกปฏิเสธที่ boot probe (ชั้นที่ 2) อยู่แล้ว — ดักไว้เพื่อบอกเหตุผลตรง ๆ
+ *
+ * ⚠️ ย้ายการตรวจไปอยู่ในด่าน cross-field ด้านล่างแล้ว เพราะต้องอ่าน
+ *    `ERP_UNSAFE_ALLOW_PRIVILEGED_ACCOUNT` ประกอบ ซึ่ง `.refine()` ระดับฟิลด์เดียวมองไม่เห็น
  */
-const sqlUser = sqlUserBase.refine(
-  (value) => value.trim().toLowerCase() !== 'sa',
-  'ห้ามใช้บัญชี sa ต่อ ERP — ต้องเป็น login สิทธิ์ SELECT เท่านั้น (db_datareader) ตามกฎ ERP อ่านอย่างเดียว',
-);
 
 /** คีย์ ERP_SQL_* ที่มี default หรือเป็น optional เสมอ (ทุก driver ประกาศเหมือนกัน) */
 const sqlSharedShape = {
@@ -308,7 +321,7 @@ const sqlSharedShape = {
 /** บังคับเมื่อ ERP_DRIVER=sql */
 const sqlRequiredShape = {
   ERP_SQL_HOST: sqlHost,
-  ERP_SQL_USER: sqlUser,
+  ERP_SQL_USER: sqlUserBase,
   ERP_SQL_PASSWORD: sqlPassword,
   ERP_SQL_DATABASE: sqlDatabase,
 } as const;
@@ -520,6 +533,19 @@ function crossFieldRules(config: AppConfig, ctx: z.RefinementCtx): void {
     );
   }
 
+  // 🚫 กฎเหล็กชั้นที่ 1: ห้ามบัญชี sa ต่อ ERP (ฝั่งอ่าน)
+  //    ผ่อนได้ด้วยสวิตช์ทดสอบเท่านั้น — boot probe ชั้นที่ 2 ก็จะเหลือแค่คำเตือนเช่นกัน
+  if (
+    !config.ERP_UNSAFE_ALLOW_PRIVILEGED_ACCOUNT &&
+    config.ERP_SQL_USER &&
+    config.ERP_SQL_USER.trim().toLowerCase() === 'sa'
+  ) {
+    addIssue(
+      'ERP_SQL_USER',
+      'ห้ามใช้บัญชี sa ต่อ ERP — ต้องเป็น login สิทธิ์ SELECT เท่านั้น (db_datareader) ตามกฎ ERP อ่านอย่างเดียว',
+    );
+  }
+
   if (config.ERP_WRITEBACK_ENABLED) {
     if (config.ERP_DRIVER !== 'sql') {
       addIssue(
@@ -527,6 +553,8 @@ function crossFieldRules(config: AppConfig, ctx: z.RefinementCtx): void {
         "ส่งผลนับกลับ ERP ได้เฉพาะ ERP_DRIVER=sql เท่านั้น — driver อื่นไม่มีเส้นทางเขียน",
       );
     }
+    // บังคับเสมอ แม้ในโหมดทดสอบ — เปิดเส้นทางเขียนโดยไม่มีบัญชีเขียน
+    // จะกลายเป็น "เปิดไว้แต่ส่งไม่ได้" แบบเงียบ ๆ ซึ่งรู้ตัวตอนกดส่งจริงเท่านั้น
     if (!config.ERP_SQL_WRITE_USER || !config.ERP_SQL_WRITE_PASSWORD) {
       addIssue(
         'ERP_SQL_WRITE_USER',
@@ -535,18 +563,20 @@ function crossFieldRules(config: AppConfig, ctx: z.RefinementCtx): void {
     }
     // 🚫 กฎเหล็กชั้นที่ 1: บัญชีอ่านต้องพิสูจน์ได้ว่าเขียนไม่ได้ ถ้าใช้บัญชีเดียวกับ
     //    เส้นทางเขียน การพิสูจน์นั้นหมดความหมาย และ boot probe จะปฏิเสธการ start
-    if (
-      config.ERP_SQL_WRITE_USER &&
-      config.ERP_SQL_USER &&
-      config.ERP_SQL_WRITE_USER.trim().toLowerCase() === config.ERP_SQL_USER.trim().toLowerCase()
-    ) {
-      addIssue(
-        'ERP_SQL_WRITE_USER',
-        'ต้องเป็นคนละบัญชีกับ ERP_SQL_USER — บัญชีที่ใช้อ่านต้องไม่มีสิทธิ์เขียนเด็ดขาด',
-      );
-    }
-    if (config.ERP_SQL_WRITE_USER && config.ERP_SQL_WRITE_USER.trim().toLowerCase() === 'sa') {
-      addIssue('ERP_SQL_WRITE_USER', 'ห้ามใช้บัญชี sa ต่อ ERP ไม่ว่ากรณีใด');
+    if (!config.ERP_UNSAFE_ALLOW_PRIVILEGED_ACCOUNT) {
+      if (
+        config.ERP_SQL_WRITE_USER &&
+        config.ERP_SQL_USER &&
+        config.ERP_SQL_WRITE_USER.trim().toLowerCase() === config.ERP_SQL_USER.trim().toLowerCase()
+      ) {
+        addIssue(
+          'ERP_SQL_WRITE_USER',
+          'ต้องเป็นคนละบัญชีกับ ERP_SQL_USER — บัญชีที่ใช้อ่านต้องไม่มีสิทธิ์เขียนเด็ดขาด',
+        );
+      }
+      if (config.ERP_SQL_WRITE_USER && config.ERP_SQL_WRITE_USER.trim().toLowerCase() === 'sa') {
+        addIssue('ERP_SQL_WRITE_USER', 'ห้ามใช้บัญชี sa ต่อ ERP ไม่ว่ากรณีใด');
+      }
     }
   }
 

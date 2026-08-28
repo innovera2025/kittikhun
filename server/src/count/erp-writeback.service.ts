@@ -278,6 +278,12 @@ export class ErpWritebackService {
   // ภายใน
   // -------------------------------------------------------------------------
 
+  /**
+   * ⚠️ **ไม่กรอง `kind` โดยเจตนา** — เส้นทางเขียนกลับ ERP ใช้ร่วมกันทั้งรอบนับปกติ
+   *    และเอกสารนับแบบไม่มีรอบ (`kind='adhoc'`) เพราะทั้งคู่คือแถวใน `count_sessions`
+   *    ที่ปิดแล้วและมี `closed_variance` ครบ → PK ของ `erp_writeback` จึงยังเป็น
+   *    ด่านกันส่งซ้ำชั้นเดียวของทั้งสองเส้นทาง
+   */
   private async loadClosedSession(sessionId: string): Promise<SessionRow> {
     const session = await this.db.one<SessionRow>(
       `SELECT id, status, warehouse_code, opened_at, closed_at, closed_by, zone

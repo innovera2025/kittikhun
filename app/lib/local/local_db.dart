@@ -22,6 +22,7 @@ import 'dart:math';
 
 import 'package:drift/drift.dart';
 import 'package:drift_flutter/drift_flutter.dart';
+import 'package:flutter/foundation.dart' show immutable;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/models.dart';
@@ -41,6 +42,13 @@ abstract final class OutboxType {
 
   /// สถิติการสแกน → `POST /items/scan-events` (payload = [ScanEventInput])
   static const String scanEvent = 'scan_event';
+
+  /// ⭐ เอกสารนับแบบไม่มีรอบ **ทั้งใบ** → `POST /count-documents`
+  /// (payload ดูที่ [LocalDb.enqueueCountDoc])
+  ///
+  /// **1 แถว = 1 เอกสาร** — ห้ามแตกเป็นหลาย request เด็ดขาด สายขาดกลางทางแล้ว
+  /// จะได้เอกสารครึ่งใบเข้า ERP ซึ่งลบไม่ได้ · `outbox.id` = `documentId` = คีย์กันซ้ำ
+  static const String countDoc = 'count_doc';
 }
 
 /// สถานะแถวใน [Outbox] — `queued → inflight → acked | failed` (architecture.md §6.2)
@@ -179,6 +187,53 @@ class LocalSessionRows extends Table {
   Set<Column<Object>> get primaryKey => {sessionId, sku};
 }
 
+/// ⭐ บรรทัดที่คีย์ไว้แล้วแต่ยังไม่ได้กดส่งเข้า ERP (ยังไม่เป็นหลักฐานฝั่ง server)
+///
+/// PK = `sku` เพราะ **1 SKU : 1 บรรทัดในเอกสาร** — สแกนซ้ำแล้วคีย์ใหม่คือแก้แถวเดิม
+/// ไม่ใช่เพิ่มบรรทัดซ้ำ (ERP นับ ItemCode ซ้ำในเอกสารเดียวไม่ได้)
+///
+/// [systemQtyShown] = สแนปช็อตยอดระบบ **ณ เวลาที่คนคีย์** ไม่ใช่ค่าล่าสุด:
+/// server เอาไว้เทียบว่ายอดขยับหลังคีย์หรือเปล่า (409 `SYSTEM_QTY_DRIFT`)
+/// → ห้ามเขียนทับด้วยยอดใหม่เงียบ ๆ ตอน sync replica
+///
+/// ⚠️ ไม่มีคอลัมน์ `diff` โดยตั้งใจ — แอปไม่คำนวณและไม่ส่งผลต่างขึ้น server
+@DataClassName('CountDraftRow')
+class CountDrafts extends Table {
+  TextColumn get sku => text()();
+  TextColumn get name => text()();
+  TextColumn get unit => text().nullable()();
+  TextColumn get loc => text().nullable()();
+  TextColumn get warehouseCode => text()();
+
+  /// ยอดตามระบบที่ "จอโชว์" ตอนคีย์ — non-null เพราะ `onHand IS NULL` ห้ามนับ
+  RealColumn get systemQtyShown => real()();
+
+  /// อายุข้อมูลของ [systemQtyShown] (`erpDataAsOf`) — null = ไม่รู้
+  DateTimeColumn get systemQtyAsOf => dateTime().nullable()();
+
+  /// จำนวนที่นับได้จริง — 0 = "นับแล้วได้ศูนย์" (ของหาย) ≠ ยังไม่ได้นับ
+  RealColumn get countedQty => real()();
+
+  DateTimeColumn get enteredAt => dateTime()();
+
+  /// รหัสพนักงานที่คีย์ — เครื่องใช้ร่วมกันหลายกะ ต้องรู้ว่าของค้างเป็นของใคร
+  TextColumn get enteredBy => text()();
+
+  /// ยอดระบบที่จอเคยโชว์ **ก่อน** server แจ้งว่ายอดขยับ (409 `SYSTEM_QTY_DRIFT`)
+  ///
+  /// null = ไม่มีเรื่องยอดขยับ · มีค่า = จอต้องขึ้นป้าย 'ยอดระบบเปลี่ยน (20 → 25)'
+  /// ⚠️ ห้ามเปลี่ยนยอดให้เงียบ ๆ — คนต้องเห็นว่าเทียบกับเลขใหม่แล้วผลต่างเปลี่ยนไป
+  RealColumn get systemQtyBefore => real().nullable()();
+
+  /// เอกสารที่บรรทัดนี้เคยถูกส่งไปแล้วถูกตีกลับ — **ส่งใหม่ต้องใช้ id เดิม**
+  ///
+  /// null = ยังไม่เคยเข้าเอกสารใบไหน (สร้าง id ใหม่ตอนกดส่ง)
+  TextColumn get documentId => text().nullable()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {sku};
+}
+
 /// ⭐ คิวงานที่ยังไม่ซิงค์ — หัวใจของ offline-first ฝั่งเขียน
 ///
 /// [id] = UUIDv7 = `idempotencyKey` ที่สร้าง**ตอนเข้าคิว** (ไม่ใช่ตอนส่ง)
@@ -244,6 +299,7 @@ class KvMeta extends Table {
     LocalMembers,
     LocalSession,
     LocalSessionRows,
+    CountDrafts,
     Outbox,
     KvMeta,
   ],
@@ -263,17 +319,38 @@ class LocalDb extends _$LocalDb {
   /// เพดานตัวแปรต่อ statement ของ SQLite เก่า (999) — ตัด `IN (...)` เป็นก้อน
   static const int _maxVariablesPerStatement = 400;
 
+  /// เพดานบรรทัดต่อเอกสาร 1 ใบ (ตรงกับ `MAX_DOCUMENT_LINES` ฝั่ง server)
+  ///
+  /// คีย์ไว้เกินกว่านี้ **ไม่ทิ้ง** — ส่วนที่เหลือรอเอกสารใบถัดไป
+  static const int maxDocumentLines = 200;
+
   static const Duration _retryBase = Duration(seconds: 2);
   static const Duration _retryCap = Duration(minutes: 5);
 
   /// jitter ของ backoff — ไม่ต้องใช้ `Random.secure()` (ไม่ใช่ค่าที่ต้องเดาไม่ได้)
   final Random _random = Random();
 
+  /// v2 = เพิ่มตาราง `count_drafts` (บรรทัดที่คีย์ไว้แต่ยังไม่กดส่ง)
+  /// v3 = เพิ่ม `count_drafts.system_qty_before` + `document_id`
+  ///      (เอกสารที่ถูกตีกลับเพราะยอดระบบขยับ ต้องกลับมาเป็น draft ให้ครบเรื่อง)
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 3;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
+        /// ⚠️ **เพิ่มตาราง/คอลัมน์อย่างเดียว ห้าม drop/recreate อะไรทั้งสิ้น**
+        /// เครื่องที่อัปเกรดอาจมีงานค้างใน [Outbox] ที่ยังไม่ถึง server —
+        /// ล้างตารางตอน migrate = ผลนับของพนักงานหายโดยไม่มีใครรู้
+        onUpgrade: (m, from, to) async {
+          if (from < 2) {
+            // createTable สร้างรูปล่าสุด (มี 2 คอลัมน์ของ v3 อยู่แล้ว) →
+            // ห้าม addColumn ต่อท้าย ไม่งั้น 'duplicate column name'
+            await m.createTable(countDrafts);
+          } else if (from < 3) {
+            await m.addColumn(countDrafts, countDrafts.systemQtyBefore);
+            await m.addColumn(countDrafts, countDrafts.documentId);
+          }
+        },
         beforeOpen: (details) async {
           // WAL: อ่าน (สแกน/ค้นหา) ไม่ถูกบล็อกโดยการเขียนของ sync engine
           await customStatement('PRAGMA journal_mode = WAL');
@@ -481,6 +558,77 @@ class LocalDb extends _$LocalDb {
     });
   }
 
+  // ── ⭐ count_drafts: บรรทัดที่คีย์ไว้แต่ยังไม่กดส่ง ────────────────
+
+  /// เขียนบรรทัดที่คีย์ — sku เดิมทับแถวเดิม (สแกนซ้ำ = แก้ค่า ไม่ใช่บรรทัดใหม่)
+  ///
+  /// [systemQtyShown] คือยอดที่ **จอโชว์ให้คนเห็นตอนคีย์** ผู้เรียกต้องส่งค่านั้นมา
+  /// ห้ามให้เมธอดนี้ไปอ่านยอดล่าสุดเอง มิฉะนั้นการตรวจ drift ฝั่ง server ไร้ผล
+  Future<void> upsertDraft({
+    required String sku,
+    required String name,
+    required String warehouseCode,
+    required num systemQtyShown,
+    required num countedQty,
+    required String enteredBy,
+    String? unit,
+    String? loc,
+    DateTime? systemQtyAsOf,
+    DateTime? enteredAt,
+  }) async {
+    await into(countDrafts).insertOnConflictUpdate(
+      CountDraftsCompanion.insert(
+        sku: sku,
+        name: name,
+        warehouseCode: warehouseCode,
+        systemQtyShown: systemQtyShown.toDouble(),
+        countedQty: countedQty.toDouble(),
+        enteredAt: enteredAt ?? DateTime.now(),
+        enteredBy: enteredBy,
+        unit: Value(unit),
+        loc: Value(loc),
+        systemQtyAsOf: Value(systemQtyAsOf),
+      ),
+    );
+  }
+
+  /// ลบบรรทัดที่คีย์ไว้ 1 แถว — ทำได้เพราะ draft ยังอยู่ในเครื่อง
+  /// ยังไม่เคยเป็นหลักฐานฝั่ง server จึงไม่ขัดกฎ append-only
+  Future<void> deleteDraft(String sku) async {
+    await (delete(countDrafts)..where((t) => t.sku.equals(sku))).go();
+  }
+
+  /// บรรทัดที่คีย์ไว้ของ sku เดียว — null = ยังไม่เคยคีย์
+  Future<CountDraftRow?> draftFor(String sku) {
+    return (select(countDrafts)..where((t) => t.sku.equals(sku)))
+        .getSingleOrNull();
+  }
+
+  /// บรรทัดที่คีย์ไว้ทั้งหมด เรียงตามลำดับที่คีย์ (เก่า → ใหม่)
+  Future<List<CountDraftRow>> allDrafts() {
+    return (select(countDrafts)
+          ..orderBy([(t) => OrderingTerm.asc(t.enteredAt)]))
+        .get();
+  }
+
+  /// จำนวนบรรทัดที่คีย์ค้าง — สำหรับแถบเตือน 'คีย์แล้วยังไม่ส่ง'
+  Stream<int> watchDraftCount() {
+    final total = countDrafts.sku.count();
+    final query = selectOnly(countDrafts)..addColumns([total]);
+    return query.map((row) => row.read(total) ?? 0).watchSingle();
+  }
+
+  /// ล้างเฉพาะบรรทัดที่ส่งเข้าเอกสารสำเร็จแล้ว (ห้ามล้างทั้งตาราง —
+  /// อาจมีบรรทัดที่คีย์เพิ่มระหว่างรอผลส่ง)
+  Future<void> clearDrafts(List<String> skus) async {
+    if (skus.isEmpty) return;
+    await transaction(() async {
+      for (final chunk in _chunks(skus)) {
+        await (delete(countDrafts)..where((t) => t.sku.isIn(chunk))).go();
+      }
+    });
+  }
+
   // ── ⭐ outbox ─────────────────────────────────────────────────────
 
   /// เข้าคิวผลนับ 1 บรรทัด (optimistic — UI toast ได้ทันทีแม้ออฟไลน์)
@@ -547,6 +695,199 @@ class LocalDb extends _$LocalDb {
         createdAt: now,
         sku: Value(sku),
       ));
+    });
+  }
+
+  /// ⭐ ปิดเอกสารนับ 1 ใบจากบรรทัดที่คีย์ไว้ — **ทรานแซกชันเดียว**
+  ///
+  /// อ่าน `count_drafts` → สร้าง `documentId` → INSERT [Outbox] 1 แถว →
+  /// ลบ draft ที่เข้าใบนี้ · ล้มกลางทาง = กลับไปสภาพก่อนหน้าทั้งหมด
+  /// (ไม่มีทางเกิดสภาพ "ส่งแล้วและยังคีย์ค้าง" พร้อมกัน)
+  ///
+  /// payload ที่เก็บ (superset ของสัญญา API — ชั้น repository ประกอบ body ส่งจริง
+  /// จากคีย์ตามสัญญาเท่านั้น):
+  /// ```
+  /// { documentId, createdAt,
+  ///   lines:  [{entryKey, sku, systemQtyShown, countedQty, countedAt}],
+  ///   drafts: [{sku, name, unit, loc, warehouseCode, enteredBy}] }  // เฉพาะในเครื่อง
+  /// ```
+  /// ⚠️ **ห้ามมีคีย์ชื่อ `diff` / `DifQty`** — แอปไม่คำนวณผลต่างส่งขึ้น server
+  ///    จุดกลับเครื่องหมายให้ ERP มีจุดเดียวคือ `erpDifQty()` ฝั่ง server
+  ///
+  /// ⚠️ ห้ามใช้เส้น dedupe ของ [enqueueCountLine] ที่ where ด้วย `sessionId` —
+  ///    เอกสารแบบนี้ไม่มีรอบ (`session_id = NULL` เป็นเท็จเสมอใน SQL ลบไม่โดน)
+  ///
+  /// คืน `null` เมื่อไม่มีบรรทัดที่คีย์ไว้
+  Future<CountDocEnqueue?> enqueueCountDoc({int maxLines = maxDocumentLines}) {
+    return transaction(() async {
+      final all = await (select(countDrafts)
+            ..orderBy([(t) => OrderingTerm.asc(t.enteredAt)]))
+          .get();
+      if (all.isEmpty) return null;
+      final limit = maxLines <= 0 || maxLines > all.length ? all.length : maxLines;
+      final batch = all.take(limit).toList(growable: false);
+
+      // เอกสารที่เคยถูกตีกลับ (ยอดระบบขยับ) ต้องส่งซ้ำด้วย **id เดิม**
+      // — server ใช้ documentId เป็นคีย์กันเอกสารซ้ำทั้งสามชั้น
+      final reuse = batch
+          .map((row) => row.documentId?.trim())
+          .firstWhere((id) => id != null && id.isNotEmpty, orElse: () => null);
+      final documentId = (reuse == null || reuse.isEmpty) ? newUuidV7() : reuse;
+
+      final now = DateTime.now();
+      final seq = await _nextDeviceSeq();
+      final payload = <String, dynamic>{
+        'documentId': documentId,
+        'createdAt': now.toUtc().toIso8601String(),
+        'lines': <Map<String, dynamic>>[
+          for (final row in batch)
+            <String, dynamic>{
+              'entryKey': newUuidV7(),
+              'sku': row.sku,
+              'systemQtyShown': row.systemQtyShown,
+              'countedQty': row.countedQty,
+              'countedAt': row.enteredAt.toUtc().toIso8601String(),
+            },
+        ],
+        _draftsKey: <Map<String, dynamic>>[
+          for (final row in batch)
+            <String, dynamic>{
+              'sku': row.sku,
+              'name': row.name,
+              if (row.unit != null) 'unit': row.unit,
+              if (row.loc != null) 'loc': row.loc,
+              'warehouseCode': row.warehouseCode,
+              'enteredBy': row.enteredBy,
+            },
+        ],
+      };
+
+      // id เดิมของใบที่ถูกตีกลับอาจยังมีแถวค้าง — แถวใหม่คือ "ใบเดียวกันที่ประกอบใหม่"
+      // (ใบนั้นยังไม่เคยถูกเขียนฝั่ง server จึงไม่ใช่การลบงานที่ส่งไปแล้ว)
+      await (delete(outbox)..where((t) => t.id.equals(documentId))).go();
+      await into(outbox).insert(OutboxCompanion.insert(
+        id: documentId,
+        type: OutboxType.countDoc,
+        payloadJson: jsonEncode(payload),
+        deviceSeq: seq,
+        createdAt: now,
+      ));
+
+      final skus = batch.map((row) => row.sku).toList(growable: false);
+      for (final chunk in _chunks(skus)) {
+        await (delete(countDrafts)..where((t) => t.sku.isIn(chunk))).go();
+      }
+      return CountDocEnqueue(
+        documentId: documentId,
+        skus: skus,
+        remaining: all.length - batch.length,
+      );
+    });
+  }
+
+  /// คืนบรรทัดของเอกสารที่ถูกตีกลับด้วย 409 `SYSTEM_QTY_DRIFT` กลับเป็น draft
+  ///
+  /// server rollback ทั้งใบก่อนตอบ 409 → **ยังไม่มีอะไรถูกเขียนฝั่งนั้น** งานจึงไม่หาย
+  /// เมื่อเอาบรรทัดกลับลง `count_drafts` พร้อมยอดระบบใหม่ แล้วลบแถว [Outbox] ใบนั้น
+  /// ในทรานแซกชันเดียวกัน · [actualBySku] = ยอดระบบจริงฝั่ง server รายบรรทัด
+  /// (ไม่มีใน map = ยอดไม่ขยับ → ไม่ขึ้นป้ายเตือน)
+  ///
+  /// draft ที่คีย์ใหม่ระหว่างรอผลส่ง **ชนะเสมอ** (ห้ามทับด้วยค่าที่เก่ากว่า)
+  ///
+  /// ⚠️ แยกการ "ข้าม" สองแบบให้ขาด:
+  /// - ข้ามเพราะ **มีของใหม่กว่า** (คีย์ทับระหว่างรอผลส่ง) = ยอมได้ งานไม่หาย
+  /// - ข้ามเพราะ **ข้อมูลหาย** (บรรทัดอ่านไม่ได้ / ไม่มี metadata ของ draft) = ยอมไม่ได้
+  ///   → คืน `null` **ก่อนเขียนอะไรทั้งสิ้น** ให้ผู้เรียก mark rejected แทนการลบแถวทิ้ง
+  ///   (ตรวจให้ครบทั้งใบก่อน แล้วค่อยเขียน — ไม่มีสภาพ "คืนได้ครึ่งใบแล้วคืน null")
+  ///
+  /// คืน `null` = payload/บรรทัดอ่านไม่ได้ (ไม่ลบแถว ให้ผู้เรียกส่งเข้าจอ pending-review)
+  /// · คืนตัวเลข = คืนกี่บรรทัด (ลบแถว outbox แล้ว)
+  Future<int?> restoreDraftsFromDocument(
+    String outboxId, {
+    Map<String, num> actualBySku = const <String, num>{},
+  }) {
+    return transaction(() async {
+      final row = await (select(outbox)..where((t) => t.id.equals(outboxId)))
+          .getSingleOrNull();
+      if (row == null) return 0;
+
+      final payload = _decodePayload(row.payloadJson);
+      final lines = payload?['lines'];
+      final meta = payload?[_draftsKey];
+      if (payload == null || lines is! List || meta is! List) return null;
+
+      final documentId = payload['documentId'];
+      final bySku = <String, Map<String, dynamic>>{
+        for (final entry in meta)
+          if (entry is Map && entry['sku'] is String)
+            entry['sku'] as String: entry.cast<String, dynamic>(),
+      };
+      final existing = <String>{
+        for (final draft in await select(countDrafts).get()) draft.sku,
+      };
+
+      // รอบที่ 1 — ตรวจทั้งใบก่อน ยังไม่เขียนอะไร
+      final restorable = <({
+        String sku,
+        num counted,
+        num shown,
+        Object? countedAt,
+        Map<String, dynamic> draft,
+      })>[];
+      for (final line in lines) {
+        // บรรทัดที่อ่านไม่ได้ = ข้อมูลหาย ไม่ใช่ "มีของใหม่กว่า" → ห้ามลบแถวทิ้ง
+        if (line is! Map) return null;
+        final sku = line['sku'];
+        final counted = line['countedQty'];
+        final shown = line['systemQtyShown'];
+        if (sku is! String || counted is! num || shown is! num) return null;
+        // คีย์ใหม่ทับไปแล้วระหว่างรอผลส่ง → ค่าที่ใหม่กว่าชนะ (ข้ามได้ งานไม่หาย)
+        if (existing.contains(sku)) continue;
+        final draft = bySku[sku];
+        // ไม่มี metadata = ประกอบ draft กลับไม่ได้จริง → งานจะหายถ้าลบแถวทิ้ง
+        if (draft == null) return null;
+        restorable.add((
+          sku: sku,
+          counted: counted,
+          shown: shown,
+          countedAt: line['countedAt'],
+          draft: draft,
+        ));
+      }
+
+      // รอบที่ 2 — ทั้งใบผ่านแล้วค่อยเขียน
+      var restored = 0;
+      for (final entry in restorable) {
+        final sku = entry.sku;
+        final counted = entry.counted;
+        final shown = entry.shown;
+        final draft = entry.draft;
+        final actual = actualBySku[sku];
+        await into(countDrafts).insert(
+          CountDraftsCompanion.insert(
+            sku: sku,
+            name: draft['name'] is String ? draft['name'] as String : sku,
+            warehouseCode: draft['warehouseCode'] is String
+                ? draft['warehouseCode'] as String
+                : '',
+            // ยอดระบบใหม่จาก server (ถ้าขยับ) — คนต้องเห็นผลต่างที่คิดจากเลขนี้
+            systemQtyShown: (actual ?? shown).toDouble(),
+            countedQty: counted.toDouble(),
+            enteredAt: _optDateOf(entry.countedAt) ?? row.createdAt,
+            enteredBy:
+                draft['enteredBy'] is String ? draft['enteredBy'] as String : '',
+            unit: Value(draft['unit'] is String ? draft['unit'] as String : null),
+            loc: Value(draft['loc'] is String ? draft['loc'] as String : null),
+            systemQtyBefore: Value(actual == null ? null : shown.toDouble()),
+            documentId: Value(documentId is String ? documentId : null),
+          ),
+          mode: InsertMode.insertOrReplace,
+        );
+        restored += 1;
+      }
+
+      await (delete(outbox)..where((t) => t.id.equals(outboxId))).go();
+      return restored;
     });
   }
 
@@ -808,6 +1149,27 @@ class LocalDb extends _$LocalDb {
 /// อักขระ escape ของ `LIKE` — ทำให้ `%` / `_` ที่ผู้ใช้พิมพ์เป็นตัวอักษรธรรมดา
 const String _likeEscapeChar = r'\';
 
+/// คีย์ของข้อมูล draft ที่เก็บไว้ **เฉพาะในเครื่อง** ใน payload ของ [OutboxType.countDoc]
+///
+/// ใช้คืนบรรทัดกลับเป็น draft เมื่อเอกสารถูกตีกลับ (ชื่อสินค้า/หน่วย/คนคีย์ ไม่ได้อยู่
+/// ในสัญญา API) — ชั้น repository ไม่เคยส่งคีย์นี้ขึ้น server
+const String _draftsKey = 'drafts';
+
+/// payload ของ outbox → map · คืน null เมื่ออ่านไม่ได้ (ห้ามเดาโครงสร้าง)
+Map<String, dynamic>? _decodePayload(String raw) {
+  if (raw.trim().isEmpty) return null;
+  try {
+    final decoded = jsonDecode(raw);
+    if (decoded is Map) return decoded.cast<String, dynamic>();
+  } on FormatException {
+    return null;
+  }
+  return null;
+}
+
+DateTime? _optDateOf(Object? raw) =>
+    raw is String ? DateTime.tryParse(raw.trim()) : null;
+
 String _escapeLike(String value) => value
     .replaceAll(_likeEscapeChar, r'\\')
     .replaceAll('%', r'\%')
@@ -927,10 +1289,56 @@ Iterable<List<T>> _chunks<T>(List<T> values) {
 // Provider
 // ════════════════════════════════════════════════════════════════════
 
+/// ผลของการปิดเอกสาร 1 ใบเข้าคิว ([LocalDb.enqueueCountDoc])
+@immutable
+class CountDocEnqueue {
+  const CountDocEnqueue({
+    required this.documentId,
+    required this.skus,
+    required this.remaining,
+  });
+
+  /// คีย์ของเอกสาร = `outbox.id` = idempotency key ทั้งใบ
+  final String documentId;
+
+  /// sku ที่เข้าใบนี้ (ถูกลบออกจาก `count_drafts` แล้ว)
+  final List<String> skus;
+
+  /// บรรทัดที่ยังไม่เข้าใบนี้เพราะเกิน [LocalDb.maxDocumentLines] — รอใบถัดไป
+  final int remaining;
+
+  int get lineCount => skus.length;
+}
+
+/// 1 บรรทัดในเอกสารนับที่ถูกปฏิเสธ ([RejectedRow.lines])
+///
+/// ⚠️ `countedQty` เป็น null ได้ = อ่านจำนวนจาก payload ไม่ได้ **ห้ามแปลงเป็น 0**
+@immutable
+class RejectedLine {
+  const RejectedLine({
+    required this.sku,
+    this.name,
+    this.unit,
+    this.countedQty,
+  });
+
+  final String sku;
+
+  /// ชื่อ/หน่วยมาจาก metadata `drafts` ในเครื่อง (ไม่ได้อยู่ในสัญญา API)
+  final String? name;
+  final String? unit;
+  final num? countedQty;
+}
+
 /// งานในคิวที่ backend ปฏิเสธถาวร — รูปสำหรับจอ pending-review
 ///
 /// ฟิลด์จำนวน/เวลาเป็น nullable: payload ที่พังหรือเก่าจะได้ null
 /// **ห้ามแปลงเป็น 0** (จำนวนที่พนักงานนับไม่เท่ากับ "นับได้ 0")
+///
+/// รองรับ payload สองรูปที่ต่างกันคนละชั้น:
+/// - `count_line` — `sku`/`countedQty` อยู่ที่ระดับบนสุด · [lines] ว่าง
+/// - `count_doc` — ของจริงอยู่ใน `lines[]` (สูงสุด 200 บรรทัด) ระดับบนสุดไม่มี sku เลย
+///   ถ้าไม่แตกออกมา การ์ดบนจอจะว่างเปล่า แล้วปุ่มทิ้งจะลบผลนับทั้งใบโดยคนไม่รู้ว่าทิ้งอะไร
 class RejectedRow {
   const RejectedRow({
     required this.id,
@@ -940,21 +1348,48 @@ class RejectedRow {
     this.countedAt,
     this.sessionId,
     this.lastError,
+    this.lines = const <RejectedLine>[],
   });
 
   factory RejectedRow.fromOutbox(OutboxRow row) {
     num? qty;
     DateTime? at;
-    try {
-      final decoded = jsonDecode(row.payloadJson);
-      if (decoded is Map<String, dynamic>) {
+    var lines = const <RejectedLine>[];
+    final decoded = _decodePayload(row.payloadJson);
+    if (decoded != null) {
+      final rawLines = decoded['lines'];
+      if (rawLines is List) {
+        // เอกสารทั้งใบ — ชื่อ/หน่วยเอาจาก metadata `drafts` ที่เก็บไว้ในเครื่อง
+        final meta = decoded[_draftsKey];
+        final bySku = <String, Map<String, dynamic>>{
+          if (meta is List)
+            for (final entry in meta)
+              if (entry is Map && entry['sku'] is String)
+                entry['sku'] as String: entry.cast<String, dynamic>(),
+        };
+        lines = <RejectedLine>[
+          for (final entry in rawLines)
+            if (entry is Map && entry['sku'] is String)
+              RejectedLine(
+                sku: entry['sku'] as String,
+                name: bySku[entry['sku']]?['name'] is String
+                    ? bySku[entry['sku']]!['name'] as String
+                    : null,
+                unit: bySku[entry['sku']]?['unit'] is String
+                    ? bySku[entry['sku']]!['unit'] as String
+                    : null,
+                // อ่านไม่ได้ = ไม่ทราบจำนวน ห้ามเดาเป็น 0
+                countedQty: entry['countedQty'] is num
+                    ? entry['countedQty'] as num
+                    : null,
+              ),
+        ];
+        at = _optDateOf(decoded['createdAt']);
+      } else {
         final raw = decoded['countedQty'];
         qty = raw is num ? raw : num.tryParse('$raw');
-        final rawAt = decoded['countedAt'];
-        if (rawAt is String) at = DateTime.tryParse(rawAt);
+        at = _optDateOf(decoded['countedAt']);
       }
-    } on FormatException {
-      // payload พัง — ยังต้องแสดงรายการให้ผู้ใช้เห็นว่ามีงานค้าง
     }
     return RejectedRow(
       id: row.id,
@@ -964,10 +1399,13 @@ class RejectedRow {
       countedAt: at ?? row.createdAt,
       sessionId: row.sessionId,
       lastError: row.lastError,
+      lines: lines,
     );
   }
 
   final String id;
+
+  /// sku ของงานแบบบรรทัดเดียว — เอกสารทั้งใบไม่มีค่านี้ (ดู [lines])
   final String sku;
 
   /// เหตุผลจาก backend: SESSION_CLOSED · ROLE_CHANGED · SKU_NOT_FOUND · ...
@@ -976,6 +1414,12 @@ class RejectedRow {
   final DateTime? countedAt;
   final String? sessionId;
   final String? lastError;
+
+  /// บรรทัดในเอกสาร (`count_doc`) — ว่างเมื่อเป็นงานแบบบรรทัดเดียว
+  final List<RejectedLine> lines;
+
+  /// true = แถวนี้คือเอกสารนับทั้งใบ (ทิ้ง 1 ครั้ง = ทิ้ง [lines].length บรรทัด)
+  bool get isDocument => lines.isNotEmpty;
 }
 
 final localDbProvider = Provider<LocalDb>((ref) {

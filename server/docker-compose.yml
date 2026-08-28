@@ -45,7 +45,13 @@ services:
       dockerfile: ./Dockerfile
       target: runtime
     image: tcl/stock-api:4.0.0
-    env_file: .env
+    env_file:
+      - .env
+      # 🚨 ชั่วคราว: ทับค่าบางตัวเพื่อทดสอบสายจริงกับ ERP (ไม่มี secret ในไฟล์นี้)
+      #    ค่าที่ประกาศทีหลังชนะ · required:false → deploy ที่ไม่มีไฟล์นี้ยังขึ้นได้ปกติ
+      #    ลบบล็อกนี้ + ไฟล์ env.testmode ทิ้งเมื่อได้ tcl_reader/tcl_writer
+      - path: env.testmode
+        required: false
     depends_on:
       postgres:
         # ต้องรอ Postgres พร้อมจริง ไม่ใช่แค่ container start — migration ตอน boot ต้องต่อ DB ได้
@@ -58,6 +64,8 @@ services:
       # ไม่ publish ออก host โดยตั้งใจ — ทางเข้าเดียวคือ Caddy (TLS ภายใน)
       # ถ้าต้อง debug ให้เพิ่ม ports: ["127.0.0.1:8080:8080"] ชั่วคราวเท่านั้น
       - "8080"
+    # ไม่ publish พอร์ตออก host — ทางเข้าเดียวคือ Caddy ตามเดิม
+    # (ถ้าจะทดสอบจากมือถือโดยยิงตรงข้าม Caddy ให้เพิ่ม ports: ["18080:8080"] ชั่วคราว)
     healthcheck:
       # ⚠️ liveness เท่านั้น (event loop + Postgres ping) — ห้ามผูกกับสถานะ ERP
       #    ไม่งั้น ERP ล่มจะทำให้ container ถูก restart วนไม่จบ (สถานะ ERP อยู่ที่ /healthz/erp)
@@ -154,7 +162,11 @@ services:
   # ──────────────────────────────────────────────────────────────────────────
   backup:
     image: postgres:16-alpine
-    env_file: .env
+    env_file:
+      - .env
+      # ต้องเห็น POSTGRES_USER/POSTGRES_DB ชุดเดียวกับ api ไม่งั้น pg_dump ยิงผิด DB เงียบ ๆ
+      - path: env.testmode
+        required: false
     environment:
       TZ: ${TZ:-Asia/Bangkok}
     depends_on:

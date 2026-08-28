@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -45,6 +47,7 @@ class AppState {
     this.searchHits,
     this.scannedItems = const {},
     this.warehouseCode,
+    this.drafts = const {},
   });
 
   final bool signedIn;
@@ -108,6 +111,13 @@ class AppState {
   /// รายการที่สแกนได้ พร้อมข้อมูลสินค้าจาก replica (โหมดต่อ backend)
   final Map<String, Item> scannedItems;
 
+  /// ⭐ บรรทัดที่คีย์ไว้แต่ยังไม่กดส่งเข้าเอกสาร (sku → แถวใน `count_drafts`)
+  ///
+  /// เป็นเงาของตาราง SQLite เพื่อให้จอวาดได้โดยไม่ต้อง await ทุกเฟรม
+  /// **ตัวจริงคือแถวในเครื่อง** — state นี้ถูกเติมใหม่จาก [AppController.loadDrafts]
+  /// ทุกครั้งที่ sign-in จึงรอดการปิดแอป/สลับกะ
+  final Map<String, CountDraftRow> drafts;
+
   // ── derived ────────────────────────────────────────────────────────
 
   /// ผู้ใช้ปัจจุบัน (fallback = คนแรกในรายชื่อ ตาม design)
@@ -127,6 +137,9 @@ class AppState {
   int get countedRows => (session?.rows ?? const <CountRow>[])
       .where((r) => (counts[r.sku] ?? '').isNotEmpty)
       .length;
+
+  /// จำนวนบรรทัดที่คีย์ไว้แต่ยังไม่ได้ส่งเข้าเอกสาร — แถบเตือนใต้ header อ่านค่านี้
+  int get draftCount => drafts.length;
 
   AppState copyWith({
     bool? signedIn,
@@ -161,6 +174,7 @@ class AppState {
     List<Item>? searchHits,
     Map<String, Item>? scannedItems,
     String? warehouseCode,
+    Map<String, CountDraftRow>? drafts,
   }) => AppState(
     signedIn: signedIn ?? this.signedIn,
     tab: tab ?? this.tab,
@@ -191,6 +205,7 @@ class AppState {
     searchHits: searchHits ?? this.searchHits,
     scannedItems: scannedItems ?? this.scannedItems,
     warehouseCode: warehouseCode ?? this.warehouseCode,
+    drafts: drafts ?? this.drafts,
   );
 }
 
@@ -265,6 +280,9 @@ class AppController extends Notifier<AppState> {
       engine.start();
       await engine.syncAll();
       await loadSession();
+      // ยอดที่กะก่อนคีย์ค้างไว้ต้องโผล่กลับมาเองทั้งบนแถบเตือนและในช่องกรอก
+      // (ไม่ hydrate = พนักงานคีย์ซ้ำทั้งชุดโดยไม่รู้ว่าของเดิมยังอยู่)
+      await loadDrafts();
       state = state.copyWith(
         signedIn: true,
         tab: AppTab.scan,
@@ -428,13 +446,28 @@ class AppController extends Notifier<AppState> {
       ? state = state.copyWith(clearExpanded: true)
       : state = state.copyWith(expandedSku: sku);
 
-  void removeScan(String sku) => state = state.copyWith(
-        scans: state.scans.where((s) => s.sku != sku).toList(),
-        clearExpanded: true,
-      );
+  /// นำการ์ดออกจากรายการสแกน
+  ///
+  /// 🚫 **ห้ามแตะ `count_drafts`** — ลิสต์สแกนคือ "สิ่งที่เพิ่งส่องเจอ"
+  ///    ส่วน draft คือ "ผลนับที่คนคีย์ไว้แล้ว" คนละเรื่องกัน
+  ///    ปัดการ์ดทิ้งแล้วผลนับหายคือการลบงานของพนักงานโดยไม่ได้ถาม
+  void removeScan(String sku) {
+    state = state.copyWith(
+      scans: state.scans.where((s) => s.sku != sku).toList(),
+      clearExpanded: true,
+    );
+    if (state.drafts.containsKey(sku)) {
+      flash('ยอดที่คีย์ไว้ยังอยู่ในรายการรอส่ง');
+    }
+  }
 
-  void clearScans() =>
-      state = state.copyWith(scans: const [], clearExpanded: true);
+  /// ล้างรายการสแกนทั้งจอ — เช่นเดียวกับ [removeScan] คือไม่แตะ `count_drafts`
+  void clearScans() {
+    state = state.copyWith(scans: const [], clearExpanded: true);
+    if (state.drafts.isNotEmpty) {
+      flash('ยอดที่คีย์ไว้ยังอยู่ในรายการรอส่ง');
+    }
+  }
 
   // ══════════════════════════════════════════════════════════════════
   // ค้นหา
@@ -500,23 +533,191 @@ class AppController extends Notifier<AppState> {
   // นับสต็อก
   // ══════════════════════════════════════════════════════════════════
 
-  /// กรอกค่าที่นับได้ — ตัวเลขเท่านั้น
+  /// กรอกค่าที่นับได้ — ตัวเลขบวก จุดทศนิยมได้ **จุดเดียว ไม่เกิน 3 ตำแหน่ง**
+  ///
+  /// 3 ตำแหน่งมาจาก `numeric(18,3)` ของ `count_submissions` ฝั่ง server:
+  /// ถ้าปล่อยให้กรอกละเอียดกว่านั้น ค่าที่จอโชว์กับค่าที่ถูกบันทึกจะไม่ตรงกัน
   void setCount(String sku, String raw) {
-    final digits = raw.replaceAll(RegExp(r'[^0-9]'), '');
-    state = state.copyWith(counts: {...state.counts, sku: digits});
+    state = state.copyWith(counts: {...state.counts, sku: _sanitizeQty(raw)});
+  }
+
+  /// ตัวกรองค่าที่นับได้ — ทิ้งอักขระอื่นทั้งหมด เก็บจุดแรกจุดเดียว ตัดเศษที่เกิน 3 ตำแหน่ง
+  static String _sanitizeQty(String raw) {
+    final cleaned = raw.replaceAll(RegExp(r'[^0-9.]'), '');
+    final dot = cleaned.indexOf('.');
+    if (dot < 0) return cleaned;
+    final whole = cleaned.substring(0, dot);
+    // จุดที่เหลือถูกทิ้ง → '1.2.3' กลายเป็น '1.23' (ยอมจุดเดียว)
+    final frac = cleaned.substring(dot + 1).replaceAll('.', '');
+    return '$whole.${frac.length > 3 ? frac.substring(0, 3) : frac}';
   }
 
   void incCount(String sku) {
-    final v = int.tryParse(state.counts[sku] ?? '') ?? 0;
+    // num ไม่ใช่ int — ค่าที่กรอกเป็นทศนิยมได้ ('20.5' + 1 ต้องได้ 21.5 ไม่ใช่ 1)
+    final v = num.tryParse(state.counts[sku] ?? '') ?? 0;
     setCount(sku, '${v + 1}');
   }
 
+  /// ลดค่าที่นับได้ทีละ 1 — **ช่องที่ยังว่างต้องอยู่ว่างต่อไป**
+  ///
+  /// ว่าง = "ยังไม่ได้นับ" · '0' = "นับแล้วได้ศูนย์" (ของหาย → ผลต่างเท่ายอดระบบทั้งก้อน)
+  /// กดลบพลาดบนช่องว่างแล้วกลายเป็น '0' = สร้างผลนับที่ไม่มีใครเคยนับ
   void decCount(String sku) {
-    final v = int.tryParse(state.counts[sku] ?? '') ?? 0;
-    setCount(sku, '${v <= 0 ? 0 : v - 1}');
+    final cur = state.counts[sku] ?? '';
+    if (cur.isEmpty) return;
+    final v = num.tryParse(cur) ?? 0;
+    final next = v - 1;
+    setCount(sku, next <= 0 ? '0' : '$next');
   }
 
-  /// เข้าหน้านับจากการ์ดสแกน — viewer ถูกกั้น
+  // ══════════════════════════════════════════════════════════════════
+  // ⭐ นับจากการ์ดผลสแกน (เอกสารแบบไม่มีรอบ) — write-through ลง count_drafts
+  //
+  // แยกจาก [setCount] ของจอรอบนับ **เด็ดขาด**: เส้นทางรอบนับเดิมยังไม่แตะ
+  // SQLite ตอนกรอก (เข้าคิวตอนกดส่งเท่านั้น) ส่วนเส้นนี้ต้องบันทึกทุก keystroke
+  // เพราะไม่มีปุ่ม "ส่ง" คั่นระหว่างการคีย์กับการปิดแอป
+  //
+  // ⚠️ ไม่คำนวณและไม่เก็บ `diff` ที่ไหนเลย — เก็บแต่ systemQtyShown + countedQty
+  //    การกลับเครื่องหมายให้ ERP มีจุดเดียวคือ `erpDifQty()` ฝั่ง server
+  // ══════════════════════════════════════════════════════════════════
+
+  /// กรอกยอดที่นับได้จากการ์ดผลสแกน แล้ว**เขียนทะลุลงเครื่องทันที**
+  ///
+  /// - `onHand == null` → ห้ามนับ (null ≠ 0) — กั้นซ้ำจากที่จอไม่แสดงช่องกรอก
+  /// - viewer → ไม่เขียนอะไรเลย
+  /// - ค่าว่าง = "ยังไม่ได้นับ" → ถอนบรรทัดออกจากเอกสาร
+  ///   ต่างจาก '0' ที่แปลว่า "นับแล้วได้ศูนย์" (ของหาย) ซึ่งต้องเก็บเป็นแถวจริง
+  Future<void> setScanCount(Item item, String raw) async {
+    if (!state.me.role.canWrite) return;
+    final onHand = item.onHand;
+    if (onHand == null) return;
+
+    final value = _sanitizeQty(raw);
+    state = state.copyWith(counts: {...state.counts, item.sku: value});
+
+    final db = ref.read(localDbProvider);
+    final qty = value.isEmpty ? null : num.tryParse(value);
+    if (qty == null) {
+      state = state.copyWith(drafts: {...state.drafts}..remove(item.sku));
+      await db.deleteDraft(item.sku);
+      return;
+    }
+
+    await db.upsertDraft(
+      sku: item.sku,
+      name: item.name,
+      unit: item.unit,
+      loc: item.loc,
+      warehouseCode: state.warehouseCode ?? item.warehouse ?? '',
+      // สแนปช็อตยอด ณ เวลาที่คนเห็นจอ — server เอาไปเทียบ drift ตอนสร้างเอกสาร
+      // ห้ามให้ชั้นล่างไปอ่านยอดล่าสุดเอง มิฉะนั้นการตรวจ drift ไร้ผล
+      systemQtyShown: onHand,
+      systemQtyAsOf: item.onHandAsOf,
+      countedQty: qty,
+      enteredBy: state.me.empId,
+    );
+    final row = await db.draftFor(item.sku);
+    if (row != null) {
+      state = state.copyWith(drafts: {...state.drafts, item.sku: row});
+    }
+  }
+
+  Future<void> incScanCount(Item item) {
+    // num ไม่ใช่ int — '20.5' + 1 ต้องได้ 21.5
+    final v = num.tryParse(state.counts[item.sku] ?? '') ?? 0;
+    return setScanCount(item, '${v + 1}');
+  }
+
+  /// ลดทีละ 1 — **ช่องที่ยังว่างต้องอยู่ว่างต่อไป** (ดูเหตุผลที่ [decCount])
+  Future<void> decScanCount(Item item) async {
+    final cur = state.counts[item.sku] ?? '';
+    if (cur.isEmpty) return;
+    final v = num.tryParse(cur) ?? 0;
+    final next = v - 1;
+    await setScanCount(item, next <= 0 ? '0' : '$next');
+  }
+
+  /// ดึงบรรทัดที่คีย์ค้างจาก SQLite เข้า state + เติมค่ากลับลงช่องกรอก
+  Future<void> loadDrafts() async {
+    final rows = await ref.read(localDbProvider).allDrafts();
+    final counts = {...state.counts};
+    for (final r in rows) {
+      counts[r.sku] = _qtyText(r.countedQty);
+    }
+    state = state.copyWith(
+      drafts: {for (final r in rows) r.sku: r},
+      counts: counts,
+    );
+  }
+
+  /// ค่าที่เก็บเป็น double กลับมาเป็นข้อความแบบที่คนคีย์ (19.0 → '19')
+  static String _qtyText(num v) =>
+      v == v.roundToDouble() ? v.toInt().toString() : '$v';
+
+  /// ลบบรรทัดที่คีย์ไว้ 1 แถว (จอ 'รอส่ง')
+  ///
+  /// ทำได้เพราะ draft ยังอยู่ในเครื่อง ยังไม่เคยเป็นหลักฐานฝั่ง server
+  /// จึงไม่ขัดกฎ append-only · viewer ถูกกั้น
+  Future<void> deleteDraft(String sku) async {
+    if (!state.me.role.canWrite) {
+      flash('สิทธิ์ viewer แก้ผลนับไม่ได้');
+      return;
+    }
+    await ref.read(localDbProvider).deleteDraft(sku);
+    state = state.copyWith(
+      drafts: {...state.drafts}..remove(sku),
+      counts: {...state.counts}..remove(sku),
+    );
+  }
+
+  /// ⭐ ปิดเอกสารจากบรรทัดที่คีย์ไว้แล้วเข้าคิวส่ง (จอสแกน / จอ 'รอส่ง')
+  ///
+  /// ⚠️ เอกสารที่ถึง ERP แล้ว **ลบไม่ได้** — จอที่เรียกเมธอดนี้ต้องผ่าน popup
+  ///    ยืนยันเสมอ (`ConfirmSendSheet`) เมธอดนี้ไม่ถามซ้ำให้
+  ///
+  /// - viewer ถูกกั้นแบบ fail-closed ตั้งแต่บรรทัดแรก
+  /// - [AppState.busy] กันกดยืนยันรัว ๆ ให้เข้าคิวใบเดียว
+  /// - เข้าคิวสำเร็จ = งานอยู่ใน SQLite แล้ว **ไม่ต้องมีเน็ต** (SyncEngine ส่งให้ทีหลัง)
+  Future<void> sendDraftsToErp() async {
+    if (!state.me.role.canWrite) {
+      flash('สิทธิ์ viewer ส่งผลนับไม่ได้');
+      return;
+    }
+    if (state.busy) return;
+    if (state.drafts.isEmpty) {
+      flash('ยังไม่มีรายการที่คีย์ไว้');
+      return;
+    }
+
+    state = state.copyWith(busy: true);
+    try {
+      final doc = await ref.read(localDbProvider).enqueueCountDoc();
+      if (doc == null) {
+        state = state.copyWith(busy: false);
+        flash('ยังไม่มีรายการที่คีย์ไว้');
+        return;
+      }
+      // ล้างเฉพาะ sku ที่เข้าใบนี้ — บรรทัดที่เกินเพดานยังคีย์ค้างอยู่จริง
+      // (ล้างทั้ง map จะลบค่าที่กรอกในจอรอบนับซึ่งคนละเส้นทางกันไปด้วย)
+      final drafts = {...state.drafts}..removeWhere((sku, _) => doc.skus.contains(sku));
+      final counts = {...state.counts}..removeWhere((sku, _) => doc.skus.contains(sku));
+      state = state.copyWith(drafts: drafts, counts: counts, busy: false);
+
+      // ยิงซิงค์ทันที — ไม่มีเน็ตก็ไม่เป็นไร คิวยังอยู่และ SyncEngine retry ให้
+      if (ApiConfig.isConfigured) {
+        unawaited(ref.read(syncEngineProvider).syncAll());
+      }
+      flash(doc.remaining > 0
+          ? 'ส่ง ${doc.lineCount} รายการเข้าคิวแล้ว · เหลืออีก ${doc.remaining} รายการ'
+          : 'ส่ง ${doc.lineCount} รายการเข้าคิวแล้ว');
+    } on Object catch (_) {
+      // เขียน SQLite ไม่ผ่าน = งานยังอยู่ครบใน count_drafts (ทรานแซกชัน rollback)
+      state = state.copyWith(busy: false);
+      flash('บันทึกลงเครื่องไม่สำเร็จ · ยอดที่คีย์ยังอยู่');
+    }
+  }
+
+  /// เข้าจอ 'รอส่ง' จากการ์ดสแกน — viewer ถูกกั้น
   void goCount() {
     if (!state.me.role.canWrite) {
       flash('สิทธิ์ viewer นับสต็อกไม่ได้');
@@ -742,6 +943,8 @@ class AppController extends Notifier<AppState> {
     final seq = ++_toastSeq;
     state = state.copyWith(toast: message);
     Future.delayed(TclToastDuration.value, () {
+      // provider ถูกทิ้งไปแล้ว (sign-out / ปิดจอ) — แตะ state ต่อจะโยน
+      if (!ref.mounted) return;
       if (seq == _toastSeq) state = state.copyWith(clearToast: true);
     });
   }

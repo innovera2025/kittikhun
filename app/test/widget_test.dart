@@ -1,6 +1,9 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:tcl_stock/core/theme/tcl_tokens.dart';
+import 'package:tcl_stock/core/widgets/common.dart';
 import 'package:tcl_stock/data/models.dart';
 import 'package:tcl_stock/main.dart';
 import 'package:tcl_stock/state/app_state.dart';
@@ -25,6 +28,14 @@ void main() {
 
     test('นับได้น้อยกว่า → ขาด -n (ตัวเลขติดลบในตัว)', () {
       expect(Variance.from(entered: '97', systemQty: 100).label, 'ขาด -3');
+    });
+
+    test('signed — เครื่องหมายบนการ์ด (นับได้ − ยอดระบบ)', () {
+      expect(Variance.from(entered: '19', systemQty: 20).signed, '-1');
+      expect(Variance.from(entered: '21', systemQty: 20).signed, '+1');
+      expect(Variance.from(entered: '20', systemQty: 20).signed, '0');
+      expect(Variance.from(entered: '', systemQty: 20).signed, '—');
+      expect(Variance.notCounted.signed, '—');
     });
   });
 
@@ -197,6 +208,109 @@ void main() {
       c.setCount('SKU-40128', '0');
       c.decCount('SKU-40128');
       expect(container.read(appProvider).counts['SKU-40128'], '0');
+    });
+
+    test('กรอกทศนิยมได้ — จุดไม่ใช่ตัวคั่นที่ต้องทิ้ง', () {
+      final c = container.read(appProvider.notifier);
+      c.setCount('SKU-40128', '20.5');
+      expect(container.read(appProvider).counts['SKU-40128'], '20.5');
+    });
+
+    test('ทศนิยมเกิน 3 ตำแหน่งถูกตัด (ตรงกับ numeric(18,3))', () {
+      final c = container.read(appProvider.notifier);
+      c.setCount('SKU-40128', '20.5555');
+      expect(container.read(appProvider).counts['SKU-40128'], '20.555');
+    });
+
+    test('ยอมจุดเดียว — จุดที่เกินถูกทิ้ง', () {
+      final c = container.read(appProvider.notifier);
+      c.setCount('SKU-40128', '1.2.3');
+      expect(container.read(appProvider).counts['SKU-40128'], '1.23');
+    });
+
+    test('เพิ่มค่าบนทศนิยม → บวก 1 จริง ไม่รีเซ็ตเป็น 1', () {
+      final c = container.read(appProvider.notifier);
+      c.setCount('SKU-40128', '20.5');
+      c.incCount('SKU-40128');
+      expect(container.read(appProvider).counts['SKU-40128'], '21.5');
+    });
+
+    test('ลดค่าบนช่องที่ยังว่าง → ยังว่าง ห้ามกลายเป็น 0', () {
+      final c = container.read(appProvider.notifier);
+      c.decCount('SKU-40128');
+      // ว่าง = ยังไม่ได้นับ · '0' = นับแล้วได้ศูนย์ → ต้องไม่ถูกสร้างขึ้นเอง
+      expect(container.read(appProvider).counts['SKU-40128'] ?? '', '');
+      expect(
+        Variance.from(
+          entered: container.read(appProvider).counts['SKU-40128'] ?? '',
+          systemQty: 20,
+        ).isCounted,
+        isFalse,
+      );
+    });
+
+    test('ลดค่าบน 1 → 0 (ศูนย์ที่ตั้งใจ ยังต้องได้)', () {
+      final c = container.read(appProvider.notifier);
+      c.setCount('SKU-40128', '1');
+      c.decCount('SKU-40128');
+      expect(container.read(appProvider).counts['SKU-40128'], '0');
+    });
+  });
+
+  group('StepperButton / CountField — ยกออกจากจอนับแล้วต้องเหมือนเดิมทุกอย่าง', () {
+    testWidgets('ปุ่ม +/− ขนาด 44 · semantics ไทยเดิม · กดแล้ว callback ยิง',
+        (tester) async {
+      final semantics = tester.ensureSemantics();
+      var inc = 0;
+      var dec = 0;
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: Row(
+            children: [
+              StepperButton(glyph: '−', onTap: () => dec++),
+              StepperButton(glyph: '+', onTap: () => inc++),
+            ],
+          ),
+        ),
+      ));
+
+      // label ถูก merge กับ glyph ('เพิ่มจำนวน\n+') → เทียบแบบ contains
+      expect(tester.getSemantics(find.text('+')).label, contains('เพิ่มจำนวน'));
+      expect(tester.getSemantics(find.text('−')).label, contains('ลดจำนวน'));
+      expect(
+        tester.getSize(find.byType(StepperButton).first),
+        const Size(TclTokens.hStepper, TclTokens.hStepper),
+      );
+
+      await tester.tap(find.text('+'));
+      await tester.tap(find.text('−'));
+      expect(inc, 1);
+      expect(dec, 1);
+      semantics.dispose();
+    });
+
+    testWidgets('ช่องกรอกกว้าง 88 · hint "นับได้" · onChanged ส่งค่าที่พิมพ์',
+        (tester) async {
+      final ctrl = TextEditingController();
+      addTearDown(ctrl.dispose);
+      String? typed;
+
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: CountField(
+            controller: ctrl,
+            focused: false,
+            onFocusChange: (_) {},
+            onChanged: (v) => typed = v,
+          ),
+        ),
+      ));
+
+      expect(find.text('นับได้'), findsOneWidget);
+      expect(tester.getSize(find.byType(CountField)).width, 88);
+
+      await tester.enterText(find.byType(TextField), '20.5');
+      expect(typed, '20.5');
     });
   });
 

@@ -52,6 +52,14 @@ class ApiConfig {
 
   static const Duration connectTimeout = Duration(seconds: 15);
   static const Duration receiveTimeout = Duration(seconds: 30);
+
+  /// timeout ของคำขอที่ server ทำงานยาวกว่าปกติ — ใช้ต่อ request เท่านั้น
+  ///
+  /// `POST /count-documents` ทำ transaction บน Postgres **แล้วยิง ERP ต่อแบบ
+  /// synchronous** ในคำขอเดียวกัน (งบเวลาต่อ statement = `ERP_TIMEOUT_MS` ฝั่ง
+  /// server) — [receiveTimeout] 30 วิ จึงสั้นกว่างานจริงและทำให้ client ยอมแพ้
+  /// ทั้งที่ server ยังเขียนเอกสารอยู่ (คิวจะ retry ใบเดิม แต่คนเห็นเป็น "ส่งไม่ผ่าน")
+  static const Duration longWriteTimeout = Duration(seconds: 90);
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -177,6 +185,7 @@ class ApiException implements Exception {
     required this.message,
     this.statusCode,
     this.retryAfterMs,
+    this.details,
   });
 
   /// transport พัง / body อ่านไม่ได้
@@ -215,6 +224,8 @@ class ApiException implements Exception {
             : networkMessage,
         statusCode: status,
         retryAfterMs: rawRetry is num ? rawRetry.toInt() : null,
+        // ฟิลด์ที่เหลือของ body (เช่น `drifted` ของ 409 SYSTEM_QTY_DRIFT)
+        details: body,
       );
     }
     return ApiException.network(status);
@@ -232,6 +243,13 @@ class ApiException implements Exception {
 
   /// เวลาที่ต้องรอก่อนลองใหม่ (มาจาก `THROTTLED`)
   final int? retryAfterMs;
+
+  /// body ทั้งก้อนของ error ที่ backend ส่งมา — ฟิลด์นอกเหนือจาก code/message
+  ///
+  /// ใช้กับ error ที่พก "ข้อมูลให้ตัดสินใจต่อ" มาด้วย เช่น `drifted` ของ 409
+  /// `SYSTEM_QTY_DRIFT` (sku ไหนยอดระบบขยับเป็นเท่าไร)
+  /// ⚠️ ห้าม log — มี sku/ยอดนับปนอยู่
+  final Map<String, dynamic>? details;
 
   // ── code ของชั้นนี้ (backend ไม่ได้ส่งมา) ──
   static const String codeNetwork = 'NETWORK';
@@ -345,13 +363,23 @@ class ApiClient {
   }) =>
       _send<T>('GET', path, query: query, cancelToken: cancelToken);
 
+  /// [receiveTimeout] = ทับค่า global เฉพาะ request นี้ (null = ใช้ค่า global)
+  /// สำหรับ endpoint ที่ server ทำงานยาว เช่น `POST /count-documents`
   Future<T> post<T>(
     String path, {
     Object? body,
     Map<String, dynamic>? query,
     CancelToken? cancelToken,
+    Duration? receiveTimeout,
   }) =>
-      _send<T>('POST', path, body: body, query: query, cancelToken: cancelToken);
+      _send<T>(
+        'POST',
+        path,
+        body: body,
+        query: query,
+        cancelToken: cancelToken,
+        receiveTimeout: receiveTimeout,
+      );
 
   Future<T> patch<T>(
     String path, {
@@ -394,6 +422,7 @@ class ApiClient {
     Object? body,
     Map<String, dynamic>? query,
     CancelToken? cancelToken,
+    Duration? receiveTimeout,
   }) async {
     if (!isConfigured) {
       throw ApiException(
@@ -416,6 +445,9 @@ class ApiClient {
           //    เรียกแบบไม่มี body พังหมด: ปิดรอบนับ · sync ยอดจาก ERP · รีเซ็ต PIN
           //    (เทสต์ที่ mock ชั้น HTTP จับไม่ได้ — เจอตอนยิง Dio จริงเข้า server จริง)
           contentType: contentTypeFor(body),
+          // ทับเฉพาะ request นี้ — null = คงค่า global ของ BaseOptions ไว้เหมือนเดิม
+          receiveTimeout: receiveTimeout,
+          sendTimeout: receiveTimeout,
         ),
       );
       final data = res.data;

@@ -2167,6 +2167,754 @@ class LocalSessionRowsCompanion extends UpdateCompanion<LocalSessionRow> {
   }
 }
 
+class $CountDraftsTable extends CountDrafts
+    with TableInfo<$CountDraftsTable, CountDraftRow> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $CountDraftsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _skuMeta = const VerificationMeta('sku');
+  @override
+  late final GeneratedColumn<String> sku = GeneratedColumn<String>(
+    'sku',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _nameMeta = const VerificationMeta('name');
+  @override
+  late final GeneratedColumn<String> name = GeneratedColumn<String>(
+    'name',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _unitMeta = const VerificationMeta('unit');
+  @override
+  late final GeneratedColumn<String> unit = GeneratedColumn<String>(
+    'unit',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _locMeta = const VerificationMeta('loc');
+  @override
+  late final GeneratedColumn<String> loc = GeneratedColumn<String>(
+    'loc',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _warehouseCodeMeta = const VerificationMeta(
+    'warehouseCode',
+  );
+  @override
+  late final GeneratedColumn<String> warehouseCode = GeneratedColumn<String>(
+    'warehouse_code',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _systemQtyShownMeta = const VerificationMeta(
+    'systemQtyShown',
+  );
+  @override
+  late final GeneratedColumn<double> systemQtyShown = GeneratedColumn<double>(
+    'system_qty_shown',
+    aliasedName,
+    false,
+    type: DriftSqlType.double,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _systemQtyAsOfMeta = const VerificationMeta(
+    'systemQtyAsOf',
+  );
+  @override
+  late final GeneratedColumn<DateTime> systemQtyAsOf =
+      GeneratedColumn<DateTime>(
+        'system_qty_as_of',
+        aliasedName,
+        true,
+        type: DriftSqlType.dateTime,
+        requiredDuringInsert: false,
+      );
+  static const VerificationMeta _countedQtyMeta = const VerificationMeta(
+    'countedQty',
+  );
+  @override
+  late final GeneratedColumn<double> countedQty = GeneratedColumn<double>(
+    'counted_qty',
+    aliasedName,
+    false,
+    type: DriftSqlType.double,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _enteredAtMeta = const VerificationMeta(
+    'enteredAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> enteredAt = GeneratedColumn<DateTime>(
+    'entered_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _enteredByMeta = const VerificationMeta(
+    'enteredBy',
+  );
+  @override
+  late final GeneratedColumn<String> enteredBy = GeneratedColumn<String>(
+    'entered_by',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _systemQtyBeforeMeta = const VerificationMeta(
+    'systemQtyBefore',
+  );
+  @override
+  late final GeneratedColumn<double> systemQtyBefore = GeneratedColumn<double>(
+    'system_qty_before',
+    aliasedName,
+    true,
+    type: DriftSqlType.double,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _documentIdMeta = const VerificationMeta(
+    'documentId',
+  );
+  @override
+  late final GeneratedColumn<String> documentId = GeneratedColumn<String>(
+    'document_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    sku,
+    name,
+    unit,
+    loc,
+    warehouseCode,
+    systemQtyShown,
+    systemQtyAsOf,
+    countedQty,
+    enteredAt,
+    enteredBy,
+    systemQtyBefore,
+    documentId,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'count_drafts';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<CountDraftRow> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('sku')) {
+      context.handle(
+        _skuMeta,
+        sku.isAcceptableOrUnknown(data['sku']!, _skuMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_skuMeta);
+    }
+    if (data.containsKey('name')) {
+      context.handle(
+        _nameMeta,
+        name.isAcceptableOrUnknown(data['name']!, _nameMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_nameMeta);
+    }
+    if (data.containsKey('unit')) {
+      context.handle(
+        _unitMeta,
+        unit.isAcceptableOrUnknown(data['unit']!, _unitMeta),
+      );
+    }
+    if (data.containsKey('loc')) {
+      context.handle(
+        _locMeta,
+        loc.isAcceptableOrUnknown(data['loc']!, _locMeta),
+      );
+    }
+    if (data.containsKey('warehouse_code')) {
+      context.handle(
+        _warehouseCodeMeta,
+        warehouseCode.isAcceptableOrUnknown(
+          data['warehouse_code']!,
+          _warehouseCodeMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_warehouseCodeMeta);
+    }
+    if (data.containsKey('system_qty_shown')) {
+      context.handle(
+        _systemQtyShownMeta,
+        systemQtyShown.isAcceptableOrUnknown(
+          data['system_qty_shown']!,
+          _systemQtyShownMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_systemQtyShownMeta);
+    }
+    if (data.containsKey('system_qty_as_of')) {
+      context.handle(
+        _systemQtyAsOfMeta,
+        systemQtyAsOf.isAcceptableOrUnknown(
+          data['system_qty_as_of']!,
+          _systemQtyAsOfMeta,
+        ),
+      );
+    }
+    if (data.containsKey('counted_qty')) {
+      context.handle(
+        _countedQtyMeta,
+        countedQty.isAcceptableOrUnknown(data['counted_qty']!, _countedQtyMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_countedQtyMeta);
+    }
+    if (data.containsKey('entered_at')) {
+      context.handle(
+        _enteredAtMeta,
+        enteredAt.isAcceptableOrUnknown(data['entered_at']!, _enteredAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_enteredAtMeta);
+    }
+    if (data.containsKey('entered_by')) {
+      context.handle(
+        _enteredByMeta,
+        enteredBy.isAcceptableOrUnknown(data['entered_by']!, _enteredByMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_enteredByMeta);
+    }
+    if (data.containsKey('system_qty_before')) {
+      context.handle(
+        _systemQtyBeforeMeta,
+        systemQtyBefore.isAcceptableOrUnknown(
+          data['system_qty_before']!,
+          _systemQtyBeforeMeta,
+        ),
+      );
+    }
+    if (data.containsKey('document_id')) {
+      context.handle(
+        _documentIdMeta,
+        documentId.isAcceptableOrUnknown(data['document_id']!, _documentIdMeta),
+      );
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {sku};
+  @override
+  CountDraftRow map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return CountDraftRow(
+      sku: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}sku'],
+      )!,
+      name: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}name'],
+      )!,
+      unit: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}unit'],
+      ),
+      loc: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}loc'],
+      ),
+      warehouseCode: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}warehouse_code'],
+      )!,
+      systemQtyShown: attachedDatabase.typeMapping.read(
+        DriftSqlType.double,
+        data['${effectivePrefix}system_qty_shown'],
+      )!,
+      systemQtyAsOf: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}system_qty_as_of'],
+      ),
+      countedQty: attachedDatabase.typeMapping.read(
+        DriftSqlType.double,
+        data['${effectivePrefix}counted_qty'],
+      )!,
+      enteredAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}entered_at'],
+      )!,
+      enteredBy: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}entered_by'],
+      )!,
+      systemQtyBefore: attachedDatabase.typeMapping.read(
+        DriftSqlType.double,
+        data['${effectivePrefix}system_qty_before'],
+      ),
+      documentId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}document_id'],
+      ),
+    );
+  }
+
+  @override
+  $CountDraftsTable createAlias(String alias) {
+    return $CountDraftsTable(attachedDatabase, alias);
+  }
+}
+
+class CountDraftRow extends DataClass implements Insertable<CountDraftRow> {
+  final String sku;
+  final String name;
+  final String? unit;
+  final String? loc;
+  final String warehouseCode;
+
+  /// ยอดตามระบบที่ "จอโชว์" ตอนคีย์ — non-null เพราะ `onHand IS NULL` ห้ามนับ
+  final double systemQtyShown;
+
+  /// อายุข้อมูลของ [systemQtyShown] (`erpDataAsOf`) — null = ไม่รู้
+  final DateTime? systemQtyAsOf;
+
+  /// จำนวนที่นับได้จริง — 0 = "นับแล้วได้ศูนย์" (ของหาย) ≠ ยังไม่ได้นับ
+  final double countedQty;
+  final DateTime enteredAt;
+
+  /// รหัสพนักงานที่คีย์ — เครื่องใช้ร่วมกันหลายกะ ต้องรู้ว่าของค้างเป็นของใคร
+  final String enteredBy;
+
+  /// ยอดระบบที่จอเคยโชว์ **ก่อน** server แจ้งว่ายอดขยับ (409 `SYSTEM_QTY_DRIFT`)
+  ///
+  /// null = ไม่มีเรื่องยอดขยับ · มีค่า = จอต้องขึ้นป้าย 'ยอดระบบเปลี่ยน (20 → 25)'
+  /// ⚠️ ห้ามเปลี่ยนยอดให้เงียบ ๆ — คนต้องเห็นว่าเทียบกับเลขใหม่แล้วผลต่างเปลี่ยนไป
+  final double? systemQtyBefore;
+
+  /// เอกสารที่บรรทัดนี้เคยถูกส่งไปแล้วถูกตีกลับ — **ส่งใหม่ต้องใช้ id เดิม**
+  ///
+  /// null = ยังไม่เคยเข้าเอกสารใบไหน (สร้าง id ใหม่ตอนกดส่ง)
+  final String? documentId;
+  const CountDraftRow({
+    required this.sku,
+    required this.name,
+    this.unit,
+    this.loc,
+    required this.warehouseCode,
+    required this.systemQtyShown,
+    this.systemQtyAsOf,
+    required this.countedQty,
+    required this.enteredAt,
+    required this.enteredBy,
+    this.systemQtyBefore,
+    this.documentId,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['sku'] = Variable<String>(sku);
+    map['name'] = Variable<String>(name);
+    if (!nullToAbsent || unit != null) {
+      map['unit'] = Variable<String>(unit);
+    }
+    if (!nullToAbsent || loc != null) {
+      map['loc'] = Variable<String>(loc);
+    }
+    map['warehouse_code'] = Variable<String>(warehouseCode);
+    map['system_qty_shown'] = Variable<double>(systemQtyShown);
+    if (!nullToAbsent || systemQtyAsOf != null) {
+      map['system_qty_as_of'] = Variable<DateTime>(systemQtyAsOf);
+    }
+    map['counted_qty'] = Variable<double>(countedQty);
+    map['entered_at'] = Variable<DateTime>(enteredAt);
+    map['entered_by'] = Variable<String>(enteredBy);
+    if (!nullToAbsent || systemQtyBefore != null) {
+      map['system_qty_before'] = Variable<double>(systemQtyBefore);
+    }
+    if (!nullToAbsent || documentId != null) {
+      map['document_id'] = Variable<String>(documentId);
+    }
+    return map;
+  }
+
+  CountDraftsCompanion toCompanion(bool nullToAbsent) {
+    return CountDraftsCompanion(
+      sku: Value(sku),
+      name: Value(name),
+      unit: unit == null && nullToAbsent ? const Value.absent() : Value(unit),
+      loc: loc == null && nullToAbsent ? const Value.absent() : Value(loc),
+      warehouseCode: Value(warehouseCode),
+      systemQtyShown: Value(systemQtyShown),
+      systemQtyAsOf: systemQtyAsOf == null && nullToAbsent
+          ? const Value.absent()
+          : Value(systemQtyAsOf),
+      countedQty: Value(countedQty),
+      enteredAt: Value(enteredAt),
+      enteredBy: Value(enteredBy),
+      systemQtyBefore: systemQtyBefore == null && nullToAbsent
+          ? const Value.absent()
+          : Value(systemQtyBefore),
+      documentId: documentId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(documentId),
+    );
+  }
+
+  factory CountDraftRow.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return CountDraftRow(
+      sku: serializer.fromJson<String>(json['sku']),
+      name: serializer.fromJson<String>(json['name']),
+      unit: serializer.fromJson<String?>(json['unit']),
+      loc: serializer.fromJson<String?>(json['loc']),
+      warehouseCode: serializer.fromJson<String>(json['warehouseCode']),
+      systemQtyShown: serializer.fromJson<double>(json['systemQtyShown']),
+      systemQtyAsOf: serializer.fromJson<DateTime?>(json['systemQtyAsOf']),
+      countedQty: serializer.fromJson<double>(json['countedQty']),
+      enteredAt: serializer.fromJson<DateTime>(json['enteredAt']),
+      enteredBy: serializer.fromJson<String>(json['enteredBy']),
+      systemQtyBefore: serializer.fromJson<double?>(json['systemQtyBefore']),
+      documentId: serializer.fromJson<String?>(json['documentId']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'sku': serializer.toJson<String>(sku),
+      'name': serializer.toJson<String>(name),
+      'unit': serializer.toJson<String?>(unit),
+      'loc': serializer.toJson<String?>(loc),
+      'warehouseCode': serializer.toJson<String>(warehouseCode),
+      'systemQtyShown': serializer.toJson<double>(systemQtyShown),
+      'systemQtyAsOf': serializer.toJson<DateTime?>(systemQtyAsOf),
+      'countedQty': serializer.toJson<double>(countedQty),
+      'enteredAt': serializer.toJson<DateTime>(enteredAt),
+      'enteredBy': serializer.toJson<String>(enteredBy),
+      'systemQtyBefore': serializer.toJson<double?>(systemQtyBefore),
+      'documentId': serializer.toJson<String?>(documentId),
+    };
+  }
+
+  CountDraftRow copyWith({
+    String? sku,
+    String? name,
+    Value<String?> unit = const Value.absent(),
+    Value<String?> loc = const Value.absent(),
+    String? warehouseCode,
+    double? systemQtyShown,
+    Value<DateTime?> systemQtyAsOf = const Value.absent(),
+    double? countedQty,
+    DateTime? enteredAt,
+    String? enteredBy,
+    Value<double?> systemQtyBefore = const Value.absent(),
+    Value<String?> documentId = const Value.absent(),
+  }) => CountDraftRow(
+    sku: sku ?? this.sku,
+    name: name ?? this.name,
+    unit: unit.present ? unit.value : this.unit,
+    loc: loc.present ? loc.value : this.loc,
+    warehouseCode: warehouseCode ?? this.warehouseCode,
+    systemQtyShown: systemQtyShown ?? this.systemQtyShown,
+    systemQtyAsOf: systemQtyAsOf.present
+        ? systemQtyAsOf.value
+        : this.systemQtyAsOf,
+    countedQty: countedQty ?? this.countedQty,
+    enteredAt: enteredAt ?? this.enteredAt,
+    enteredBy: enteredBy ?? this.enteredBy,
+    systemQtyBefore: systemQtyBefore.present
+        ? systemQtyBefore.value
+        : this.systemQtyBefore,
+    documentId: documentId.present ? documentId.value : this.documentId,
+  );
+  CountDraftRow copyWithCompanion(CountDraftsCompanion data) {
+    return CountDraftRow(
+      sku: data.sku.present ? data.sku.value : this.sku,
+      name: data.name.present ? data.name.value : this.name,
+      unit: data.unit.present ? data.unit.value : this.unit,
+      loc: data.loc.present ? data.loc.value : this.loc,
+      warehouseCode: data.warehouseCode.present
+          ? data.warehouseCode.value
+          : this.warehouseCode,
+      systemQtyShown: data.systemQtyShown.present
+          ? data.systemQtyShown.value
+          : this.systemQtyShown,
+      systemQtyAsOf: data.systemQtyAsOf.present
+          ? data.systemQtyAsOf.value
+          : this.systemQtyAsOf,
+      countedQty: data.countedQty.present
+          ? data.countedQty.value
+          : this.countedQty,
+      enteredAt: data.enteredAt.present ? data.enteredAt.value : this.enteredAt,
+      enteredBy: data.enteredBy.present ? data.enteredBy.value : this.enteredBy,
+      systemQtyBefore: data.systemQtyBefore.present
+          ? data.systemQtyBefore.value
+          : this.systemQtyBefore,
+      documentId: data.documentId.present
+          ? data.documentId.value
+          : this.documentId,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('CountDraftRow(')
+          ..write('sku: $sku, ')
+          ..write('name: $name, ')
+          ..write('unit: $unit, ')
+          ..write('loc: $loc, ')
+          ..write('warehouseCode: $warehouseCode, ')
+          ..write('systemQtyShown: $systemQtyShown, ')
+          ..write('systemQtyAsOf: $systemQtyAsOf, ')
+          ..write('countedQty: $countedQty, ')
+          ..write('enteredAt: $enteredAt, ')
+          ..write('enteredBy: $enteredBy, ')
+          ..write('systemQtyBefore: $systemQtyBefore, ')
+          ..write('documentId: $documentId')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    sku,
+    name,
+    unit,
+    loc,
+    warehouseCode,
+    systemQtyShown,
+    systemQtyAsOf,
+    countedQty,
+    enteredAt,
+    enteredBy,
+    systemQtyBefore,
+    documentId,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is CountDraftRow &&
+          other.sku == this.sku &&
+          other.name == this.name &&
+          other.unit == this.unit &&
+          other.loc == this.loc &&
+          other.warehouseCode == this.warehouseCode &&
+          other.systemQtyShown == this.systemQtyShown &&
+          other.systemQtyAsOf == this.systemQtyAsOf &&
+          other.countedQty == this.countedQty &&
+          other.enteredAt == this.enteredAt &&
+          other.enteredBy == this.enteredBy &&
+          other.systemQtyBefore == this.systemQtyBefore &&
+          other.documentId == this.documentId);
+}
+
+class CountDraftsCompanion extends UpdateCompanion<CountDraftRow> {
+  final Value<String> sku;
+  final Value<String> name;
+  final Value<String?> unit;
+  final Value<String?> loc;
+  final Value<String> warehouseCode;
+  final Value<double> systemQtyShown;
+  final Value<DateTime?> systemQtyAsOf;
+  final Value<double> countedQty;
+  final Value<DateTime> enteredAt;
+  final Value<String> enteredBy;
+  final Value<double?> systemQtyBefore;
+  final Value<String?> documentId;
+  final Value<int> rowid;
+  const CountDraftsCompanion({
+    this.sku = const Value.absent(),
+    this.name = const Value.absent(),
+    this.unit = const Value.absent(),
+    this.loc = const Value.absent(),
+    this.warehouseCode = const Value.absent(),
+    this.systemQtyShown = const Value.absent(),
+    this.systemQtyAsOf = const Value.absent(),
+    this.countedQty = const Value.absent(),
+    this.enteredAt = const Value.absent(),
+    this.enteredBy = const Value.absent(),
+    this.systemQtyBefore = const Value.absent(),
+    this.documentId = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  CountDraftsCompanion.insert({
+    required String sku,
+    required String name,
+    this.unit = const Value.absent(),
+    this.loc = const Value.absent(),
+    required String warehouseCode,
+    required double systemQtyShown,
+    this.systemQtyAsOf = const Value.absent(),
+    required double countedQty,
+    required DateTime enteredAt,
+    required String enteredBy,
+    this.systemQtyBefore = const Value.absent(),
+    this.documentId = const Value.absent(),
+    this.rowid = const Value.absent(),
+  }) : sku = Value(sku),
+       name = Value(name),
+       warehouseCode = Value(warehouseCode),
+       systemQtyShown = Value(systemQtyShown),
+       countedQty = Value(countedQty),
+       enteredAt = Value(enteredAt),
+       enteredBy = Value(enteredBy);
+  static Insertable<CountDraftRow> custom({
+    Expression<String>? sku,
+    Expression<String>? name,
+    Expression<String>? unit,
+    Expression<String>? loc,
+    Expression<String>? warehouseCode,
+    Expression<double>? systemQtyShown,
+    Expression<DateTime>? systemQtyAsOf,
+    Expression<double>? countedQty,
+    Expression<DateTime>? enteredAt,
+    Expression<String>? enteredBy,
+    Expression<double>? systemQtyBefore,
+    Expression<String>? documentId,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (sku != null) 'sku': sku,
+      if (name != null) 'name': name,
+      if (unit != null) 'unit': unit,
+      if (loc != null) 'loc': loc,
+      if (warehouseCode != null) 'warehouse_code': warehouseCode,
+      if (systemQtyShown != null) 'system_qty_shown': systemQtyShown,
+      if (systemQtyAsOf != null) 'system_qty_as_of': systemQtyAsOf,
+      if (countedQty != null) 'counted_qty': countedQty,
+      if (enteredAt != null) 'entered_at': enteredAt,
+      if (enteredBy != null) 'entered_by': enteredBy,
+      if (systemQtyBefore != null) 'system_qty_before': systemQtyBefore,
+      if (documentId != null) 'document_id': documentId,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  CountDraftsCompanion copyWith({
+    Value<String>? sku,
+    Value<String>? name,
+    Value<String?>? unit,
+    Value<String?>? loc,
+    Value<String>? warehouseCode,
+    Value<double>? systemQtyShown,
+    Value<DateTime?>? systemQtyAsOf,
+    Value<double>? countedQty,
+    Value<DateTime>? enteredAt,
+    Value<String>? enteredBy,
+    Value<double?>? systemQtyBefore,
+    Value<String?>? documentId,
+    Value<int>? rowid,
+  }) {
+    return CountDraftsCompanion(
+      sku: sku ?? this.sku,
+      name: name ?? this.name,
+      unit: unit ?? this.unit,
+      loc: loc ?? this.loc,
+      warehouseCode: warehouseCode ?? this.warehouseCode,
+      systemQtyShown: systemQtyShown ?? this.systemQtyShown,
+      systemQtyAsOf: systemQtyAsOf ?? this.systemQtyAsOf,
+      countedQty: countedQty ?? this.countedQty,
+      enteredAt: enteredAt ?? this.enteredAt,
+      enteredBy: enteredBy ?? this.enteredBy,
+      systemQtyBefore: systemQtyBefore ?? this.systemQtyBefore,
+      documentId: documentId ?? this.documentId,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (sku.present) {
+      map['sku'] = Variable<String>(sku.value);
+    }
+    if (name.present) {
+      map['name'] = Variable<String>(name.value);
+    }
+    if (unit.present) {
+      map['unit'] = Variable<String>(unit.value);
+    }
+    if (loc.present) {
+      map['loc'] = Variable<String>(loc.value);
+    }
+    if (warehouseCode.present) {
+      map['warehouse_code'] = Variable<String>(warehouseCode.value);
+    }
+    if (systemQtyShown.present) {
+      map['system_qty_shown'] = Variable<double>(systemQtyShown.value);
+    }
+    if (systemQtyAsOf.present) {
+      map['system_qty_as_of'] = Variable<DateTime>(systemQtyAsOf.value);
+    }
+    if (countedQty.present) {
+      map['counted_qty'] = Variable<double>(countedQty.value);
+    }
+    if (enteredAt.present) {
+      map['entered_at'] = Variable<DateTime>(enteredAt.value);
+    }
+    if (enteredBy.present) {
+      map['entered_by'] = Variable<String>(enteredBy.value);
+    }
+    if (systemQtyBefore.present) {
+      map['system_qty_before'] = Variable<double>(systemQtyBefore.value);
+    }
+    if (documentId.present) {
+      map['document_id'] = Variable<String>(documentId.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('CountDraftsCompanion(')
+          ..write('sku: $sku, ')
+          ..write('name: $name, ')
+          ..write('unit: $unit, ')
+          ..write('loc: $loc, ')
+          ..write('warehouseCode: $warehouseCode, ')
+          ..write('systemQtyShown: $systemQtyShown, ')
+          ..write('systemQtyAsOf: $systemQtyAsOf, ')
+          ..write('countedQty: $countedQty, ')
+          ..write('enteredAt: $enteredAt, ')
+          ..write('enteredBy: $enteredBy, ')
+          ..write('systemQtyBefore: $systemQtyBefore, ')
+          ..write('documentId: $documentId, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 class $OutboxTable extends Outbox with TableInfo<$OutboxTable, OutboxRow> {
   @override
   final GeneratedDatabase attachedDatabase;
@@ -3108,6 +3856,7 @@ abstract class _$LocalDb extends GeneratedDatabase {
   late final $LocalSessionRowsTable localSessionRows = $LocalSessionRowsTable(
     this,
   );
+  late final $CountDraftsTable countDrafts = $CountDraftsTable(this);
   late final $OutboxTable outbox = $OutboxTable(this);
   late final $KvMetaTable kvMeta = $KvMetaTable(this);
   late final Index idxLocalBarcodesSku = Index(
@@ -3132,6 +3881,7 @@ abstract class _$LocalDb extends GeneratedDatabase {
     localMembers,
     localSession,
     localSessionRows,
+    countDrafts,
     outbox,
     kvMeta,
     idxLocalBarcodesSku,
@@ -4274,6 +5024,351 @@ typedef $$LocalSessionRowsTableProcessedTableManager =
       LocalSessionRow,
       PrefetchHooks Function()
     >;
+typedef $$CountDraftsTableCreateCompanionBuilder =
+    CountDraftsCompanion Function({
+      required String sku,
+      required String name,
+      Value<String?> unit,
+      Value<String?> loc,
+      required String warehouseCode,
+      required double systemQtyShown,
+      Value<DateTime?> systemQtyAsOf,
+      required double countedQty,
+      required DateTime enteredAt,
+      required String enteredBy,
+      Value<double?> systemQtyBefore,
+      Value<String?> documentId,
+      Value<int> rowid,
+    });
+typedef $$CountDraftsTableUpdateCompanionBuilder =
+    CountDraftsCompanion Function({
+      Value<String> sku,
+      Value<String> name,
+      Value<String?> unit,
+      Value<String?> loc,
+      Value<String> warehouseCode,
+      Value<double> systemQtyShown,
+      Value<DateTime?> systemQtyAsOf,
+      Value<double> countedQty,
+      Value<DateTime> enteredAt,
+      Value<String> enteredBy,
+      Value<double?> systemQtyBefore,
+      Value<String?> documentId,
+      Value<int> rowid,
+    });
+
+class $$CountDraftsTableFilterComposer
+    extends Composer<_$LocalDb, $CountDraftsTable> {
+  $$CountDraftsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get sku => $composableBuilder(
+    column: $table.sku,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get name => $composableBuilder(
+    column: $table.name,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get unit => $composableBuilder(
+    column: $table.unit,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get loc => $composableBuilder(
+    column: $table.loc,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get warehouseCode => $composableBuilder(
+    column: $table.warehouseCode,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<double> get systemQtyShown => $composableBuilder(
+    column: $table.systemQtyShown,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get systemQtyAsOf => $composableBuilder(
+    column: $table.systemQtyAsOf,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<double> get countedQty => $composableBuilder(
+    column: $table.countedQty,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get enteredAt => $composableBuilder(
+    column: $table.enteredAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get enteredBy => $composableBuilder(
+    column: $table.enteredBy,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<double> get systemQtyBefore => $composableBuilder(
+    column: $table.systemQtyBefore,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get documentId => $composableBuilder(
+    column: $table.documentId,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$CountDraftsTableOrderingComposer
+    extends Composer<_$LocalDb, $CountDraftsTable> {
+  $$CountDraftsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get sku => $composableBuilder(
+    column: $table.sku,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get name => $composableBuilder(
+    column: $table.name,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get unit => $composableBuilder(
+    column: $table.unit,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get loc => $composableBuilder(
+    column: $table.loc,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get warehouseCode => $composableBuilder(
+    column: $table.warehouseCode,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<double> get systemQtyShown => $composableBuilder(
+    column: $table.systemQtyShown,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get systemQtyAsOf => $composableBuilder(
+    column: $table.systemQtyAsOf,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<double> get countedQty => $composableBuilder(
+    column: $table.countedQty,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get enteredAt => $composableBuilder(
+    column: $table.enteredAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get enteredBy => $composableBuilder(
+    column: $table.enteredBy,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<double> get systemQtyBefore => $composableBuilder(
+    column: $table.systemQtyBefore,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get documentId => $composableBuilder(
+    column: $table.documentId,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$CountDraftsTableAnnotationComposer
+    extends Composer<_$LocalDb, $CountDraftsTable> {
+  $$CountDraftsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get sku =>
+      $composableBuilder(column: $table.sku, builder: (column) => column);
+
+  GeneratedColumn<String> get name =>
+      $composableBuilder(column: $table.name, builder: (column) => column);
+
+  GeneratedColumn<String> get unit =>
+      $composableBuilder(column: $table.unit, builder: (column) => column);
+
+  GeneratedColumn<String> get loc =>
+      $composableBuilder(column: $table.loc, builder: (column) => column);
+
+  GeneratedColumn<String> get warehouseCode => $composableBuilder(
+    column: $table.warehouseCode,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<double> get systemQtyShown => $composableBuilder(
+    column: $table.systemQtyShown,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<DateTime> get systemQtyAsOf => $composableBuilder(
+    column: $table.systemQtyAsOf,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<double> get countedQty => $composableBuilder(
+    column: $table.countedQty,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<DateTime> get enteredAt =>
+      $composableBuilder(column: $table.enteredAt, builder: (column) => column);
+
+  GeneratedColumn<String> get enteredBy =>
+      $composableBuilder(column: $table.enteredBy, builder: (column) => column);
+
+  GeneratedColumn<double> get systemQtyBefore => $composableBuilder(
+    column: $table.systemQtyBefore,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get documentId => $composableBuilder(
+    column: $table.documentId,
+    builder: (column) => column,
+  );
+}
+
+class $$CountDraftsTableTableManager
+    extends
+        RootTableManager<
+          _$LocalDb,
+          $CountDraftsTable,
+          CountDraftRow,
+          $$CountDraftsTableFilterComposer,
+          $$CountDraftsTableOrderingComposer,
+          $$CountDraftsTableAnnotationComposer,
+          $$CountDraftsTableCreateCompanionBuilder,
+          $$CountDraftsTableUpdateCompanionBuilder,
+          (
+            CountDraftRow,
+            BaseReferences<_$LocalDb, $CountDraftsTable, CountDraftRow>,
+          ),
+          CountDraftRow,
+          PrefetchHooks Function()
+        > {
+  $$CountDraftsTableTableManager(_$LocalDb db, $CountDraftsTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$CountDraftsTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$CountDraftsTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$CountDraftsTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> sku = const Value.absent(),
+                Value<String> name = const Value.absent(),
+                Value<String?> unit = const Value.absent(),
+                Value<String?> loc = const Value.absent(),
+                Value<String> warehouseCode = const Value.absent(),
+                Value<double> systemQtyShown = const Value.absent(),
+                Value<DateTime?> systemQtyAsOf = const Value.absent(),
+                Value<double> countedQty = const Value.absent(),
+                Value<DateTime> enteredAt = const Value.absent(),
+                Value<String> enteredBy = const Value.absent(),
+                Value<double?> systemQtyBefore = const Value.absent(),
+                Value<String?> documentId = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => CountDraftsCompanion(
+                sku: sku,
+                name: name,
+                unit: unit,
+                loc: loc,
+                warehouseCode: warehouseCode,
+                systemQtyShown: systemQtyShown,
+                systemQtyAsOf: systemQtyAsOf,
+                countedQty: countedQty,
+                enteredAt: enteredAt,
+                enteredBy: enteredBy,
+                systemQtyBefore: systemQtyBefore,
+                documentId: documentId,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String sku,
+                required String name,
+                Value<String?> unit = const Value.absent(),
+                Value<String?> loc = const Value.absent(),
+                required String warehouseCode,
+                required double systemQtyShown,
+                Value<DateTime?> systemQtyAsOf = const Value.absent(),
+                required double countedQty,
+                required DateTime enteredAt,
+                required String enteredBy,
+                Value<double?> systemQtyBefore = const Value.absent(),
+                Value<String?> documentId = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => CountDraftsCompanion.insert(
+                sku: sku,
+                name: name,
+                unit: unit,
+                loc: loc,
+                warehouseCode: warehouseCode,
+                systemQtyShown: systemQtyShown,
+                systemQtyAsOf: systemQtyAsOf,
+                countedQty: countedQty,
+                enteredAt: enteredAt,
+                enteredBy: enteredBy,
+                systemQtyBefore: systemQtyBefore,
+                documentId: documentId,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$CountDraftsTableProcessedTableManager =
+    ProcessedTableManager<
+      _$LocalDb,
+      $CountDraftsTable,
+      CountDraftRow,
+      $$CountDraftsTableFilterComposer,
+      $$CountDraftsTableOrderingComposer,
+      $$CountDraftsTableAnnotationComposer,
+      $$CountDraftsTableCreateCompanionBuilder,
+      $$CountDraftsTableUpdateCompanionBuilder,
+      (
+        CountDraftRow,
+        BaseReferences<_$LocalDb, $CountDraftsTable, CountDraftRow>,
+      ),
+      CountDraftRow,
+      PrefetchHooks Function()
+    >;
 typedef $$OutboxTableCreateCompanionBuilder =
     OutboxCompanion Function({
       required String id,
@@ -4747,6 +5842,8 @@ class $LocalDbManager {
       $$LocalSessionTableTableManager(_db, _db.localSession);
   $$LocalSessionRowsTableTableManager get localSessionRows =>
       $$LocalSessionRowsTableTableManager(_db, _db.localSessionRows);
+  $$CountDraftsTableTableManager get countDrafts =>
+      $$CountDraftsTableTableManager(_db, _db.countDrafts);
   $$OutboxTableTableManager get outbox =>
       $$OutboxTableTableManager(_db, _db.outbox);
   $$KvMetaTableTableManager get kvMeta =>

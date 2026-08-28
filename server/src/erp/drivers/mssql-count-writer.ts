@@ -40,6 +40,11 @@ export type MssqlWriterConfig = {
    *    `tbl_CountDtl` มีคอลัมน์ `VoucherNo` จริง (คำถามข้อ 1 ใน docs/erp-data-mapping.md)
    */
   dtlVoucherNo: boolean;
+  /**
+   * 🚨 ERP_UNSAFE_ALLOW_PRIVILEGED_ACCOUNT — ยอมให้บัญชีเขียนมีสิทธิ์กว้างเกินขอบเขต (เช่น `sa`)
+   *    โดยไม่หยุด boot · ใช้ทดสอบก่อนได้ `tcl_writer` เท่านั้น ห้ามใช้บน production
+   */
+  allowPrivilegedAccount: boolean;
 };
 
 export class ErpCountWriteError extends Error {
@@ -259,7 +264,14 @@ export class MssqlCountWriter implements ErpCountWriter {
     if (row.can_write_item === 1) tooWide.push('เขียน dbo.InventoryItem ได้');
     if (row.can_write_flow_hdr === 1) tooWide.push('เขียน dbo.InventoryFlowHdr ได้');
     if (row.can_write_flow_dtl === 1) tooWide.push('เขียน dbo.InventoryFlowDtl ได้');
-    if (tooWide.length > 0) {
+    if (tooWide.length > 0 && this.cfg.allowPrivilegedAccount) {
+      // 🚨 โหมดทดสอบ — ปล่อยผ่านแต่ต้องดังพอที่จะไม่มีใครเผลอปล่อยไว้บน production
+      logger.warn(
+        `🚨 โหมดทดสอบ: บัญชีเขียน "${this.cfg.user}" มีสิทธิ์กว้างเกินขอบเขต (${tooWide.join(' · ')}) — ` +
+          'ปกติต้องหยุด boot แต่ ERP_UNSAFE_ALLOW_PRIVILEGED_ACCOUNT=true จึงปล่อยผ่าน · ' +
+          'ห้ามใช้ค่านี้บน production เด็ดขาด',
+      );
+    } else if (tooWide.length > 0) {
       throw new ErpCountWriteError(
         'ERP_WRITE_SCOPE_TOO_WIDE',
         `บัญชีเขียน "${this.cfg.user}" มีสิทธิ์กว้างเกินขอบเขตที่ตกลงไว้ (${tooWide.join(' · ')}) — ` +

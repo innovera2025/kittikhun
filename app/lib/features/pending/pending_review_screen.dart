@@ -18,11 +18,12 @@ import '../../state/app_state.dart';
 //   Future<List<RejectedRow>> rejectedRows()      // outbox status = failed_terminal
 //   Future<void> discardRejected(String id)       // ลบทิ้งถาวรตาม outbox id
 //
-//   RejectedRow (อ่านที่ `_entryFrom` เท่านั้น — จุดเดียวที่ผูกกับชื่อฟิลด์):
+//   RejectedRow (อ่านที่ `entryFrom` เท่านั้น — จุดเดียวที่ผูกกับชื่อฟิลด์):
 //   id (String, = outbox UUIDv7) · sku (String) · countedQty (num?)
 //   countedAt (DateTime?) · code (String?)
+//   lines (List<RejectedLine>: sku · name? · unit? · countedQty?) — เอกสารทั้งใบ
 //
-// ถ้าชื่อคลาส/ฟิลด์ฝั่ง local_db ต่างจากนี้ ให้แก้ที่ `_entryFrom` จุดเดียว
+// ถ้าชื่อคลาส/ฟิลด์ฝั่ง local_db ต่างจากนี้ ให้แก้ที่ `entryFrom` จุดเดียว
 // ════════════════════════════════════════════════════════════════════════
 
 /// จำนวนที่นับได้ คั่นหลักพันแบบเดียวกับจอนับ (`1,240`)
@@ -40,6 +41,12 @@ const double _spinnerSize = 22;
 /// ความหนาเส้นวงโหลด
 const double _spinnerStroke = 2;
 
+/// จำนวนบรรทัดสูงสุดที่กางให้เห็นในการ์ดเอกสาร (ใบหนึ่งมีได้ถึง 200 บรรทัด)
+///
+/// ที่เหลือสรุปเป็น 'และอีก n รายการ' — คนต้องเห็นว่ากำลังจะทิ้งอะไรและกี่รายการ
+/// โดยไม่ต้องเลื่อนผ่านการ์ดยาว 200 บรรทัด
+const int _maxLinesShown = 12;
+
 /// รายการค้างตรวจ 1 รายการ — ผลการนับที่ backend ปฏิเสธตอนซิงค์
 ///
 /// ⚠️ `countedQty` เป็น null ได้ = ไม่ทราบจำนวน — **ห้ามแปลงเป็น 0**
@@ -54,6 +61,7 @@ class PendingReviewEntry {
     required this.unit,
     required this.countedAt,
     required this.code,
+    this.lines = const <PendingReviewLine>[],
   });
 
   /// outbox id (UUIDv7) — คีย์ที่ใช้กับ `discardRejected`
@@ -82,7 +90,43 @@ class PendingReviewEntry {
     _ => 'ส่งไม่สำเร็จ',
   };
 
+  /// บรรทัดของเอกสารนับทั้งใบ — ว่าง = รายการเดี่ยว (ผลนับ 1 บรรทัด)
+  ///
+  /// ⚠️ ทิ้งการ์ดใบเดียว = ทิ้งผลนับ [lineCount] บรรทัดพร้อมกัน จอต้องบอกให้ชัด
+  final List<PendingReviewLine> lines;
+
+  /// true = การ์ดนี้คือเอกสารนับทั้งใบ
+  bool get isDocument => lines.isNotEmpty;
+
+  /// จำนวนรายการที่จะหายไปถ้ากดทิ้ง (รายการเดี่ยว = 1)
+  int get lineCount => lines.isEmpty ? 1 : lines.length;
+
   /// จำนวนที่แสดง — '—' เมื่อไม่ทราบจำนวน (ไม่ใช่ '0')
+  String get qtyLabel {
+    final qty = countedQty;
+    return qty == null ? '—' : _qtyFormat.format(qty);
+  }
+}
+
+/// 1 บรรทัดในเอกสารนับที่ถูกปฏิเสธ
+///
+/// ⚠️ `countedQty` เป็น null ได้ = ไม่ทราบจำนวน — **ห้ามแปลงเป็น 0**
+@immutable
+class PendingReviewLine {
+  const PendingReviewLine({
+    required this.sku,
+    required this.name,
+    required this.countedQty,
+    required this.unit,
+  });
+
+  final String sku;
+
+  /// ชื่อสินค้าที่บันทึกไว้ตอนคีย์ — ไม่มีก็แสดง sku แทน
+  final String name;
+  final num? countedQty;
+  final String? unit;
+
   String get qtyLabel {
     final qty = countedQty;
     return qty == null ? '—' : _qtyFormat.format(qty);
@@ -99,16 +143,22 @@ final pendingReviewProvider = FutureProvider<List<PendingReviewEntry>>((
   final db = ref.watch(localDbProvider);
   final rows = await db.rejectedForReview();
   return [
-    // หาชื่อ/หน่วยจาก replica จริง — `itemByBarcode` จับกับ sku ตรง ๆ ได้ด้วย
-    for (final row in rows) _entryFrom(row, await db.itemByBarcode(row.sku)),
+    for (final row in rows)
+      // เอกสารทั้งใบพก ชื่อ/หน่วย มากับ payload อยู่แล้ว (และไม่มี sku ระดับบนสุด
+      // ให้ค้น) — ค้น replica เฉพาะรายการเดี่ยว
+      entryFrom(row, row.isDocument ? null : await db.itemByBarcode(row.sku)),
   ];
 });
 
 /// จุดเดียวที่ผูกกับชื่อฟิลด์ของ `RejectedRow`
 ///
+/// เปิดให้เทสต์เรียกได้ (`@visibleForTesting`) เพราะ [pendingReviewProvider] คืน
+/// ลิสต์ว่างในโหมดไม่มี backend — เทสต์จอจึงต้องประกอบ entry ผ่านเส้นทางจริงเส้นนี้
+///
 /// ฟิลด์จำนวน/เวลา/เหตุผลรับเข้าเป็น nullable ทั้งหมด (ฝั่ง local_db ประกาศเป็น
 /// non-nullable ก็ยังคอมไพล์ผ่าน) — จำนวนที่เป็น null จะไม่ถูกแปลงเป็น 0
-PendingReviewEntry _entryFrom(RejectedRow row, Item? item) {
+@visibleForTesting
+PendingReviewEntry entryFrom(RejectedRow row, Item? item) {
   return PendingReviewEntry(
     id: row.id,
     sku: row.sku,
@@ -117,6 +167,15 @@ PendingReviewEntry _entryFrom(RejectedRow row, Item? item) {
     unit: item?.unit,
     countedAt: row.countedAt,
     code: row.code,
+    lines: <PendingReviewLine>[
+      for (final line in row.lines)
+        PendingReviewLine(
+          sku: line.sku,
+          name: line.name ?? line.sku,
+          countedQty: line.countedQty,
+          unit: line.unit,
+        ),
+    ],
   );
 }
 
@@ -207,7 +266,10 @@ class PendingReviewScreen extends ConsumerWidget {
               padding: const EdgeInsets.symmetric(
                 horizontal: TclTokens.gutterTab,
               ),
-              child: _SummaryCard(count: entries.length),
+              child: _SummaryCard(
+                // นับ "รายการ" จริง ไม่ใช่จำนวนการ์ด — เอกสาร 1 ใบมีได้ถึง 200 บรรทัด
+                count: entries.fold<int>(0, (sum, e) => sum + e.lineCount),
+              ),
             ),
             Expanded(
               child: ListView.separated(
@@ -266,6 +328,9 @@ class _SummaryCard extends StatelessWidget {
 }
 
 /// การ์ด 1 รายการค้างตรวจ — sku/เวลา · ชื่อ · จำนวนที่นับได้ · เหตุผล · ปุ่มทิ้ง
+///
+/// เอกสารทั้งใบ (`count_doc`) กางรายการจริงให้เห็น: ปุ่มทิ้งลบผลนับได้ถึง 200 บรรทัด
+/// ในสองแตะ — ห้ามให้ผู้ใช้กดโดยไม่รู้ว่ากำลังจะทิ้งอะไรและกี่รายการ
 class _PendingCard extends StatelessWidget {
   const _PendingCard({super.key, required this.entry, required this.onDiscard});
 
@@ -275,7 +340,6 @@ class _PendingCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final timeLabel = _countedAtLabel(entry.countedAt);
-    final unit = entry.unit;
 
     return GradientCard(
       gradient: TclTokens.listCardBg,
@@ -286,57 +350,10 @@ class _PendingCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Wrap ไม่ใช่ Row: ที่จอ 360px + text scale 1.3 เวลาที่นับ
-                    // ต้องตกบรรทัดใหม่ได้ ห้ามตัดทิ้ง (sku และเวลาเป็นหลักฐานงาน)
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 2,
-                      crossAxisAlignment: WrapCrossAlignment.center,
-                      children: [
-                        Text(entry.sku, style: TclTokens.skuLine()),
-                        // เวลาแยก Text: skuLine() มี letterSpacing ซึ่งทำ
-                        // shaping ของ 'วันนี้/เมื่อวาน' พัง (ดูหมายเหตุใน token)
-                        if (timeLabel != null)
-                          Text(timeLabel, style: TclTokens.meta()),
-                      ],
-                    ),
-                    const SizedBox(height: 2),
-                    Text(entry.name, style: TclTokens.itemName()),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 12),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Text('นับได้', style: TclTokens.tiny()),
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.baseline,
-                    textBaseline: TextBaseline.alphabetic,
-                    children: [
-                      Text(
-                        entry.qtyLabel,
-                        style: TclTokens.statValue(
-                          TclTokens.tBrightest,
-                        ),
-                      ),
-                      if (unit != null && unit.isNotEmpty) ...[
-                        const SizedBox(width: 4),
-                        Text(unit, style: TclTokens.tiny()),
-                      ],
-                    ],
-                  ),
-                ],
-              ),
-            ],
-          ),
+          if (entry.isDocument)
+            ..._documentHead(timeLabel)
+          else
+            _singleHead(timeLabel),
           const SizedBox(height: 12),
           Align(
             alignment: Alignment.centerLeft,
@@ -349,11 +366,132 @@ class _PendingCard extends StatelessWidget {
           const SizedBox(height: 12),
           Align(
             alignment: Alignment.centerRight,
-            child: _DiscardButton(onConfirm: onDiscard),
+            child: _DiscardButton(
+              onConfirm: onDiscard,
+              // ทิ้งแล้วกู้ไม่ได้ → ปุ่มต้องบอกจำนวนที่จะหายไปตั้งแต่แตะแรก
+              label: entry.isDocument
+                  ? 'ทิ้งทั้งใบ · ${entry.lineCount} รายการ'
+                  : 'ทิ้งรายการนี้',
+              confirmLabel: entry.isDocument
+                  ? 'ยืนยันทิ้ง ${entry.lineCount} รายการ?'
+                  : 'ยืนยันทิ้ง?',
+            ),
           ),
         ],
       ),
     );
+  }
+
+  /// หัวการ์ดของผลนับบรรทัดเดียว (`count_line`) — รูปเดิมของจอนี้
+  Widget _singleHead(String? timeLabel) {
+    final unit = entry.unit;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Wrap ไม่ใช่ Row: ที่จอ 360px + text scale 1.3 เวลาที่นับ
+              // ต้องตกบรรทัดใหม่ได้ ห้ามตัดทิ้ง (sku และเวลาเป็นหลักฐานงาน)
+              Wrap(
+                spacing: 8,
+                runSpacing: 2,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  Text(entry.sku, style: TclTokens.skuLine()),
+                  // เวลาแยก Text: skuLine() มี letterSpacing ซึ่งทำ
+                  // shaping ของ 'วันนี้/เมื่อวาน' พัง (ดูหมายเหตุใน token)
+                  if (timeLabel != null)
+                    Text(timeLabel, style: TclTokens.meta()),
+                ],
+              ),
+              const SizedBox(height: 2),
+              Text(entry.name, style: TclTokens.itemName()),
+            ],
+          ),
+        ),
+        const SizedBox(width: 12),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Text('นับได้', style: TclTokens.tiny()),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.baseline,
+              textBaseline: TextBaseline.alphabetic,
+              children: [
+                Text(
+                  entry.qtyLabel,
+                  style: TclTokens.statValue(
+                    TclTokens.tBrightest,
+                  ),
+                ),
+                if (unit != null && unit.isNotEmpty) ...[
+                  const SizedBox(width: 4),
+                  Text(unit, style: TclTokens.tiny()),
+                ],
+              ],
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  /// หัวการ์ดของเอกสารทั้งใบ — จำนวนบรรทัด + รายการจริง (กางไม่เกิน [_maxLinesShown])
+  List<Widget> _documentHead(String? timeLabel) {
+    final shown = entry.lines.take(_maxLinesShown).toList(growable: false);
+    final hidden = entry.lines.length - shown.length;
+    return <Widget>[
+      Wrap(
+        spacing: 8,
+        runSpacing: 2,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          Text(
+            'เอกสารนับ · ${entry.lineCount} รายการ',
+            style: TclTokens.itemName(),
+          ),
+          if (timeLabel != null) Text(timeLabel, style: TclTokens.meta()),
+        ],
+      ),
+      for (final line in shown)
+        Padding(
+          padding: const EdgeInsets.only(top: 8),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(line.sku, style: TclTokens.skuLine()),
+                    Text(line.name, style: TclTokens.body13()),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.baseline,
+                textBaseline: TextBaseline.alphabetic,
+                children: [
+                  // '—' = ไม่ทราบจำนวน (ไม่ใช่ 0)
+                  Text(line.qtyLabel, style: TclTokens.body15()),
+                  if (line.unit case final String u when u.isNotEmpty) ...[
+                    const SizedBox(width: 4),
+                    Text(u, style: TclTokens.tiny()),
+                  ],
+                ],
+              ),
+            ],
+          ),
+        ),
+      if (hidden > 0)
+        Padding(
+          padding: const EdgeInsets.only(top: 8),
+          child: Text('และอีก $hidden รายการ', style: TclTokens.caption()),
+        ),
+    ];
   }
 }
 
@@ -362,9 +500,19 @@ class _PendingCard extends StatelessWidget {
 /// ทิ้งแล้วกู้ไม่ได้ (จำนวนที่นับหายถาวร) จึงต้องมีจังหวะยืนยัน — ใช้ 2 จังหวะ
 /// แทน dialog เพื่อไม่ให้ทับกับ toast ของ shell (กติกาเดียวกับ sheet ใน §2.7)
 class _DiscardButton extends StatefulWidget {
-  const _DiscardButton({required this.onConfirm});
+  const _DiscardButton({
+    required this.onConfirm,
+    this.label = 'ทิ้งรายการนี้',
+    this.confirmLabel = 'ยืนยันทิ้ง?',
+  });
 
   final Future<void> Function() onConfirm;
+
+  /// ข้อความจังหวะแรก — ต้องบอกขอบเขตของสิ่งที่จะหาย (ทั้งใบ = กี่รายการ)
+  final String label;
+
+  /// ข้อความจังหวะยืนยัน
+  final String confirmLabel;
 
   @override
   State<_DiscardButton> createState() => _DiscardButtonState();
@@ -408,7 +556,7 @@ class _DiscardButtonState extends State<_DiscardButton> {
 
   @override
   Widget build(BuildContext context) => SecondaryButton(
-    label: _armed ? 'ยืนยันทิ้ง?' : 'ทิ้งรายการนี้',
+    label: _armed ? widget.confirmLabel : widget.label,
     minWidth: _discardMinWidth,
     onPressed: _busy ? null : _handleTap,
   );

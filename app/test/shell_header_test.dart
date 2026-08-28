@@ -38,27 +38,27 @@ void main() {
       expect(headForTest(state).$1, 'คลัง WHRM');
     });
 
-    test('แท็บนับสต็อก — มีรอบเปิดอยู่ ใช้เลขเอกสารจริง', () {
+    // แท็บที่ 3 เปลี่ยนจาก 'นับสต็อก' (เส้นทางรอบนับ) เป็น 'รอส่ง' (เอกสารแบบไม่มีรอบ)
+    // → หัวจอต้องไม่พูดถึงรอบนับอีกต่อไป แต่ยังต้องบอกคลังเหมือนแท็บอื่น
+    test('⭐ แท็บรอส่ง — บอกคลังจริง ไม่ใช่เลขรอบ', () {
       final state = AppState(
         signedIn: true,
         tab: AppTab.count,
+        warehouseCode: 'WHFG',
         session: session(voucherNo: 'CC-2609'),
       );
-      expect(headForTest(state).$1, 'รอบตรวจนับ CC-2609');
+      expect(headForTest(state).$2, 'รอส่งเข้า ERP');
+      expect(headForTest(state).$1, 'คลัง WHFG');
+      expect(headForTest(state).$1, isNot(contains('CC-2609')));
     });
 
-    test('เลขเอกสารว่าง → ใช้ id ของรอบซึ่งเป็นคีย์จริง', () {
-      final state = AppState(
+    test('⭐ แท็บรอส่ง — ไม่มีรอบเปิดอยู่ ห้ามขึ้นเลขรอบตัวอย่าง', () {
+      const state = AppState(
         signedIn: true,
         tab: AppTab.count,
-        session: session(voucherNo: '   '),
+        warehouseCode: 'WHFG',
       );
-      expect(headForTest(state).$1, contains('CS-20260824T075509-8d76'));
-    });
-
-    test('⭐ ไม่มีรอบเปิดอยู่ → ห้ามขึ้นเลขรอบตัวอย่างให้เข้าใจผิดว่ามีรอบ', () {
-      const state = AppState(signedIn: true, tab: AppTab.count);
-      expect(headForTest(state).$1, 'ยังไม่เปิดรอบนับ');
+      expect(headForTest(state).$1, 'คลัง WHFG');
       expect(headForTest(state).$1, isNot(contains(Fixtures.sessionVoucherNo)));
     });
 

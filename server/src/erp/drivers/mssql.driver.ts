@@ -357,6 +357,8 @@ interface MssqlDriverConfig {
   readonly itemsTable: string;
   readonly itemsSqlFile?: string;
   readonly warehouseCode: string;
+  /** 🚨 ERP_UNSAFE_ALLOW_PRIVILEGED_ACCOUNT — ยอมให้ login เขียนได้ (sa) โดยไม่หยุด boot */
+  readonly allowPrivilegedAccount: boolean;
 }
 
 function readDriverConfig(cfg: ConfigService<AppConfig, true>): MssqlDriverConfig {
@@ -401,6 +403,8 @@ function readDriverConfig(cfg: ConfigService<AppConfig, true>): MssqlDriverConfi
     itemsTable: env.ERP_SQL_ITEMS_VIEW ?? DEFAULT_ITEMS_TABLE,
     itemsSqlFile: env.ERP_SQL_ITEMS_SQL_FILE,
     warehouseCode: env.WAREHOUSE_CODE,
+    allowPrivilegedAccount:
+      cfg.get('ERP_UNSAFE_ALLOW_PRIVILEGED_ACCOUNT', { infer: true }) === true,
   };
 }
 
@@ -602,7 +606,15 @@ export class MssqlDriver extends BaseErpDriver {
       .filter(([, value]) => value === 1)
       .map(([label]) => label);
 
-    if (granted.length > 0) {
+    if (granted.length > 0 && this.sqlCfg.allowPrivilegedAccount) {
+      // 🚨 โหมดทดสอบ (ERP_UNSAFE_ALLOW_PRIVILEGED_ACCOUNT=true) — ไม่หยุด boot
+      //    แต่ต้องดังพอที่จะไม่มีใครเผลอปล่อยค่านี้ไว้บน production
+      logger.warn(
+        `🚨 โหมดทดสอบ: login ERP_SQL_USER="${this.sqlCfg.user}" **เขียน ${this.sqlCfg.database} ได้** ` +
+          `(${granted.join(' · ')}) — ปกติต้องหยุด boot แต่ ERP_UNSAFE_ALLOW_PRIVILEGED_ACCOUNT=true ` +
+          'จึงปล่อยผ่าน · ห้ามใช้ค่านี้บน production เด็ดขาด',
+      );
+    } else if (granted.length > 0) {
       throw new MssqlDriverError(
         'ERP_WRITE_ALLOWED',
         `🚨 ปฏิเสธการ start: login ERP_SQL_USER="${this.sqlCfg.user}" **เขียนฐานข้อมูล ERP ` +

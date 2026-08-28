@@ -17,6 +17,9 @@
 ///   — **ห้าม mark rejected** เพราะไม่ใช่ความผิดของข้อมูลในคิว
 /// - ห้ามแปลง null → 0 ในฟิลด์ยอด: payload ที่อ่าน `countedQty` ไม่ได้ถือว่า
 ///   malformed (เข้า pending-review) ไม่ใช่ "นับได้ 0"
+/// - **เอกสารนับ (`count_doc`) ยิงทีละใบ 1 request เสมอ** — ห้ามรวมหลายใบ ห้ามแตกใบ
+///   · 409 `SYSTEM_QTY_DRIFT` ไม่ใช่ terminal: server rollback ทั้งใบแล้ว จึงคืนบรรทัด
+///   กลับเป็น draft พร้อมยอดระบบใหม่ให้คนยืนยันอีกรอบด้วย `documentId` เดิม
 /// - ⚠️ ห้าม log บาร์โค้ด / ผลนับ / deviceId / token (เครื่องคลังใช้ร่วมกันหลายกะ)
 ///
 /// **สัญญาที่ไฟล์นี้ใช้จาก `local_db.dart`** (ตรงตามสเปคของชั้น LocalDb):
@@ -46,6 +49,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/api_client.dart';
 import '../data/stock_repository.dart';
+import '../state/app_state.dart';
 import 'local_db.dart';
 
 // ════════════════════════════════════════════════════════════════════
@@ -127,6 +131,8 @@ class SyncEngine with WidgetsBindingObserver {
     required this.countRepository,
     required this.syncRepository,
     Connectivity? connectivity,
+    this.onDraftsRestored,
+    this.onDocumentSubmitted,
   }) : _connectivity = connectivity ?? Connectivity();
 
   final LocalDb localDb;
@@ -135,9 +141,26 @@ class SyncEngine with WidgetsBindingObserver {
   final SyncRepository syncRepository;
   final Connectivity _connectivity;
 
+  /// เรียกเมื่อบรรทัดของเอกสารถูกคืนกลับเป็น draft (409 `SYSTEM_QTY_DRIFT`)
+  ///
+  /// ชั้น state ต้องอ่าน `count_drafts` ใหม่ ไม่งั้นแถบ 'คีย์แล้วยังไม่ส่ง'
+  /// กับจอ 'รอส่ง' จะยังว่างทั้งที่งานกลับมาอยู่ในเครื่องแล้ว
+  final void Function()? onDraftsRestored;
+
+  /// เรียกเมื่อเอกสารนับ 1 ใบถูกบันทึกฝั่ง server สำเร็จ (200) — [message] คือ
+  /// ข้อความไทยพร้อมโชว์ (`CountDocumentErp.toastTh`)
+  ///
+  /// ⚠️ การส่งเอกสารเกิดใน background: ถ้าไม่ส่งต่อออกไป **ไม่มีใครได้เห็น**
+  /// `erp.status` เลย ทั้งที่ทั้งเส้นทางนี้มีขึ้นเพื่อให้พนักงานรู้ว่า "เข้า ERP แล้วหรือยัง"
+  /// · ข้อความแยก "บันทึกผลนับแล้ว" (สำเร็จเสมอ) ออกจาก "เข้า ERP แล้ว" (ตาม status)
+  final void Function(String message)? onDocumentSubmitted;
+
   // ── ชนิดงานในคิว (ตรงกับที่ฝั่ง enqueue เขียนลง outbox.type) ──
   static const String typeCountLine = 'count_line';
   static const String typeScanEvent = 'scan_event';
+
+  /// เอกสารนับแบบไม่มีรอบทั้งใบ — **1 แถว = 1 request** ห้ามรวม/ห้ามแตก
+  static const String typeCountDoc = 'count_doc';
 
   // ── code ที่ไฟล์นี้ตั้งเองตอน mark rejected ──
   /// payload ในคิวอ่านไม่ได้/ไม่ครบ — เป็นบั๊กฝั่งเรา แต่ต้องให้คนเห็น ไม่ใช่ลบทิ้ง
@@ -148,6 +171,18 @@ class SyncEngine with WidgetsBindingObserver {
 
   /// backend ตอบ rejected แต่ไม่บอก code
   static const String codeRejectedUnknown = 'REJECTED';
+
+  /// HTTP status ที่ยิงซ้ำแล้วได้ผลเหมือนเดิม → terminal (เข้าจอ pending-review)
+  ///
+  /// 401 (session หมด) · 408 · 429 (throttle) · 5xx **ไม่อยู่ในกลุ่มนี้** — พวกนั้น
+  /// ลองใหม่แล้วผ่านได้ การ mark terminal จะทำให้เอกสารไปกองรอคนโดยไม่จำเป็น
+  static bool _isTerminalStatus(int? status) =>
+      status != null &&
+      status >= 400 &&
+      status < 500 &&
+      status != 401 &&
+      status != 408 &&
+      status != 429;
 
   /// timeout ของ probe — สั้นกว่า dio ทั้งก้อน เพราะคำถามคือ "ถึง server ไหม"
   /// ไม่ใช่ "โหลดข้อมูลเสร็จไหม" (จุดอับสัญญาณต้องรู้ผลเร็ว)
@@ -328,7 +363,9 @@ class SyncEngine with WidgetsBindingObserver {
       // จัดกลุ่มตาม (type, sessionId): submissions ยิงต่อ session · scan events ยิงรวม
       final batches = _groupBy(
         rows,
-        (row) => '${row.type} ${row.sessionId ?? ''}',
+        // \u0000 เขียนเป็น escape เสมอ — ไบต์ดิบทำให้เครื่องมือมองไฟล์นี้เป็น binary
+        // (grep/diff/file หาไม่เจอ) · ตัวคั่นยังเป็นอักขระที่ไม่มีทางอยู่ใน type/sessionId
+        (row) => '${row.type}\u0000${row.sessionId ?? ''}',
       );
 
       for (final batch in batches.values) {
@@ -441,6 +478,63 @@ class SyncEngine with WidgetsBindingObserver {
               hasMore: true,
             );
           }
+        } else if (type == typeCountDoc) {
+          // เอกสารทุกใบตกอยู่ใน batch เดียวกัน (sessionId เป็น null ทั้งหมด)
+          // → **ยิงทีละใบ** ห้ามรวมเป็น request เดียว และห้ามแตกใบเป็นหลาย request
+          for (final row in batch) {
+            final doc = _countDocument(row.payloadJson);
+            if (doc == null) {
+              await localDb.markRejectedAll(
+                [row.id],
+                code: codeMalformedPayload,
+              );
+              rejected += 1;
+              continue;
+            }
+            await localDb.markInflight([row.id]);
+            String? submitted;
+            try {
+              // 200 = เอกสารถูกบันทึกฝั่ง server ครบแล้ว (ERP จะเข้าหรือไม่เป็นคนละ
+              // เรื่องที่จอผู้ดูแลตามต่อ) → ลบออกจากคิวได้
+              final result = await countRepository.submitDocument(
+                documentId: doc.documentId,
+                lines: doc.lines,
+              );
+              await localDb.markAcked([row.id]);
+              pushed += 1;
+              // ผล `erp.status` ต้องถึงตาคน ไม่ใช่ถูกทิ้งเงียบ ๆ ใน background
+              // (แจ้งนอก try — ชั้น UI พังต้องไม่ทำให้ผลของการส่งเพี้ยน)
+              submitted = result.erp.toastTh;
+            } on ApiException catch (error) {
+              switch (await _settleDocument(row.id, error)) {
+                case _DocOutcome.restored:
+                  continue;
+                case _DocOutcome.rejected:
+                  rejected += 1;
+                  continue;
+                case _DocOutcome.retry:
+                  await localDb.markRetryAll([row.id]);
+                  return SyncOutcome(
+                    ok: false,
+                    reason: _reasonFor(error),
+                    pushed: pushed,
+                    rejected: rejected,
+                    hasMore: true,
+                  );
+              }
+            } on Object catch (_) {
+              await localDb.markRetryAll([row.id]);
+              return SyncOutcome(
+                ok: false,
+                reason: SyncOutcome.reasonUnexpected,
+                pushed: pushed,
+                rejected: rejected,
+                hasMore: true,
+              );
+            }
+            // มาถึงบรรทัดนี้ได้เฉพาะทางที่ส่งสำเร็จ (ทุก catch ข้างบน return/continue)
+            onDocumentSubmitted?.call(submitted);
+          }
         }
         // ชนิดอื่น (member_add / change_role) ยังไม่ใช่งานของเอนจินนี้:
         // ปล่อยคาสถานะ queued ไว้ — ไม่ mark อะไร = ไม่ทำงานหาย ไม่ยิง API เปล่า
@@ -464,6 +558,39 @@ class SyncEngine with WidgetsBindingObserver {
   }
 
   // ── internals ─────────────────────────────────────────────────────
+
+  /// ตัดสินชะตาเอกสาร 1 ใบที่ backend ตีกลับ
+  ///
+  /// - 409 `SYSTEM_QTY_DRIFT` → server rollback ทั้งใบแล้ว **ยังไม่มีอะไรถูกเขียน**
+  ///   → คืนบรรทัดกลับเป็น draft พร้อมยอดระบบใหม่ ให้คนดูผลต่างใหม่แล้วยืนยันอีกรอบ
+  ///   (ส่งซ้ำด้วย `documentId` เดิมเพราะ id ติดไปกับ draft แล้ว)
+  /// - 4xx อื่น (`DOCUMENT_PAYLOAD_MISMATCH` / `ITEM_NO_SYSTEM_QTY` / ...) → terminal
+  ///   **ห้ามลบ** ค้างไว้ให้จอ pending-review ตัดสิน
+  /// - นอกนั้น (session หมด · throttle · 5xx · เน็ต) → ลองใหม่ทั้งใบ
+  Future<_DocOutcome> _settleDocument(String id, ApiException error) async {
+    if (error.code == CountRepository.codeSystemQtyDrift) {
+      final drifted = CountRepository.driftedFrom(error);
+      final restored = await localDb.restoreDraftsFromDocument(
+        id,
+        actualBySku: <String, num>{
+          for (final row in drifted) row.sku: row.actual,
+        },
+      );
+      if (restored == null) {
+        // payload อ่านไม่ออก → คืนเป็น draft ไม่ได้ ต้องให้คนเห็นว่ามีงานค้าง
+        await localDb.markRejectedAll([id], code: codeMalformedPayload);
+        return _DocOutcome.rejected;
+      }
+      onDraftsRestored?.call();
+      return _DocOutcome.restored;
+    }
+    if (error.isSessionExpired) return _DocOutcome.retry;
+    if (_isTerminalStatus(error.statusCode)) {
+      await localDb.markRejectedAll([id], code: error.code);
+      return _DocOutcome.rejected;
+    }
+    return _DocOutcome.retry;
+  }
 
   /// ส่ง 1 ชุดของ session เดียว แล้ว mark ตามผลรายบรรทัด
   Future<({int pushed, int rejected})> _submitLines({
@@ -640,6 +767,57 @@ SubmitLine? _countLine(String id, int deviceSeq, Object? payload) {
   );
 }
 
+/// ผลของการจัดการเอกสาร 1 ใบที่ถูกตีกลับ
+enum _DocOutcome {
+  /// คืนเป็น draft แล้ว (งานอยู่ในเครื่อง ไม่ได้อยู่ในคิวและไม่ได้หาย)
+  restored,
+
+  /// terminal — ค้างในคิวให้จอ pending-review
+  rejected,
+
+  /// ลองใหม่ทั้งใบ
+  retry,
+}
+
+/// payload → เอกสาร 1 ใบ · คืน `null` = malformed (เข้า pending-review)
+///
+/// ⚠️ บรรทัดที่อ่าน `countedQty` / `systemQtyShown` ไม่ได้ ทำให้ **ทั้งใบ** malformed
+///    — ส่งเอกสารที่ขาดบรรทัดเข้า ERP ไม่ได้ (ลบไม่ได้ ต้องให้คนดูก่อน)
+({String documentId, List<CountDocumentLine> lines})? _countDocument(
+  Object? payload,
+) {
+  final map = _payloadMap(payload);
+  if (map == null) return null;
+  final documentId = _optString(map['documentId']);
+  final raw = map['lines'];
+  if (documentId == null || raw is! List || raw.isEmpty) return null;
+  final lines = <CountDocumentLine>[];
+  for (final entry in raw) {
+    final line = _payloadMap(entry);
+    if (line == null) return null;
+    final entryKey = _optString(line['entryKey']);
+    final sku = _optString(line['sku']);
+    final shown = _optNum(line['systemQtyShown']);
+    final counted = _optNum(line['countedQty']);
+    final countedAt = _optDate(line['countedAt']);
+    if (entryKey == null ||
+        sku == null ||
+        shown == null ||
+        counted == null ||
+        countedAt == null) {
+      return null;
+    }
+    lines.add(CountDocumentLine(
+      entryKey: entryKey,
+      sku: sku,
+      systemQtyShown: shown,
+      countedQty: counted,
+      countedAt: countedAt,
+    ));
+  }
+  return (documentId: documentId, lines: lines);
+}
+
 /// payload → [ScanEventInput] · `sku` เป็น null ได้ (บาร์โค้ดที่ยังแม็ปไม่ได้)
 ScanEventInput? _scanEvent(Object? payload) {
   final map = _payloadMap(payload);
@@ -697,6 +875,12 @@ final syncEngineProvider = Provider<SyncEngine>((ref) {
     catalogRepository: ref.watch(catalogRepositoryProvider),
     countRepository: ref.watch(countRepositoryProvider),
     syncRepository: ref.watch(syncRepositoryProvider),
+    // เอกสารถูกตีกลับเพราะยอดระบบขยับ → บรรทัดกลับมาอยู่ใน count_drafts
+    // ชั้น state ต้องอ่านใหม่ ไม่งั้นจอ 'รอส่ง' กับแถบเตือนยังว่างทั้งที่งานกลับมาแล้ว
+    onDraftsRestored: () => ref.read(appProvider.notifier).loadDrafts(),
+    // เอกสารส่งจบใน background → toast คือที่เดียวที่พนักงานเห็นว่าเข้า ERP แล้วหรือยัง
+    onDocumentSubmitted: (message) =>
+        ref.read(appProvider.notifier).flash(message),
   );
   ref.onDispose(engine.dispose);
   return engine;

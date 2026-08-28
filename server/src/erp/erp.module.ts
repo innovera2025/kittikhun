@@ -56,6 +56,7 @@ import type { AppConfig } from '../config/env.config';
       useFactory: (cfg: ConfigService<AppConfig, true>): ErpCountWriter | null => {
         if (!cfg.get('ERP_WRITEBACK_ENABLED', { infer: true })) return null;
 
+        const unsafe = cfg.get('ERP_UNSAFE_ALLOW_PRIVILEGED_ACCOUNT', { infer: true }) === true;
         const user = cfg.get('ERP_SQL_WRITE_USER', { infer: true });
         const password = cfg.get('ERP_SQL_WRITE_PASSWORD', { infer: true });
         const host = cfg.get('ERP_SQL_HOST', { infer: true });
@@ -74,6 +75,7 @@ import type { AppConfig } from '../config/env.config';
           timeoutMs: cfg.get('ERP_TIMEOUT_MS', { infer: true }),
           poolMax: cfg.get('ERP_SQL_POOL_MAX', { infer: true }),
           dtlVoucherNo: cfg.get('ERP_WRITEBACK_DTL_VOUCHERNO', { infer: true }),
+          allowPrivilegedAccount: unsafe,
         });
       },
     },

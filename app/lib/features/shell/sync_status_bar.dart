@@ -4,6 +4,8 @@
 /// 1. **ยอดที่เห็นเก่าแค่ไหน** — 'ข้อมูล ณ HH:MM' จาก `SyncStatus.dataAsOfLabel`
 ///    (= เวลาที่ดึงจาก ERP สำเร็จครั้งล่าสุด — ไม่ใช่ max ของ `erp_updated_at`)
 /// 2. **งานนับที่กรอกไปแล้วส่งขึ้นไปหรือยัง** — ความลึกของ outbox
+/// 3. **ยอดที่คีย์ไว้แต่ยังไม่ได้กดส่งเข้าเอกสาร** — จำนวนแถวใน `count_drafts`
+///    ต่างจากข้อ 2 ตรงที่ยังไม่มีใครส่งให้เลย ปิดแอปไปเฉย ๆ ก็ไม่มีอะไรเกิดขึ้น
 ///
 /// ถ้าไม่บอก พนักงานจะไม่เชื่อระบบเมื่อเลขไม่ตรงกับชั้นวาง แล้วหันไปจดกระดาษ
 ///
@@ -23,6 +25,7 @@ import '../../core/widgets/common.dart';
 import '../../data/api_client.dart';
 import '../../data/stock_repository.dart';
 import '../../local/sync_engine.dart';
+import '../../state/app_state.dart';
 
 // ════════════════════════════════════════════════════════════════════
 // เกณฑ์และขนาด
@@ -39,6 +42,9 @@ const double _dotSize = 7;
 
 /// เพดานตัวเลขบน badge — เกินกว่านี้แสดง '9+' (ที่ว่างบนไอคอนแท็บจำกัด)
 const int _badgeMax = 9;
+
+/// ระยะระหว่างเรื่องที่เตือนพร้อมกันในแถบเดียว
+const double _noticeGap = 10;
 
 // ════════════════════════════════════════════════════════════════════
 // Snapshot ของ /sync/status
@@ -87,7 +93,8 @@ bool _isStale(SyncStatus status) {
 
 /// แถบบางแนวนอนใต้ header — โผล่เฉพาะเมื่อมีอะไรต้องบอก
 ///
-/// ออฟไลน์ · มีคิวค้าง · ข้อมูลเก่ากว่า [kStaleDataAfter] · มีงานค้างตรวจ
+/// ออฟไลน์ · มีคิวค้าง · มียอดที่คีย์ค้าง · ข้อมูลเก่ากว่า [kStaleDataAfter] ·
+/// มีงานค้างตรวจ
 /// นอกนั้นซ่อนสนิท (สูง 0) เพื่อไม่เบียดพื้นที่กล้องบนจอ 360px
 ///
 /// [pendingCount] = งานที่ถูก reject ตอน sync (`failed_terminal` ใน outbox) —
@@ -104,6 +111,7 @@ class SyncStatusBar extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final offline = _isOffline(ref.watch(connStateProvider));
     final queued = _queueDepthOf(ref.watch(queueDepthProvider));
+    final drafts = ref.watch(appProvider.select((s) => s.draftCount));
     final status = ref.watch(syncStatusSnapshotProvider).value;
 
     // ป้ายอายุข้อมูล: ไม่เคย sync = ไม่มีเวลาให้อ้าง → ไม่แสดงป้าย
@@ -112,18 +120,18 @@ class SyncStatusBar extends ConsumerWidget {
     final pending = pendingCount > 0 ? pendingCount : 0;
 
     final staleNotice = asOfLabel != null && stale;
-    if (!offline && queued == 0 && !staleNotice && pending == 0) {
+    if (!offline && queued == 0 && drafts == 0 && !staleNotice && pending == 0) {
       return const SizedBox.shrink();
     }
 
-    // ออฟไลน์มาก่อนคิว: เหตุผลที่ของยังไม่ขึ้นสำคัญกว่าจำนวน
-    final messages = <String>[
-      if (offline) 'ออฟไลน์ · บันทึกไว้ในเครื่อง',
-      if (queued > 0) 'รอซิงค์ $queued รายการ',
+    // ลำดับคงที่ — เหตุผลที่ของยังไม่ขึ้น (ออฟไลน์) มาก่อนจำนวน แล้วงานที่
+    // **ยังไม่มีใครส่งให้** (draft) ต้องมาก่อนงานที่ระบบกำลังส่งเอง (คิวซิงค์)
+    // สลับลำดับเมื่อไหร่พนักงานจะเข้าใจว่าของที่คีย์ไว้กำลังถูกส่งอยู่แล้ว
+    final notices = <(String, Color)>[
+      if (offline) ('ออฟไลน์ · บันทึกไว้ในเครื่อง', TclTokens.warn),
+      if (drafts > 0) ('คีย์แล้วยังไม่ส่ง $drafts รายการ', TclTokens.warn),
+      if (queued > 0) ('รอซิงค์ $queued รายการ', TclTokens.accent),
     ];
-    final dotColor = offline
-        ? TclTokens.warn
-        : (queued > 0 ? TclTokens.accent : null);
 
     return Container(
       height: _barHeight,
@@ -136,19 +144,21 @@ class SyncStatusBar extends ConsumerWidget {
       ),
       child: Row(
         children: [
-          if (dotColor != null) ...[
-            _StatusDot(color: dotColor),
+          // แต่ละเรื่องมีจุดสีของตัวเอง — draft (warn) กับคิวซิงค์ (accent)
+          // ต้องแยกออกจากกันด้วยสี ไม่ใช่ลำดับคำอย่างเดียว
+          for (final (index, (text, color)) in notices.indexed) ...[
+            if (index > 0) const SizedBox(width: _noticeGap),
+            _StatusDot(color: color),
             const SizedBox(width: 8),
-          ],
-          if (messages.isNotEmpty)
             Flexible(
               child: Text(
-                messages.join(' · '),
+                text,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TclTokens.meta(TclTokens.tSoftAlt),
               ),
             ),
+          ],
           const Spacer(),
           if (asOfLabel != null)
             Text(

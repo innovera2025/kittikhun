@@ -15,6 +15,13 @@ import { z } from 'zod';
 import { CurrentUser, RequireFreshRole, Roles } from '../auth/auth.guards';
 import { AuthModule } from '../auth/auth.module';
 import type { AuthenticatedUser } from '../auth/auth.types';
+import {
+  CountDocumentService,
+  DOCUMENT_LIST_DEFAULT_LIMIT,
+  DOCUMENT_LIST_MAX_LIMIT,
+  type CountDocumentInfo,
+  type CountDocumentResult,
+} from './count-document.service';
 import { CountService } from './count.service';
 import {
   ErpWritebackService,
@@ -109,6 +116,22 @@ const ResolveConflictSchema = z.object({ chosenSubmission: UuidSchema });
 
 /** `?format=csv` → text/csv, ไม่ส่งมา → JSON */
 const VarianceQuerySchema = z.object({ format: z.enum(['json', 'csv']).optional() });
+
+/**
+ * ตัวกรองรายการเอกสารนับ — ค่าเริ่มต้นคือ `pending` (ยังไม่เข้า ERP) โดยตั้งใจ
+ * เพราะระหว่างที่ `ERP_WRITEBACK_ENABLED=false` ทุกใบจะค้างอยู่สถานะนี้ทั้งหมด
+ * และนั่นคือสิ่งที่ผู้ดูแลต้องเห็นก่อนอย่างอื่น
+ */
+const DocumentListQuerySchema = z.object({
+  status: z.enum(['pending', 'sent', 'all']).optional().default('pending'),
+  limit: z.coerce
+    .number()
+    .int('limit ต้องเป็นจำนวนเต็ม')
+    .min(1, 'limit ต้องมากกว่า 0')
+    .max(DOCUMENT_LIST_MAX_LIMIT, `limit ได้ไม่เกิน ${DOCUMENT_LIST_MAX_LIMIT}`)
+    .optional()
+    .default(DOCUMENT_LIST_DEFAULT_LIMIT),
+});
 
 // ---------------------------------------------------------------------------
 // helper
@@ -338,11 +361,81 @@ export class CountController {
   }
 }
 
+/**
+ * เอกสารนับแบบ "ไม่มีรอบ" — พนักงานหน้างานกดส่งเองได้ 1 ใบ/ครั้ง
+ *
+ * ต่างจาก `@Controller('count-sessions')` ข้างบนตรงที่ไม่มีการเปิด/ปิดรอบเลย:
+ * ใบหนึ่งเกิดมาปิดแล้ว (`count_sessions.kind='adhoc'`) และ **ยิงเข้า ERP ทันที**
+ * ในคำขอเดียวกัน (เจ้าของโปรเจคตัดสินแล้วว่า staff กดแล้วเข้า ERP เลย ไม่รอ admin)
+ *
+ * ⚠️ ERP ไม่มีเส้นทางลบเอกสาร — ตัวเลขที่ส่งไปแล้วต้องให้ฝ่ายบัญชีแก้ให้เท่านั้น
+ *    จอที่เรียก endpoint นี้จึงต้องมี popup ยืนยันเสมอ
+ */
+@Controller('count-documents')
+export class CountDocumentController {
+  constructor(private readonly documents: CountDocumentService) {}
+
+  /**
+   * สร้างเอกสารนับ 1 ใบ แล้วส่งเข้า ERP ต่อทันที
+   *
+   * ⚠️ **200 ไม่ใช่ 201** — ส่งซ้ำด้วย `documentId` เดิมต้องได้ 200 พร้อมใบเดิม
+   *    (คิวของเครื่องที่เน็ตหลุดจะยิงซ้ำเสมอ ต้องไม่เกิดเอกสารใบที่สอง)
+   * ⚠️ ERP ปิดอยู่/ยิงล้ม ก็ยังตอบ 200 — เอกสารถูกบันทึกลง Postgres ครบแล้ว
+   *    สถานะจริงอยู่ใน `erp.status` (`sent` / `queued` / `disabled` / `failed`)
+   *    ห้ามให้ความล้มเหลวของ ERP ทำให้ผลนับของพนักงานหาย
+   */
+  @Post()
+  @Roles('staff', 'admin')
+  @RequireFreshRole()
+  @HttpCode(200)
+  async create(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() body: unknown,
+  ): Promise<CountDocumentResult> {
+    return this.documents.create(body, user);
+  }
+
+  /**
+   * รายการเอกสารนับ — ค่าเริ่มต้น `?status=pending` = **ยังไม่เข้า ERP**
+   *
+   * ⚠️ จำเป็นมากช่วงที่ `ERP_WRITEBACK_ENABLED=false` เพราะเอกสารทุกใบจะค้างสถานะนี้
+   *    จอผู้ดูแลต้องมีป้ายถาวรบอกจำนวนใบที่ยังไม่ถึง ERP (ห้ามเป็นแค่ toast)
+   * admin เท่านั้น: ค่าที่คืนมี `lastError` ดิบจาก SQL Server
+   */
+  @Get()
+  @Roles('admin')
+  async list(@Query() query: unknown): Promise<CountDocumentInfo[]> {
+    const { status, limit } = parseOrThrow(
+      DocumentListQuerySchema,
+      query ?? {},
+      'พารามิเตอร์ไม่ถูกต้อง',
+    );
+    return this.documents.list(status, limit, true);
+  }
+
+  /**
+   * สถานะเอกสาร 1 ใบ — staff เรียกได้ (เป็นใบที่ตัวเองเพิ่งส่ง)
+   *
+   * ⚠️ **`lastError` ถูกตัดทิ้งเมื่อผู้เรียกไม่ใช่ admin** — เป็นข้อความ error ดิบของ
+   *    SQL Server ซึ่งมีชื่อ host/database ปนมาได้ (เหตุผลเดียวกับที่
+   *    `GET /count-sessions/:id/erp-writeback` จำกัดไว้เฉพาะ admin)
+   * บรรทัดผลนับของเอกสารอ่านได้ที่ `GET /count-sessions/:id/variance` ตามเดิม
+   */
+  @Get(':id')
+  @Roles('staff', 'admin')
+  async detail(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') idParam: string,
+  ): Promise<CountDocumentInfo> {
+    return this.documents.detail(idParam, user.role === 'admin');
+  }
+}
+
 /** PostgresModule เป็น @Global และ ConfigModule ตั้ง isGlobal ไว้แล้ว จึงไม่ต้อง import */
 @Module({
   imports: [AuthModule],
-  controllers: [CountController],
-  providers: [CountService, ErpWritebackService],
-  exports: [CountService, ErpWritebackService],
+  controllers: [CountController, CountDocumentController],
+  providers: [CountService, CountDocumentService, ErpWritebackService],
+  exports: [CountService, CountDocumentService, ErpWritebackService],
 })
 export class CountModule {}

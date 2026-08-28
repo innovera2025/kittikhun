@@ -7,7 +7,7 @@ import '../../data/api_client.dart';
 import '../../data/fixtures.dart';
 import '../../state/app_state.dart';
 import '../admin/admin_screen.dart';
-import '../count/count_screen.dart';
+import '../count/pending_counts_screen.dart';
 import '../pending/pending_review_screen.dart';
 import '../scan/scan_screen.dart';
 import '../search/search_screen.dart';
@@ -54,20 +54,6 @@ final showPendingProvider =
 (String, String) _headFor(AppState state) {
   final title = Fixtures.heads[state.tab]?.$2 ??
       Fixtures.heads[AppTab.scan]!.$2;
-
-  if (state.tab == AppTab.count) {
-    final session = state.session;
-    if (session == null) {
-      // ไม่มีรอบเปิดอยู่ — ห้ามโชว์เลขรอบตัวอย่างให้เข้าใจผิดว่ามีรอบ
-      return ('ยังไม่เปิดรอบนับ', title);
-    }
-    // voucherNo ซ้ำได้และอาจว่าง → fallback เป็น id ซึ่งเป็นคีย์จริง
-    final label = session.voucherNo?.trim();
-    return (
-      'รอบตรวจนับ ${label == null || label.isEmpty ? session.id : label}',
-      title,
-    );
-  }
 
   final wh = state.session?.warehouseCode ??
       state.warehouseCode ??
@@ -189,7 +175,7 @@ class AppShell extends ConsumerWidget {
   Widget _screenFor(AppTab tab) => switch (tab) {
     AppTab.scan => const ScanScreen(),
     AppTab.search => const SearchScreen(),
-    AppTab.count => const CountScreen(),
+    AppTab.count => const PendingCountsScreen(),
     AppTab.team => const TeamScreen(),
   };
 }

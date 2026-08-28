@@ -10,6 +10,9 @@
 --      → ยอดระบบไหลเข้า items_cache / count_snapshot
 --    พนักงานกรอกค่าที่นับได้ → server คำนวณส่วนต่าง → เก็บผลถาวรที่ closed_variance
 --    → หลังปิดรอบจึงส่งผลนับ (เอกสารนับ ไม่ใช่การปรับสต็อก) กลับผ่าน erp_writeback
+--    เส้นทาง "นับไม่มีรอบ" (count_sessions.kind='adhoc') ใช้ทางเดินเดียวกันทุกประการ:
+--      1 เอกสาร = 1 แถว count_sessions ที่เกิดมาปิดแล้ว → count_submissions → closed_variance
+--      → erp_writeback (PK = session_id) จึงยังเป็นด่านกันส่งซ้ำชั้นเดียวเหมือนเดิม
 --    ห้ามมีตาราง erp_post_outbox หรือคิว/ตารางเขียนกลับ ERP แบบอื่นนอกเหนือ erp_writeback
 --    (มี guard ท้ายไฟล์ ที่ allowlist ชื่อ erp_writeback ไว้อย่างชัดแจ้ง)
 --
@@ -260,7 +263,42 @@ CREATE TABLE IF NOT EXISTS count_sessions (
   )
 );
 
-COMMENT ON TABLE  count_sessions IS 'รอบนับ — เปิดจากระบบเราเอง; ผลการนับและส่วนต่างเก็บฝั่งเรา และส่งกลับ ERP ได้หลังปิดรอบผ่าน erp_writeback';
+-- DB ที่ init ไปก่อนหน้านี้ยังไม่มีคอลัมน์ kind — ต้องเพิ่มก่อน CHECK/COMMENT/INDEX
+-- ADD COLUMN ที่มี DEFAULT คงที่ ไม่ rewrite ตาราง (PG11+) → แถวเดิมทั้งหมดได้ 'session' ทันที
+ALTER TABLE count_sessions ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'session';
+
+-- ADD CONSTRAINT ไม่มี IF NOT EXISTS ใน PG16 → ห่อ DO block ดัก duplicate_object
+DO $do$ BEGIN
+  ALTER TABLE count_sessions
+    ADD CONSTRAINT count_sessions_kind_ok CHECK (kind IN ('session', 'adhoc'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $do$;
+
+-- ⚠️ ด่านสำคัญ: เอกสาร adhoc ต้อง "เกิดมาปิดแล้ว" เสมอ
+--    ux_count_sessions_open เป็น UNIQUE partial ต่อคลัง WHERE status='open'
+--    ถ้า adhoc เผลอเป็น open แม้ใบเดียว จะบล็อกการเปิดรอบนับของทั้งคลังนั้น
+--    และสองเครื่องสร้างเอกสาร adhoc พร้อมกันไม่ได้ → บังคับที่ฐานข้อมูล ไม่ใช่แค่เช็คในโค้ด
+DO $do$ BEGIN
+  ALTER TABLE count_sessions
+    ADD CONSTRAINT count_sessions_adhoc_born_closed CHECK (kind <> 'adhoc' OR status = 'closed');
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+  WHEN check_violation THEN
+    RAISE EXCEPTION 'มีแถว count_sessions ที่ kind=''adhoc'' แต่ status<>''closed'' ค้างอยู่ — ต้องแก้ด้วยมือก่อน ตรวจด้วย: SELECT id, warehouse_code, status FROM count_sessions WHERE kind = ''adhoc'' AND status <> ''closed'';';
+END $do$;
+
+-- id ห้ามมี '#' — มาร์กเกอร์ TCL#<id># ใน Remark ฝั่ง ERP ใช้ LIKE ค้นเอกสารกลับ
+-- (mssql-count-writer.ts) ถ้า id มี '#' การ reconcile จะจับข้ามเอกสาร = คืนเลขเอกสารผิดใบ
+DO $do$ BEGIN
+  ALTER TABLE count_sessions
+    ADD CONSTRAINT count_sessions_id_no_hash CHECK (id NOT LIKE '%#%');
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+  WHEN check_violation THEN
+    RAISE EXCEPTION 'มีแถว count_sessions ที่ id มี ''#'' ค้างอยู่ — reconcile ฝั่ง ERP จะจับข้ามเอกสาร ตรวจด้วย: SELECT id FROM count_sessions WHERE id LIKE ''%%#%%'';';
+END $do$;
+
+COMMENT ON TABLE  count_sessions IS 'เอกสารนับ (รอบ หรือ ชุดนับไม่มีรอบ) — สร้างจากระบบเราเอง; ผลการนับและส่วนต่างเก็บฝั่งเรา และส่งกลับ ERP ได้หลังปิดเอกสารผ่าน erp_writeback';
+COMMENT ON COLUMN count_sessions.kind IS 'session = รอบนับปกติ (เปิด→นับ→ปิด) · adhoc = ชุดนับไม่มีรอบ 1 ใบ ที่เกิดมาปิดแล้ว (บังคับด้วย count_sessions_adhoc_born_closed)';
 COMMENT ON COLUMN count_sessions.erp_transaction_no IS 'คีย์เชื่อม tbl_CountDtl; NULL ได้เมื่อเป็นรอบที่สร้างในระบบเราเอง (ไม่มีต้นทางใน ERP)';
 COMMENT ON COLUMN count_sessions.erp_voucher_no IS 'VoucherNo เช่น CNT-2608-0003 — ⚠️ ซ้ำได้ ห้ามใส่ unique constraint';
 COMMENT ON COLUMN count_sessions.erp_data_as_of IS 'อายุข้อมูล ERP ตอน freeze snapshot — แสดงในหน้านับและในรายงาน variance';
@@ -383,7 +421,7 @@ COMMENT ON COLUMN closed_variance.sku IS 'ไม่ผูก FK ไป items_cac
 -- 3.11 erp_writeback ---------------------------------------------------------
 -- สถานะการส่งผลนับกลับเข้า ERP (tbl_CountHdr / tbl_CountDtl)
 --
--- ⚠️ session_id เป็น PRIMARY KEY โดยเจตนา = หนึ่งรอบนับส่งได้ครั้งเดียวตลอดกาล
+-- ⚠️ session_id เป็น PRIMARY KEY โดยเจตนา = หนึ่งเอกสารนับ (รอบ หรือ ชุดนับไม่มีรอบ) ส่งได้ครั้งเดียวตลอดกาล
 --    ฝั่ง ERP ไม่มี unique บน VoucherNo/TransactionNo (คีย์หลักคือ Roworder+TransactionNo
 --    ซึ่ง Roworder เป็น IDENTITY) → ไม่มีด่านสุดท้ายกันเอกสารซ้ำที่ฐานข้อมูลปลายทาง
 --    ตารางนี้จึงเป็นด่านเดียวที่กันได้ ห้ามผ่อนคีย์นี้เด็ดขาด
@@ -416,7 +454,7 @@ CREATE TABLE IF NOT EXISTS erp_writeback (
 ALTER TABLE erp_writeback ADD COLUMN IF NOT EXISTS claimed_at timestamptz;
 UPDATE erp_writeback SET claimed_at = created_at WHERE claimed_at IS NULL;
 
-COMMENT ON TABLE  erp_writeback IS 'สถานะการส่งผลนับกลับ ERP — หนึ่งรอบต่อหนึ่งแถว (PK) คือกลไกกันส่งซ้ำเพียงชั้นเดียวที่มี';
+COMMENT ON TABLE  erp_writeback IS 'สถานะการส่งผลนับกลับ ERP — หนึ่งเอกสารนับ (รอบ หรือ ชุดนับไม่มีรอบ) ต่อหนึ่งแถว (PK) คือกลไกกันส่งซ้ำเพียงชั้นเดียวที่มี';
 COMMENT ON COLUMN erp_writeback.transaction_no IS 'tbl_CountHdr.TransactionNo ที่เราออกให้จาก RunningNumber.CNTTr';
 COMMENT ON COLUMN erp_writeback.voucher_no IS 'tbl_CountHdr.VoucherNo รูปแบบ CNT-YYMM-NNNN';
 COMMENT ON COLUMN erp_writeback.row_count IS 'จำนวนแถวใน tbl_CountDtl ที่ส่งจริง — นับเฉพาะรายการที่มีคนนับ (not_counted ถูกตัดออก)';
@@ -552,6 +590,40 @@ DROP INDEX IF EXISTS idx_count_sessions_open;
 CREATE UNIQUE INDEX IF NOT EXISTS ux_count_sessions_erp_txn
   ON count_sessions (erp_transaction_no) WHERE erp_transaction_no IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_count_sessions_voucher ON count_sessions (erp_voucher_no);
+
+-- เอกสารนับไม่มีรอบ (kind='adhoc') — รองรับ query 'ใบไหนยังไม่เข้า ERP' ต่อคลัง
+--   SELECT s.id FROM count_sessions s
+--     LEFT JOIN erp_writeback w ON w.session_id = s.id
+--    WHERE s.kind = 'adhoc' AND s.warehouse_code = $1 AND (w.status IS NULL OR w.status <> 'sent')
+--    ORDER BY s.opened_at DESC, s.id DESC;
+-- partial index → ไม่กินพื้นที่/เวลาเขียนของรอบนับปกติที่เป็นแถวส่วนใหญ่
+--
+-- ⚠️ คอลัมน์เรียงต้องตรงกับ ORDER BY ของ CountDocumentService.list() เป๊ะ ๆ
+--    (`ORDER BY s.opened_at DESC, s.id DESC`) ไม่งั้น planner ต้อง sort เองทุกครั้ง
+--    = จ่ายค่าเขียน index ไปโดยที่อ่านไม่ได้ใช้
+--    เลือกแก้ index ให้ตรงกับ query แทนที่จะแก้ ORDER BY เพราะ **`opened_at` คือค่าที่
+--    ถูกคืนออกไปเป็น `createdAt` ของเอกสาร** (`s.opened_at AS created_at` ใน
+--    DOCUMENT_INFO_SELECT) รายการจึงต้องเรียงด้วยคอลัมน์เดียวกับที่จอแสดง ไม่ใช่
+--    `created_at` ซึ่งเป็นเวลาที่แถวถูกเขียนลงตาราง (คนละความหมาย แม้ของ adhoc
+--    จะเท่ากันเพราะเกิดมาปิดแล้วในคำสั่งเดียว) · `id DESC` คือ tiebreaker ของ query
+--    ต้องอยู่ใน index ด้วย ไม่งั้นการเรียงยังไม่ครบและ planner ก็ยัง sort อยู่ดี
+--
+-- index เดิมสร้างไว้ที่ (warehouse_code, created_at DESC) — `CREATE INDEX IF NOT EXISTS`
+-- จะไม่แก้นิยามของ index ที่มีอยู่แล้ว จึงต้องทิ้งตัวเก่าก่อน แต่ทิ้ง **เฉพาะตอนที่นิยามยัง
+-- เป็นของเก่า** เพื่อให้ replay ซ้ำแล้วไม่ rebuild index ทุกรอบ (idempotent จริง)
+DO $do$ BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_indexes
+     WHERE schemaname = current_schema()
+       AND tablename  = 'count_sessions'
+       AND indexname  = 'idx_count_sessions_adhoc'
+       AND indexdef NOT LIKE '%opened_at%'
+  ) THEN
+    DROP INDEX idx_count_sessions_adhoc;
+  END IF;
+END $do$;
+CREATE INDEX IF NOT EXISTS idx_count_sessions_adhoc
+  ON count_sessions (warehouse_code, opened_at DESC, id DESC) WHERE kind = 'adhoc';
 
 CREATE INDEX IF NOT EXISTS idx_count_snapshot_sku ON count_snapshot (sku);
 CREATE INDEX IF NOT EXISTS idx_count_snapshot_zone ON count_snapshot (session_id, zone);

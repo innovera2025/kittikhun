@@ -287,6 +287,145 @@ class SubmitLine {
       };
 }
 
+// ── เอกสารนับแบบไม่มีรอบ (`POST /count-documents`) ────────────────────
+//
+// เอกสาร 1 ใบ = 1 request เสมอ **ห้ามตัดชุด** (ต่างจาก [CountRepository.submit]
+// ของรอบนับ) — สายขาดกลางทางแล้วจะได้เอกสารครึ่งใบเข้า ERP ซึ่งลบไม่ได้
+// ⚠️ ทุกคลาสในกลุ่มนี้ **ไม่มีและจะไม่มีฟิลด์ `diff` ฝั่งขาออก** — แอปส่งแต่
+//    `systemQtyShown` + `countedQty` ให้ server คิดเอง (จุดกลับเครื่องหมายมีจุดเดียว
+//    คือ `erpDifQty()` ฝั่ง server)
+
+/// 1 บรรทัดของเอกสารนับที่กำลังจะส่ง
+@immutable
+class CountDocumentLine {
+  const CountDocumentLine({
+    required this.entryKey,
+    required this.sku,
+    required this.systemQtyShown,
+    required this.countedQty,
+    required this.countedAt,
+  });
+
+  /// UUID ต่อบรรทัด = `idempotency_key` ฝั่ง server (คงที่ตลอดอายุของเอกสาร)
+  final String entryKey;
+  final String sku;
+
+  /// ยอดระบบที่ "จอ" แสดงตอนคนคีย์ — server เทียบกับยอดจริงเพื่อจับ drift
+  final num systemQtyShown;
+
+  /// 0 = "นับแล้วได้ศูนย์" (ของหาย) ≠ ยังไม่ได้นับ
+  final num countedQty;
+  final DateTime countedAt;
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'entryKey': entryKey,
+        'sku': sku,
+        'systemQtyShown': systemQtyShown,
+        'countedQty': countedQty,
+        'countedAt': _toIso8601Utc(countedAt),
+      };
+}
+
+/// ผลรายบรรทัดที่ server คืนกลับมา — `systemQty` คือยอดที่ **server** อ่านเอง
+@immutable
+class CountDocumentLineResult {
+  const CountDocumentLineResult({
+    required this.sku,
+    required this.systemQty,
+    required this.countedQty,
+    required this.diff,
+  });
+
+  final String sku;
+  final num systemQty;
+  final num countedQty;
+
+  /// `countedQty − systemQty` — ทิศของ "จอ" (server เป็นคนคิด ไม่ใช่แอป)
+  final num diff;
+}
+
+/// สถานะการเข้า ERP ของเอกสารใบนี้ (แนบมากับ 200)
+///
+/// ⚠️ `disabled` / `failed` **ไม่ใช่** ความล้มเหลวของการส่งผลนับ — เอกสารถูกบันทึก
+/// ฝั่ง server ครบแล้ว ผลนับของพนักงานไม่หาย กด retry จากจอผู้ดูแลได้
+@immutable
+class CountDocumentErp {
+  const CountDocumentErp({
+    required this.status,
+    this.voucherNo,
+    this.transactionNo,
+    this.message,
+  });
+
+  /// 'sent' | 'queued' | 'disabled' | 'failed'
+  final String status;
+  final String? voucherNo;
+  final num? transactionNo;
+  final String? message;
+
+  static const String statusSent = 'sent';
+  static const String statusQueued = 'queued';
+  static const String statusDisabled = 'disabled';
+  static const String statusFailed = 'failed';
+
+  bool get isSent => status == statusSent;
+
+  /// ข้อความไทยของ **สถานะ ERP เท่านั้น** — ไม่พูดถึงการบันทึกผลนับ
+  ///
+  /// ⚠️ สองเรื่องนี้ต้องแยกให้ขาด: "บันทึกผลนับแล้ว" สำเร็จเสมอเมื่อได้ 200 ·
+  /// "เข้า ERP แล้ว" จริงเฉพาะ [statusSent] · สถานะที่ไม่รู้จักไม่เดาว่าสำเร็จ
+  String get labelTh => switch (status) {
+        statusSent => voucherNo == null
+            ? 'เข้า ERP แล้ว'
+            : 'เข้า ERP แล้ว · $voucherNo',
+        statusQueued => 'รอเข้า ERP',
+        statusDisabled => 'ยังไม่ได้เปิดการส่งเข้า ERP',
+        statusFailed => 'ส่งเข้า ERP ไม่สำเร็จ',
+        _ => 'ไม่ทราบสถานะ ERP',
+      };
+
+  /// ข้อความ toast เต็มประโยคหลังส่งเอกสารสำเร็จ (200)
+  ///
+  /// ขึ้นต้นด้วย "บันทึกผลนับแล้ว" เสมอ เพราะผลนับถูกเขียนฝั่ง server ครบแล้ว
+  /// ส่วนหลัง `·` คือความจริงของ ERP ล้วน ๆ — `disabled`/`failed` จึงไม่ถูกทำให้
+  /// ดูเหมือนสำเร็จ
+  String get toastTh => 'บันทึกผลนับแล้ว · $labelTh';
+}
+
+/// ผลของ `POST /count-documents` (HTTP 200 เสมอ รวมถึงตอนส่งซ้ำใบเดิม)
+@immutable
+class CountDocumentResult {
+  const CountDocumentResult({
+    required this.documentId,
+    required this.lineCount,
+    required this.lines,
+    required this.erp,
+  });
+
+  final String documentId;
+  final int lineCount;
+  final List<CountDocumentLineResult> lines;
+  final CountDocumentErp erp;
+}
+
+/// 1 รายการที่ยอดระบบขยับหลังคนคีย์ (จาก 409 `SYSTEM_QTY_DRIFT`)
+@immutable
+class SystemQtyDrift {
+  const SystemQtyDrift({
+    required this.sku,
+    required this.shown,
+    required this.actual,
+  });
+
+  final String sku;
+
+  /// ยอดที่จอโชว์ตอนคีย์
+  final num shown;
+
+  /// ยอดจริงฝั่ง server ตอนกดส่ง
+  final num actual;
+}
+
 /// ผลรายบรรทัดจาก `POST /count-sessions/:id/submissions` (HTTP 200 เสมอ)
 ///
 /// `rejected` **ไม่ใช่** error ของ request: งานไม่หายเงียบ ๆ แต่เข้าจอ pending-review
@@ -452,6 +591,76 @@ class CountRepository {
       );
     }
     return List<SubmitResult>.unmodifiable(results);
+  }
+
+  // ── เอกสารนับแบบไม่มีรอบ ────────────────────────────────────────────
+
+  /// เพดานบรรทัดต่อเอกสาร (ตรงกับ `MAX_DOCUMENT_LINES` ฝั่ง server)
+  static const int maxDocumentLines = 200;
+
+  /// ยอดระบบขยับหลังคีย์ — คนต้องยืนยันใหม่ด้วย `documentId` เดิม
+  static const String codeSystemQtyDrift = 'SYSTEM_QTY_DRIFT';
+
+  /// `documentId` เดิมถูกใช้ไปแล้วกับข้อมูลคนละชุด — ห้ามเขียนทับผลนับเดิม
+  static const String codeDocumentPayloadMismatch = 'DOCUMENT_PAYLOAD_MISMATCH';
+
+  /// ส่งเอกสารนับ 1 ใบ — server สร้างเอกสารแล้ว **ยิงเข้า ERP ต่อในคำขอเดียวกัน**
+  ///
+  /// ⚠️ **1 ใบ = 1 request ห้ามตัดชุด** (ผู้เรียกต้องคุมไม่ให้เกิน [maxDocumentLines])
+  /// ⚠️ ส่งซ้ำด้วย [documentId] เดิม + บรรทัดชุดเดิม = ได้ใบเดิมกลับมา (200 ไม่ใช่ใบใหม่)
+  ///
+  /// [acceptSystemQtyDrift] ตั้งเป็น `true` ได้เมื่อ **คนเห็นยอดใหม่แล้วยืนยันเอง**
+  /// เท่านั้น — ค่าปริยาย `false` คือให้ server ตีกลับ 409 มาให้คนตัดสิน
+  Future<CountDocumentResult> submitDocument({
+    required String documentId,
+    required List<CountDocumentLine> lines,
+    bool acceptSystemQtyDrift = false,
+  }) async {
+    final deviceId = await store.getDeviceId();
+    final json = _asMap(
+      await api.post(
+        '/count-documents',
+        body: <String, dynamic>{
+          'documentId': documentId,
+          'deviceId': deviceId,
+          'acceptSystemQtyDrift': acceptSystemQtyDrift,
+          'lines': lines.map((l) => l.toJson()).toList(growable: false),
+        },
+        // server ทำ transaction แล้วยิง ERP ต่อแบบ synchronous ในคำขอเดียวกัน
+        // — timeout ปกติ 30 วิ สั้นกว่างานจริง (ดู ApiConfig.longWriteTimeout)
+        receiveTimeout: ApiConfig.longWriteTimeout,
+      ),
+      '/count-documents',
+    );
+    final resultLines = _mapList(
+      json['lines'],
+      '/count-documents.lines',
+      _countDocumentLineResultFromJson,
+    );
+    return CountDocumentResult(
+      documentId: _asOptString(json['documentId']) ?? documentId,
+      lineCount: _asInt(json['lineCount'], resultLines.length),
+      lines: resultLines,
+      erp: _countDocumentErpFromJson(json['erp']),
+    );
+  }
+
+  /// รายการที่ยอดระบบขยับ จาก error 409 `SYSTEM_QTY_DRIFT`
+  ///
+  /// คืนลิสต์ว่างเมื่อ error เป็นเรื่องอื่นหรืออ่าน body ไม่ได้ —
+  /// **ห้ามเดาตัวเลข** เพราะจอเอาไปโชว์ให้คนตัดสินใจต่อ
+  static List<SystemQtyDrift> driftedFrom(ApiException error) {
+    if (error.code != codeSystemQtyDrift) return const <SystemQtyDrift>[];
+    final raw = error.details?['drifted'];
+    if (raw is! List) return const <SystemQtyDrift>[];
+    return <SystemQtyDrift>[
+      for (final entry in raw)
+        if (entry is Map)
+          if (_asOptString(entry['sku']) case final String sku)
+            if (_asNum(entry['shown']) case final num shown)
+              if (_asNum(entry['actual']) case final num actual)
+                SystemQtyDrift(sku: sku, shown: shown, actual: actual),
+    ];
   }
 
   /// รายงานส่วนต่างของรอบนับ (ระหว่างรอบอ่านสด · หลังปิดรอบอ่านค่าที่ materialize แล้ว)
@@ -736,6 +945,28 @@ ConflictRow _conflictRowFromJson(Map<String, dynamic> json) => ConflictRow(
         _conflictSubmissionFromJson,
       ),
     );
+
+CountDocumentLineResult _countDocumentLineResultFromJson(
+  Map<String, dynamic> json,
+) =>
+    CountDocumentLineResult(
+      sku: _requireString(json['sku'], 'lines[].sku'),
+      systemQty: _requireNum(json['systemQty'], 'lines[].systemQty'),
+      countedQty: _requireNum(json['countedQty'], 'lines[].countedQty'),
+      diff: _requireNum(json['diff'], 'lines[].diff'),
+    );
+
+/// `erp` ที่หายไป/อ่านไม่ได้ = ไม่รู้สถานะ — **ห้ามเดาว่า `sent`**
+CountDocumentErp _countDocumentErpFromJson(Object? raw) {
+  if (raw is! Map) return const CountDocumentErp(status: '');
+  final json = raw.cast<String, dynamic>();
+  return CountDocumentErp(
+    status: _asString(json['status']).trim().toLowerCase(),
+    voucherNo: _asOptString(json['voucherNo']),
+    transactionNo: _asNum(json['transactionNo']),
+    message: _asOptString(json['message']),
+  );
+}
 
 SubmitResult _submitResultFromJson(Map<String, dynamic> json) => SubmitResult(
       idempotencyKey: _requireString(json['idempotencyKey'], 'idempotencyKey'),
