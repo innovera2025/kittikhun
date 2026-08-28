@@ -50,9 +50,9 @@ export interface ErpCountLine {
 
 /** หัวเอกสาร `tbl_CountHdr` (ไม่รวมช่องที่ ERP หรือเราออกเลขให้ตอนเขียน) */
 export interface ErpCountHeader {
-  /** `VoucherDate` — วันที่ของเอกสาร */
+  /** `VoucherDate` — วันที่ของเอกสาร · writer ตัดเวลาทิ้งเหลือเที่ยงคืนก่อนเขียนเสมอ */
   voucherDate: Date;
-  /** `CountDate` — วันที่นับจริง */
+  /** `CountDate` — วันที่นับจริง · writer ตัดเวลาทิ้งเหลือเที่ยงคืนก่อนเขียนเสมอ */
   countDate: Date;
   /** `Emp_ID` — nvarchar(20) · ของจริงใน ERP บางใบเว้นว่าง */
   empId: string | null;

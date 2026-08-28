@@ -84,6 +84,23 @@ export function round2(value: number): number {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 }
 
+/**
+ * ตัดเวลาทิ้งให้เหลือแต่วันที่ (เที่ยงคืนตามเวลาท้องถิ่นของ container)
+ *
+ * `tbl_CountHdr.VoucherDate` / `CountDate` เป็นชนิด `datetime` ก็จริง แต่เอกสารที่
+ * โมดูลนับของ ERP สร้างเองมีเวลาเป็น `00:00:00.000` ทุกใบ (ตรวจจากของจริง 8 ใบ
+ * 28 ส.ค. 2569) และรายงานฝั่ง ERP กรอง `WHERE` ด้วยวันที่ล้วน — ถ้าเราเขียนเวลา
+ * ติดไปด้วย เอกสารของเราจะหลุดจากรายงานที่เทียบวันแบบตรงตัว
+ *
+ * ⚠️ ใช้ `setHours` (เวลาท้องถิ่น) ไม่ใช่ `setUTCHours` เพราะ pool ตั้ง `useUTC:false`
+ *    ไว้โดยเจตนา — ค่าที่เขียนคือเวลานาฬิกาท้องถิ่นตรง ๆ (container ตั้ง TZ=Asia/Bangkok)
+ */
+function startOfDay(value: Date): Date {
+  const atMidnight = new Date(value.getTime());
+  atMidnight.setHours(0, 0, 0, 0);
+  return atMidnight;
+}
+
 /** ตัดสตริงตามความยาวคอลัมน์ปลายทาง — ยาวเกินแล้ว insert จะ error ทั้งเอกสาร */
 function clamp(value: string | null, max: number): string | null {
   if (value === null) return null;
@@ -373,10 +390,10 @@ VALUES(@tx, @voucher, @voucherDate, @empId, @empName,
     await new sql.Request(tx)
       .input('tx', sql.Int, transactionNo)
       .input('voucher', sql.NVarChar(20), voucherNo)
-      .input('voucherDate', sql.DateTime, header.voucherDate)
+      .input('voucherDate', sql.DateTime, startOfDay(header.voucherDate))
       .input('empId', sql.NVarChar(20), clamp(header.empId, 20))
       .input('empName', sql.NVarChar(50), clamp(header.empName, 50))
-      .input('countDate', sql.DateTime, header.countDate)
+      .input('countDate', sql.DateTime, startOfDay(header.countDate))
       .input('countNo', sql.NVarChar(2), clamp(header.countNo, 2))
       .input('countYear', sql.NVarChar(4), clamp(header.countYear, 4))
       .input('countNumber', sql.Numeric(18, 0), header.countNumber)
