@@ -701,7 +701,18 @@ class AppController extends Notifier<AppState> {
       // (ล้างทั้ง map จะลบค่าที่กรอกในจอรอบนับซึ่งคนละเส้นทางกันไปด้วย)
       final drafts = {...state.drafts}..removeWhere((sku, _) => doc.skus.contains(sku));
       final counts = {...state.counts}..removeWhere((sku, _) => doc.skus.contains(sku));
-      state = state.copyWith(drafts: drafts, counts: counts, busy: false);
+      // เอาการ์ดที่ส่งไปแล้วออกจากลิสต์ผลสแกนด้วย — งานจบแล้วไม่ต้องค้างให้สับสน
+      // ว่ายังต้องนับอยู่ไหม (บรรทัดที่เกินเพดานยังไม่ถูกส่ง จึงต้องคาไว้ตามเดิม)
+      final scans = state.scans.where((s) => !doc.skus.contains(s.sku)).toList();
+      final expandedGone =
+          state.expandedSku != null && doc.skus.contains(state.expandedSku);
+      state = state.copyWith(
+        drafts: drafts,
+        counts: counts,
+        scans: scans,
+        busy: false,
+        clearExpanded: expandedGone,
+      );
 
       // ยิงซิงค์ทันที — ไม่มีเน็ตก็ไม่เป็นไร คิวยังอยู่และ SyncEngine retry ให้
       if (ApiConfig.isConfigured) {

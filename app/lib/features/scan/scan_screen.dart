@@ -12,6 +12,7 @@ import '../../data/fixtures.dart';
 import '../../data/models.dart';
 import '../../state/app_state.dart';
 import '../count/submit_drafts.dart';
+import 'handheld_scan_buffer.dart';
 
 // ════════════════════════════════════════════════════════════════════
 // ค่าเรขาคณิตที่ถอดตรงจาก design (§2.3) — ไม่ใช่ token สี/รัศมี/เงา/ฟอนต์
@@ -128,6 +129,13 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
   /// กัน start/stop ซ้อนกัน (permission dialog ทำให้ lifecycle สลับเร็ว)
   bool _busy = false;
 
+  /// เครื่องยิงบาร์โค้ด (handheld) — ทำตัวเป็นคีย์บอร์ด ยิงแล้วพิมพ์รหัส + Enter
+  ///
+  /// รับที่ระดับจอ ไม่ใช่ผ่านช่องกรอก เพราะช่องกรอกจะเรียกคีย์บอร์ดจอขึ้นมาบัง
+  /// และผู้ใช้ต้องแตะจอทุกครั้ง — ผิดวัตถุประสงค์ของการยิงรัวทีละชิ้น
+  final FocusNode _handheldFocus = FocusNode(debugLabel: 'handheld-scan');
+  final HandheldScanBuffer _handheld = HandheldScanBuffer();
+
   @override
   void initState() {
     super.initState();
@@ -143,6 +151,7 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _handheldFocus.dispose();
     unawaited(_shutdown(_scanner));
     super.dispose();
   }
@@ -261,15 +270,35 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
           : _cameraFrame(state),
     );
 
-    return Column(
-      children: [
-        if (state.hasScans) camera else Expanded(child: camera),
-        _toolbar(state),
-        Expanded(child: _resultList(state)),
-        // ปุ่มส่งเอกสาร — ซ่อนตัวเองเมื่อยังไม่มีบรรทัดที่คีย์ (ลิสต์ได้ความสูงเต็ม)
-        const SubmitDraftsBar(),
-      ],
+    // เครื่องยิงบาร์โค้ดส่งคีย์เข้ามาที่จอตรง ๆ (ไม่ผ่านช่องกรอก) จึงห่อทั้งจอไว้
+    // `skipTraversal` กันไม่ให้โหนดนี้ไปแทรกลำดับ Tab ของช่องกรอกจำนวน
+    // และคืน `ignored` ทุกครั้งที่ยังไม่จบรหัส เพื่อให้คีย์ไหลต่อไปหาช่องกรอกได้ตามปกติ
+    return Focus(
+      focusNode: _handheldFocus,
+      autofocus: true,
+      skipTraversal: true,
+      onKeyEvent: _onHandheldKey,
+      child: Column(
+        children: [
+          if (state.hasScans) camera else Expanded(child: camera),
+          _toolbar(state),
+          Expanded(child: _resultList(state)),
+          // ปุ่มส่งเอกสาร — ซ่อนตัวเองเมื่อยังไม่มีบรรทัดที่คีย์ (ลิสต์ได้ความสูงเต็ม)
+          const SubmitDraftsBar(),
+        ],
+      ),
     );
+  }
+
+  /// คีย์จากเครื่องยิงบาร์โค้ด — จบรหัสเมื่อเจอ Enter แล้วส่งเข้าเส้นทางเดียวกับกล้อง
+  ///
+  /// ใช้ `_resolve` ตัวเดียวกับ `_onDetect` โดยตั้งใจ: สั่นก่อน แล้วค้นจาก replica
+  /// ในเครื่อง — ยิงจาก handheld กับสแกนด้วยกล้องจึงให้ผลเหมือนกันทุกอย่าง
+  KeyEventResult _onHandheldKey(FocusNode node, KeyEvent event) {
+    final code = _handheld.feed(event, now: DateTime.now());
+    if (code == null) return KeyEventResult.ignored;
+    _resolve(code);
+    return KeyEventResult.handled;
   }
 
   // ── A. กรอบกล้อง ─────────────────────────────────────────────────
