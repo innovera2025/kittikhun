@@ -85,10 +85,10 @@ Widget _host(Widget child) => ProviderScope(
 
 void main() {
   group('AdminView — ป้ายมุมมองเป็นภาษาไทยครบ', () {
-    test('3 มุมมองตามลำดับการใช้งานจริง', () {
+    test('4 มุมมองตามลำดับการใช้งานจริง', () {
       expect(
         AdminView.values.map((v) => v.label).toList(),
-        ['รอบนับ', 'ขัดแย้ง', 'ส่วนต่าง'],
+        ['รอบนับ', 'ขัดแย้ง', 'ส่วนต่าง', 'ปุ่มเครื่อง'],
       );
     });
   });

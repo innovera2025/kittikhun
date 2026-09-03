@@ -11,6 +11,13 @@ import '../data/stock_repository.dart';
 import '../local/local_db.dart';
 import '../local/sync_engine.dart';
 
+/// คนที่ลงมือนับ + คลังที่เขาสังกัด — สองคอลัมน์หลักฐานของแถว count_drafts
+///
+/// จับเป็นก้อนเดียวเพราะทั้งคู่มาจาก session เดียวกันเสมอ และต้องเดินทางไปด้วยกัน
+/// เมื่อการเขียนลงเครื่องเกิด**หลัง**ที่ session นั้นจบไปแล้ว (ดู
+/// [AppController.setScanCount])
+typedef CountActor = ({String empId, String? warehouseCode});
+
 /// สถานะทั้งแอป — พฤติกรรมทุกอย่างตรงตาม design ต้นแบบ
 ///
 /// หมายเหตุ production (ต่างจาก demo โดยเจตนา — ดู docs/design-fidelity.md §6):
@@ -48,6 +55,8 @@ class AppState {
     this.scannedItems = const {},
     this.warehouseCode,
     this.drafts = const {},
+    this.scanMode = ScanMode.handheld,
+    this.scanModeHotkey,
   });
 
   final bool signedIn;
@@ -118,6 +127,12 @@ class AppState {
   /// ทุกครั้งที่ sign-in จึงรอดการปิดแอป/สลับกะ
   final Map<String, CountDraftRow> drafts;
 
+  /// โหมดสแกนของเครื่องนี้ (R1/R2) — ค่าคงที่ handheld ไม่ต้องอ่านดิสก์
+  final ScanMode scanMode;
+
+  /// LogicalKeyboardKey.keyId ที่ผูกกับการสลับโหมด — null = ยังไม่ได้ผูก (R4)
+  final int? scanModeHotkey;
+
   // ── derived ────────────────────────────────────────────────────────
 
   /// ผู้ใช้ปัจจุบัน (fallback = คนแรกในรายชื่อ ตาม design)
@@ -126,7 +141,18 @@ class AppState {
         orElse: () => members.first,
       );
 
-  String get camStatusText => camStatusOverride ?? camStatus.text;
+  /// ข้อความบนป้ายสถานะในกรอบสแกน — ป้ายนี้มีอยู่ทั้งสองโหมด
+  ///
+  /// ⚠️ โหมดเครื่องยิงกลบ `camStatus` ด้วย 'พร้อมยิงบาร์โค้ด' ได้เฉพาะตอนที่
+  /// กล้อง**ไม่ได้ขัดข้อง** เท่านั้น (ดู [CamStatus.isFailure]) — เดิมกลบทั้งก้อน
+  /// กล้องที่สั่งปิดไม่ลงจึงเงียบสนิทในโหมดที่ไม่มีปุ่มกล้องเหลือบนจอเลย
+  /// `camOn` บอกว่าปิดแล้วสวนทางกับฮาร์ดแวร์ที่ยังยึดเซ็นเซอร์อยู่ โดยไม่มีอะไร
+  /// บอกผู้ใช้สักอย่าง
+  String get camStatusText =>
+      camStatusOverride ??
+      (scanMode == ScanMode.handheld && !camStatus.isFailure
+          ? CamStatus.handheldReady.text
+          : camStatus.text);
 
   bool get hasScans => scans.isNotEmpty;
 
@@ -175,6 +201,9 @@ class AppState {
     Map<String, Item>? scannedItems,
     String? warehouseCode,
     Map<String, CountDraftRow>? drafts,
+    ScanMode? scanMode,
+    int? scanModeHotkey,
+    bool clearScanModeHotkey = false,
   }) => AppState(
     signedIn: signedIn ?? this.signedIn,
     tab: tab ?? this.tab,
@@ -206,6 +235,9 @@ class AppState {
     scannedItems: scannedItems ?? this.scannedItems,
     warehouseCode: warehouseCode ?? this.warehouseCode,
     drafts: drafts ?? this.drafts,
+    scanMode: scanMode ?? this.scanMode,
+    scanModeHotkey:
+        clearScanModeHotkey ? null : (scanModeHotkey ?? this.scanModeHotkey),
   );
 }
 
@@ -255,7 +287,7 @@ class AppController extends Notifier<AppState> {
     }
 
     if (!ApiConfig.isConfigured) {
-      _signInWithFixtures();
+      await _signInWithFixtures();
       return;
     }
 
@@ -283,6 +315,7 @@ class AppController extends Notifier<AppState> {
       // ยอดที่กะก่อนคีย์ค้างไว้ต้องโผล่กลับมาเองทั้งบนแถบเตือนและในช่องกรอก
       // (ไม่ hydrate = พนักงานคีย์ซ้ำทั้งชุดโดยไม่รู้ว่าของเดิมยังอยู่)
       await loadDrafts();
+      final prefs = await _loadScanPrefs();
       state = state.copyWith(
         signedIn: true,
         tab: AppTab.scan,
@@ -294,6 +327,8 @@ class AppController extends Notifier<AppState> {
         loginError: false,
         busy: false,
         loginMessage: 'กรอกรหัสพนักงานและ PIN เพื่อเข้าใช้งาน',
+        scanMode: prefs.mode,
+        scanModeHotkey: prefs.hotkey,
       );
     } on ApiException catch (e) {
       state = state.copyWith(
@@ -306,7 +341,12 @@ class AppController extends Notifier<AppState> {
   }
 
   /// โหมดพัฒนา — ตรวจกับรายชื่อ fixture (ไม่มี backend)
-  void _signInWithFixtures() {
+  ///
+  /// hydrate โหมดสแกนเหมือนแขนงต่อ backend ทุกประการ — `localDbProvider`
+  /// เปิดไฟล์ sqlite จริงเสมอไม่ว่าโหมดไหน (ดู [setScanCount] ที่อ่าน db
+  /// โดยไม่มี `ApiConfig.isConfigured` guard อยู่แล้ว) จึงไม่มี "fixture mode
+  /// ที่ไม่แตะ DB" ให้ต้องกันเป็นกรณีพิเศษ
+  Future<void> _signInWithFixtures() async {
     final found =
         state.members.where((m) => m.empId == state.empId).firstOrNull;
     if (found == null) {
@@ -323,6 +363,7 @@ class AppController extends Notifier<AppState> {
       );
       return;
     }
+    final prefs = await _loadScanPrefs();
     state = state.copyWith(
       signedIn: true,
       tab: AppTab.scan,
@@ -330,6 +371,8 @@ class AppController extends Notifier<AppState> {
       pin: '',
       loginError: false,
       loginMessage: 'กรอกรหัสพนักงานและ PIN เพื่อเข้าใช้งาน',
+      scanMode: prefs.mode,
+      scanModeHotkey: prefs.hotkey,
     );
   }
 
@@ -348,6 +391,10 @@ class AppController extends Notifier<AppState> {
   /// ออกจากระบบ — reset ตาม design + เคลียร์ค่าที่กรอกของ user เดิม
   ///
   /// ⚠️ ไม่แตะคิวงานที่ยังไม่ซิงค์ (เฟสถัดไป) — งานนับต้องอยู่รอดการ sign-out
+  ///
+  /// โหมดสแกนและปุ่มที่ผูกไว้เป็น**คุณสมบัติของเครื่อง** ไม่ใช่ของผู้ใช้คนใดคนหนึ่ง
+  /// (เครื่องคลังใช้ร่วมกันหลายกะ) กะถัดไปที่ล็อกอินไม่ควรต้องตั้งโหมด/ผูกปุ่มใหม่
+  /// จึงยกเว้นไว้เหมือน `members`
   Future<void> signOut() async {
     if (ApiConfig.isConfigured) {
       // หยุดเฝ้าสัญญาณ แต่ **ห้ามลบ outbox** — งานนับที่ยังไม่ซิงค์ต้องอยู่รอด
@@ -355,7 +402,11 @@ class AppController extends Notifier<AppState> {
       // clear token ให้สำเร็จแม้ request ล้มเหลว (repository จัดการแล้ว)
       await ref.read(authRepositoryProvider).logout();
     }
-    state = AppState(members: state.members);
+    state = AppState(
+      members: state.members,
+      scanMode: state.scanMode,
+      scanModeHotkey: state.scanModeHotkey,
+    );
   }
 
   // ══════════════════════════════════════════════════════════════════
@@ -376,6 +427,55 @@ class AppController extends Notifier<AppState> {
 
   void setCamStatus(CamStatus s) =>
       state = state.copyWith(camStatus: s, clearCamOverride: true);
+
+  /// สลับโหมดสแกน — HANDHELD บังคับปิดกล้อง (R4 ต้องไม่มีทางเปิดกล้อง/ขอ
+  /// permission จากการกดพลาดของปุ่มฮาร์ดแวร์) CAMERA แค่คืนสถานะให้ตรงความจริง
+  /// โดยไม่เปิดกล้องเอง (ผู้ใช้แตะ FAB เอง)
+  void setScanMode(ScanMode mode) {
+    if (state.scanMode == mode) return;
+    state = state.copyWith(scanMode: mode);
+    if (mode == ScanMode.handheld) {
+      setCamOn(false); // เขียน camStatus ทับ (setCamOn) — ไม่เป็นไร: camStatusText
+      //                  มองข้าม `offToggled` เมื่อ scanMode == handheld อยู่แล้ว
+      //                  (สถานะ**ขัดข้อง**ที่ _reportCameraFailure เขียนทีหลัง
+      //                   ไม่ถูกมองข้าม — ดู CamStatus.isFailure)
+    } else {
+      setCamStatus(CamStatus.offInitial);
+    }
+    unawaited(_persistScanMode(mode));
+  }
+
+  Future<void> _persistScanMode(ScanMode mode) async {
+    try {
+      await ref.read(localDbProvider).setMeta(MetaKeys.scanMode, mode.name);
+    } on Object catch (e) {
+      debugPrint('TCL: บันทึกโหมดสแกนไม่สำเร็จ — $e');
+    }
+  }
+
+  /// ผูกปุ่มฮาร์ดแวร์เข้ากับการสลับโหมด — เรียกจาก admin pane เท่านั้น
+  /// (ด่านปฏิเสธ denylist/burst/character/enter อยู่ที่ผู้เรียก ไม่ใช่ที่นี่ —
+  /// ที่นี่รับผิดชอบแค่ "จำค่า" ไม่ตัดสินว่าปุ่มไหนควรผูกได้)
+  void bindScanModeHotkey(int keyId) {
+    state = state.copyWith(scanModeHotkey: keyId);
+    unawaited(_persistHotkey(keyId));
+  }
+
+  void clearScanModeHotkey() {
+    state = state.copyWith(clearScanModeHotkey: true);
+    unawaited(_persistHotkey(null));
+  }
+
+  Future<void> _persistHotkey(int? keyId) async {
+    try {
+      await ref.read(localDbProvider).setMeta(
+            MetaKeys.scanModeHotkey,
+            keyId?.toString() ?? '',
+          );
+    } on Object catch (e) {
+      debugPrint('TCL: บันทึกปุ่มสลับโหมดไม่สำเร็จ — $e');
+    }
+  }
 
   /// อ่านบาร์โค้ดจาก **replica ในเครื่อง** (ออฟไลน์ได้) + บันทึก scan_event เป็น audit
   ///
@@ -581,14 +681,34 @@ class AppController extends Notifier<AppState> {
   //    การกลับเครื่องหมายให้ ERP มีจุดเดียวคือ `erpDifQty()` ฝั่ง server
   // ══════════════════════════════════════════════════════════════════
 
+  /// ใครกำลังนับอยู่ **ตอนนี้** — จับไว้ล่วงหน้าได้ ดู [setScanCount]
+  ///
+  /// เป็น derived ล้วน ๆ ไม่มี setter: ทางเดียวที่ค่านี้เปลี่ยนคือมีคนล็อกอิน
+  /// เข้ามาใหม่ หรือ [signOut] รีเซ็ต state
+  CountActor get countActor =>
+      (empId: state.me.empId, warehouseCode: state.warehouseCode);
+
   /// กรอกยอดที่นับได้จากการ์ดผลสแกน แล้ว**เขียนทะลุลงเครื่องทันที**
   ///
   /// - `onHand == null` → ห้ามนับ (null ≠ 0) — กั้นซ้ำจากที่จอไม่แสดงช่องกรอก
   /// - viewer → ไม่เขียนอะไรเลย
   /// - ค่าว่าง = "ยังไม่ได้นับ" → ถอนบรรทัดออกจากเอกสาร
   ///   ต่างจาก '0' ที่แปลว่า "นับแล้วได้ศูนย์" (ของหาย) ซึ่งต้องเก็บเป็นแถวจริง
-  Future<void> setScanCount(Item item, String raw) async {
-    if (!state.me.role.canWrite) return;
+  ///
+  /// [actor] = คนที่ลงมือนับ **ณ เวลาที่เก็บ snapshot** ไม่ใช่ ณ เวลาที่เขียน
+  /// — มีไว้ให้เส้นทางเดียวคือการซ่อมยอดที่เครื่องยิงทำรั่ว ซึ่งวิ่งใน post-frame
+  /// callback หลังจอสแกนถูกถอดทิ้งแล้ว การ sign-out ถอดจอ **หลัง** รีเซ็ต state
+  /// ไปแล้ว ตอนซ่อมจึงไม่เหลือใครล็อกอินอยู่: `state.me` ตกไปที่ fallback
+  /// (คนแรกในรายชื่อ = แอดมิน) และ `warehouseCode` กลายเป็น null — ยอดถูกซ่อมถูก
+  /// แต่ไปเข้าชื่อคนที่ไม่ได้นับ ซึ่งเป็นหลักฐานตรวจสอบของเอกสารตรวจนับ
+  ///
+  /// null (ปกติ) = เขียนตามคนที่ล็อกอินอยู่ตอนนี้ ([countActor])
+  Future<void> setScanCount(Item item, String raw, {CountActor? actor}) async {
+    // มี [actor] = การเขียนครั้งนี้เป็นการ**ถอน**สิ่งที่เขียนไปแล้วตอนที่สิทธิ์
+    // ถูกตรวจไปรอบหนึ่งแล้ว ด่านสิทธิ์ของ "ตอนนี้" จึงไม่ใช่ด่านที่ถูกต้อง
+    // (sign-out แล้ว state.me กลายเป็นคนอื่น — ถ้าคนนั้นเป็น viewer การซ่อมจะเงียบ)
+    if (actor == null && !state.me.role.canWrite) return;
+    final scribe = actor ?? countActor;
     final onHand = item.onHand;
     if (onHand == null) return;
 
@@ -608,13 +728,13 @@ class AppController extends Notifier<AppState> {
       name: item.name,
       unit: item.unit,
       loc: item.loc,
-      warehouseCode: state.warehouseCode ?? item.warehouse ?? '',
+      warehouseCode: scribe.warehouseCode ?? item.warehouse ?? '',
       // สแนปช็อตยอด ณ เวลาที่คนเห็นจอ — server เอาไปเทียบ drift ตอนสร้างเอกสาร
       // ห้ามให้ชั้นล่างไปอ่านยอดล่าสุดเอง มิฉะนั้นการตรวจ drift ไร้ผล
       systemQtyShown: onHand,
       systemQtyAsOf: item.onHandAsOf,
       countedQty: qty,
-      enteredBy: state.me.empId,
+      enteredBy: scribe.empId,
     );
     final row = await db.draftFor(item.sku);
     if (row != null) {
@@ -648,6 +768,32 @@ class AppController extends Notifier<AppState> {
       drafts: {for (final r in rows) r.sku: r},
       counts: counts,
     );
+  }
+
+  /// อ่านโหมดสแกน + ปุ่มฮาร์ดแวร์ที่ผูกไว้จาก KvMeta — ห่อ try/catch เพราะแถวที่
+  /// เพี้ยน/รุ่นเก่ากว่าห้ามทำให้ sign-in ล้ม (ต่างจาก [setScanCount] ที่ยอมให้โยนได้
+  /// เพราะมี UI จับ error โดยตรง จุดนี้ไม่มี)
+  Future<({ScanMode mode, int? hotkey})> _loadScanPrefs() async {
+    try {
+      final db = ref.read(localDbProvider);
+      final modeRaw = await db.meta(MetaKeys.scanMode);
+      final hotkeyRaw = await db.meta(MetaKeys.scanModeHotkey);
+      return (
+        mode: _parseScanMode(modeRaw),
+        hotkey:
+            (hotkeyRaw == null || hotkeyRaw.isEmpty) ? null : int.tryParse(hotkeyRaw),
+      );
+    } on Object catch (e) {
+      debugPrint('TCL: อ่านค่าโหมดสแกนไม่สำเร็จ — ใช้ค่าเริ่มต้น handheld ($e)');
+      return (mode: ScanMode.handheld, hotkey: null);
+    }
+  }
+
+  static ScanMode _parseScanMode(String? raw) {
+    for (final m in ScanMode.values) {
+      if (m.name == raw) return m;
+    }
+    return ScanMode.handheld; // ค่าที่อ่านไม่ออก/รุ่นอนาคต → ปลอดภัยไว้ก่อนเสมอ
   }
 
   /// ค่าที่เก็บเป็น double กลับมาเป็นข้อความแบบที่คนคีย์ (19.0 → '19')

@@ -79,6 +79,13 @@ abstract final class MetaKeys {
 
   /// counter ของ [Outbox.deviceSeq] — monotonic ต่อเครื่อง
   static const String deviceSeq = 'outbox.deviceSeq';
+
+  /// โหมดสแกนปัจจุบัน (`ScanMode.name`) — R3 อยู่รอดข้ามปิด-เปิดแอป
+  static const String scanMode = 'scan.mode';
+
+  /// คีย์ฮาร์ดแวร์ที่ผูกไว้กับการสลับโหมด (`LogicalKeyboardKey.keyId` เป็นสตริง
+  /// ทศนิยม) — '' หรือไม่มีแถว = ยังไม่ได้ผูก
+  static const String scanModeHotkey = 'scan.modeHotkey';
 }
 
 // ════════════════════════════════════════════════════════════════════
