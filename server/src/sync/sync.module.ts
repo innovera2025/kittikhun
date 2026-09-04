@@ -76,9 +76,14 @@ interface UserSyncMetrics extends Record<string, number> {
   /** ในจำนวน unmapped มีกี่คนที่ยังถือ credential อยู่ (ตัวเลขที่ฟ้องว่า map ตกค่าไหนไป) */
   unmappedKeptCredential: number;
   /**
-   * แถวที่รูปแบบใช้ไม่ได้ (emp_id/login/ชื่อ/รหัสผ่าน decode เพี้ยน) หรือ login_name ซ้ำ —
-   * ทั้งซ้ำกันเองในรอบเดียว (`duplicate_login`) และซ้ำกับแถวที่ persist ไว้แล้วของ emp_id
-   * อื่น (`login_name_conflict`) ทั้งสองแบบข้ามเป็นรายแถว ห้ามล้มทั้งรอบ
+   * แถวที่รูปแบบใช้ไม่ได้ (USERID ผิดรูป / login ว่างหรือยาวเกิน / รหัสผ่าน decode เพี้ยน)
+   * หรือ login_name ซ้ำ — ทั้งซ้ำกันเองในรอบเดียว (`duplicate_login`) และซ้ำกับแถวที่
+   * persist ไว้แล้วของ emp_id อื่น (`login_name_conflict`) ทั้งสองแบบข้ามเป็นรายแถว
+   * ห้ามล้มทั้งรอบ
+   *
+   * ⚠️ **ชื่อไทยว่างไม่ได้อยู่ในรายการนี้แล้ว** — ไม่ใช่แถวเสีย แต่เป็นสภาพปกติของ ERP จริง
+   *    (ดู `screenUserRows`) แถวนั้นได้บัญชีตามปกติและถูกบันทึกเป็น anomaly
+   *    `blank_name_thai` แทน
    */
   rejected: number;
   /** credential (erp/legacy_pin) ที่ไม่ปรากฏในผล ERP รอบนี้ — กำลังนับเวลา grace */
@@ -191,7 +196,10 @@ const REVOKE_ALL_SQL = `UPDATE refresh_tokens SET revoked_at = now()
 /** กะเริ่มต้นของผู้ใช้ที่ sync มาจาก ERP — `menuuser` ไม่มีคอลัมน์กะ (สตริงเดียวกับ MembersService) */
 const DEFAULT_SHIFT = 'ยังไม่กำหนดกะ';
 
-/** `menuuser.emp_id` ต้องผ่านรูปแบบเดียวกับ CHECK `users_emp_id_fmt` ไม่งั้น INSERT ล้มทั้ง run */
+/**
+ * ตัวตนที่ ERP ส่งมา (= `menuuser.user_name` ที่ query ต้นฉบับ alias เป็น `USERID`)
+ * ต้องผ่านรูปแบบเดียวกับ CHECK `users_emp_id_fmt` ไม่งั้น INSERT ล้มทั้ง run
+ */
 const EMP_CODE_RE = /^[A-Za-z0-9._-]{1,32}$/;
 
 /** ความยาวสูงสุดของ login_name ตาม CHECK `user_credentials_login_fmt` */
@@ -260,7 +268,7 @@ function iso(value: Date | null): string | null {
  * `sync_runs.anomalies` แบบหนึ่งต่อหนึ่ง
  */
 type ScreenedRow = { row: ErpUserRow; empCode: string; login: string } & (
-  | { ok: true; nameThai: string }
+  | { ok: true; nameThai: string; nameFallback: boolean }
   | { ok: false; reason: 'rejected_row' | 'duplicate_login' }
 );
 
@@ -280,13 +288,28 @@ function screenUserRows(rows: readonly ErpUserRow[]): ScreenedRow[] {
   return rows.map((row): ScreenedRow => {
     const empCode = row.empCode.trim();
     const login = row.loginName.trim().toLowerCase();
-    const nameThai = row.nameThai.trim();
-    // emp_id อ่านไม่ออก = จับคู่กับแถวใน user_credentials ไม่ได้อยู่แล้ว (CHECK เดียวกัน)
+    const rawName = row.nameThai.trim();
+    // ── ชื่อไทยว่าง = สภาพปกติของ ERP จริง ไม่ใช่แถวเสีย ────────────────────────
+    // `Employee` มี 0 แถว ชื่อพนักงานจึงไม่เคยถูกกรอก และ `name_thai` ใน `menuuser`
+    // ก็ว่างได้ตามใจคนตั้งบัญชี แต่ `users.name` เป็น NOT NULL + CHECK
+    // `users_name_notblank` → เขียนค่าว่างลงไปไม่ได้ เหลือทางเลือกสามทาง:
+    //   ปฏิเสธทั้งแถว = คนนั้นล็อกอินไม่ได้ตลอดไปเพราะ ERP ไม่ได้กรอกช่องที่ไม่บังคับ
+    //   เขียนสตริงสมมติ ("ไม่ระบุชื่อ") = แต่งข้อมูลที่ ERP ไม่ได้พูด แล้วโชว์บนจอสมาชิก
+    //   ใช้ USERID แทน = ค่าที่มาจาก ERP จริง อ่านออก และตรงกับสิ่งที่เขาพิมพ์ตอนล็อกอิน
+    // → เลือกข้อสุดท้าย และบันทึก anomaly `blank_name_thai` ทุกครั้งที่ใช้ทางนี้
+    //   เพื่อให้ผู้ดูแลเห็นว่าชื่อบนจอเป็นค่าแทน ไม่ใช่ชื่อจริงจาก ERP
+    const nameFallback = rawName.length === 0;
+    const nameThai = nameFallback ? empCode : rawName;
+    // ตัวตนอ่านไม่ออก = จับคู่กับแถวใน user_credentials ไม่ได้อยู่แล้ว (CHECK เดียวกัน)
+    // ⚠️ สองด่านของ `login` ข้างล่าง **ยิงไม่ออกเลยกับ `DEFAULT_USERS_SQL`**: ที่นั่น
+    //    `login_name` กับ `emp_code` มาจาก `user_name` คอลัมน์เดียวกัน ผ่าน EMP_CODE_RE
+    //    แล้วก็แปลว่าไม่ว่างและยาว ≤ 32 ซึ่งต่ำกว่าเพดาน 64 เสมอ — เก็บไว้เพราะ
+    //    `ERP_SQL_USERS_SQL_FILE` ยัง override ให้สองค่านี้มาคนละคอลัมน์ได้ (ตอนนั้นด่านนี้
+    //    คือสิ่งเดียวที่กัน login ว่าง/ยาวเกิน CHECK `user_credentials_login_fmt`)
     if (
       !EMP_CODE_RE.test(empCode) ||
       login.length === 0 ||
       login.length > MAX_LOGIN_NAME_LEN ||
-      nameThai.length === 0 ||
       row.password.expose().includes(REPLACEMENT_CHAR)
     ) {
       return { ok: false, row, empCode, login, reason: 'rejected_row' };
@@ -295,7 +318,7 @@ function screenUserRows(rows: readonly ErpUserRow[]): ScreenedRow[] {
       return { ok: false, row, empCode, login, reason: 'duplicate_login' };
     }
     seenLoginNames.add(login);
-    return { ok: true, row, empCode, login, nameThai };
+    return { ok: true, row, empCode, login, nameThai, nameFallback };
   });
 }
 
@@ -645,13 +668,13 @@ export class SyncService implements OnModuleInit {
       const rowCountOk = minExpected !== undefined && rows.length >= minExpected;
 
       // ⚠️ ชุดนี้คือ "ยังอยู่ใน ERP" ไม่ใช่ "ได้บัญชีรอบนี้" — เก็บทุกแถวที่ ERP ส่งมาและ
-      //    emp_id อ่านออก ไม่ว่าจะ map ไม่ได้ / login ซ้ำ / ชื่อว่าง ก็ตาม เพราะ sweep
+      //    USERID อ่านออก ไม่ว่าจะ map ไม่ได้ หรือ login ซ้ำ ก็ตาม เพราะ sweep
       //    ตอบคำถามเดียวคือ "คนนี้หายไปจาก ERP แล้วหรือยัง" ปนคำถามอื่นเข้าไปเมื่อไร
       //    ค่า map ที่ตกไปค่าเดียวจะกลายเป็นการล้าง credential ทั้งคลังทันที
       //
       //    ประกอบให้ครบ **ก่อน** เข้าลูป (ไม่ใช่เติมทีละแถวระหว่างลูปแบบเดิม) เพราะด่าน
       //    last-admin ต่อแถวต้องรู้ตั้งแต่แถวแรกว่า admin คนไหนกำลังจะถูก sweep ลบท้ายรอบ
-      //    เงื่อนไขคัดเข้าเหมือนเดิมเป๊ะ: emp_id ที่ผ่าน EMP_CODE_RE เท่านั้น
+      //    เงื่อนไขคัดเข้าเหมือนเดิมเป๊ะ: ตัวตนจาก ERP ที่ผ่าน EMP_CODE_RE เท่านั้น
       const presentEmpIds = new Set<string>(
         rows.map((r) => r.empCode.trim()).filter((code) => EMP_CODE_RE.test(code)),
       );
@@ -691,7 +714,7 @@ export class SyncService implements OnModuleInit {
         }
         // ⚠️ แถวนี้ถูก "นับว่ายังอยู่ใน ERP" ไปแล้วตั้งแต่ตอนประกอบ presentEmpIds ข้างบน —
         //    ก่อนด่านอื่นทุกด่านโดยตั้งใจ (ตกด่านไหนหลังจากนี้ก็ยังไม่ใช่คนที่หายจาก ERP)
-        const { row, empCode, login, nameThai } = entry;
+        const { row, empCode, login, nameThai, nameFallback } = entry;
 
         const mappedRole = roleMap.get(row.userLevel);
         if (mappedRole === undefined) {
@@ -710,6 +733,11 @@ export class SyncService implements OnModuleInit {
           }
           continue;
         }
+
+        // ── ชื่อบนจอสมาชิกของคนนี้เป็นค่าแทน ไม่ใช่ชื่อจริงจาก ERP ──────────────────
+        // บันทึกหลังด่าน role map เพราะบัญชีทั้ง ERP ที่ไม่เกี่ยวกับคลัง (level ไม่ถูก map)
+        // ไม่มีวันได้ `users.name` อยู่แล้ว ชื่อว่างของเขาจึงไม่ใช่เรื่องที่ผู้ดูแลต้องเห็น
+        if (nameFallback) pushAnomaly(anomalies, { type: 'blank_name_thai', empCode });
 
         // ผลของแถวนี้ที่ต้องนับ — ขยับตัวนับจริง **หลัง** ทรานแซกชันผ่านแล้วเท่านั้น
         // (rollback = ไม่ได้เกิดขึ้นจริง ห้ามนับ) เก็บเป็นอ็อบเจ็กต์เดียวเพราะค่าถูกเขียน

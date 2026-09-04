@@ -79,9 +79,17 @@ export interface ErpUserRow {
   password: ErpSecret;
   /** `menuuser.user_level` แบบดิบ — เก็บไว้ตอบคำถาม U1 จากข้อมูลจริงได้ทุกเมื่อ */
   userLevel: string;
-  /** `menuuser.name_thai` */
+  /** `menuuser.name_thai` — **ว่างได้จริง** (ดู `screenUserRows` ที่หาค่าแทนให้) */
   nameThai: string;
-  /** `menuuser.emp_id` — anchor ของ `users.emp_id` ฝั่งเรา (ดู U3) ไม่ใช่ login handle */
+  /**
+   * ตัวตนของผู้ใช้ตามที่ ERP นิยาม = **`menuuser.user_name`** (query ต้นฉบับของเจ้าของ
+   * ระบบ alias คอลัมน์นี้ว่า `USERID` ตรง ๆ) → ลงเป็น `users.emp_id` ฝั่งเรา
+   *
+   * ⚠️ **ไม่ใช่ `menuuser.emp_id`** — คอลัมน์นั้นเป็นแค่ join key เข้า `Employee` และบน ERP
+   *    จริง `Employee` มี 0 แถว `emp_id` จึงว่างทุกแถว ใช้เป็นตัวตนไม่ได้เลย
+   * ⚠️ ด้วย query มาตรฐาน (`DEFAULT_USERS_SQL`) ค่านี้จึงเป็น **สตริงเดียวกับ `loginName`**
+   *    ต่างกันได้เฉพาะเมื่อตั้ง `ERP_SQL_USERS_SQL_FILE` ให้ดึงคนละคอลัมน์เท่านั้น
+   */
   empCode: string;
 }
 

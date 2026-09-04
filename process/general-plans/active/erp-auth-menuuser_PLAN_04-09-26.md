@@ -40,6 +40,36 @@
 | **U5** | `Employee.EmpPict` ควรใช้แสดงรูปโปรไฟล์ไหม | ไม่ใช้ — query ที่ sync ยิงจริงตัด `LEFT JOIN Employee` ทั้งก้อนทิ้ง | ไม่มี — เป็นฟีเจอร์ที่ไม่มีที่ลงในสัญญาปัจจุบันอยู่แล้ว (ไม่มีฟิลด์รูปใน `UserProfile`/`Member`) การไม่ทำจึงไม่มีต้นทุน | ปิดคำถามด้วยการไม่ทำ — บันทึกไว้เป็น future work ถ้ามีคนขอภายหลัง |
 | **U6** | พนักงานที่ถูกลบ/ปิดใช้งานใน ERP แต่มีรอบนับค้างอยู่ (ผูก FK 9+ ตาราง) ควรเกิดอะไรขึ้น | ลบเฉพาะแถว `user_credentials` (ปิดล็อกอิน) **ไม่แตะ `users` เลย** — ประวัติ/FK ทั้งหมดอยู่ครบ | ถ้าออกแบบผิดไปลบ/แก้ `users.emp_id`: ชน `ON DELETE RESTRICT` ของ `count_submissions` ทันที (schema.sql:358) sync ทั้ง run ล้ม | พิสูจน์ด้วยเทสต์ "DEACTIVATION" ในแผนเทสต์รวม — ลบ credential แล้ว query `count_submissions` ต้องยังเห็นแถวเดิม |
 
+### ⛔ U3 — วัดกับ ERP จริงแล้ว สมมติฐานผิด (แก้โค้ดแล้ว)
+
+วัดบน `43.229.134.162 / db_TCL`:
+
+- `menuuser` มี **3 แถว** · `kuser` มี 9 แถว · **`Employee` มี 0 แถว**
+- `Employee` ว่าง → `menuuser.emp_id` **ว่างทุกแถว** และ `LEFT OUTER JOIN Employee` ใน query
+  ต้นฉบับจึงไม่ match อะไรเลย
+- สมมติฐานเดิมของ U3 ("`menuuser.emp_id` คือรหัสเดียวกับ `users.emp_id`") จึงใช้ไม่ได้ —
+  ด่าน `^[A-Za-z0-9._-]{1,32}$` ปฏิเสธ **100% ของแถว** = ไม่มีใครล็อกอินได้เลยสักคน
+
+**สิ่งที่ถูกต้องตามสัญญาของ ERP:** บรรทัดแรกของ query ต้นฉบับเขียนว่า
+`SELECT user_name As USERID` — ERP นิยามตัวตนของผู้ใช้ด้วย **`user_name`** ส่วน `emp_id`
+เป็นเพียง join key เข้า `Employee` เท่านั้น
+
+**สิ่งที่แก้ไปแล้ว (ตามคำสั่ง "ทำตาม ERP ห้ามเกินคำสั่ง"):**
+
+- `DEFAULT_USERS_SQL` ดึง `emp_code` จาก `user_name` แทน `emp_id`
+  (`login_name` ก็มาจาก `user_name` เหมือนเดิม) — `LEFT JOIN Employee` ยังถูกตัดทิ้งเหมือนเดิม
+- `ErpUserRow.empCode` ระบุชัดว่าตัวตนคือ `menuuser.user_name` ไม่ใช่ `menuuser.emp_id`
+- ค่า `user_name` จริงทั้งสาม (`ADMIN` / `KRS` / `TEST`) ผ่าน `^[A-Za-z0-9._-]{1,32}$` ทุกตัว
+  → `users.emp_id` · FK ทั้งเว็บ · `user_credentials.login_name` เดินได้ตามเดิม
+- ผลข้างเคียงที่ต้องรู้: `users.emp_id` กับ `user_credentials.login_name` ตอนนี้มาจาก
+  **คอลัมน์เดียวกัน** ต่างกันแค่ตัวพิมพ์ (`login_name` ถูก `lower()` ตาม CHECK)
+- `name_thai` ที่ว่าง **ไม่ใช่แถวเสียอีกต่อไป** — เขียน `users.name` ด้วย USERID แทน
+  และบันทึก anomaly `blank_name_thai` (ปฏิเสธทั้งแถว = คนนั้นล็อกอินไม่ได้เพราะ ERP
+  ไม่ได้กรอกช่องที่ไม่บังคับ)
+
+⚠️ ขั้น F-1 (`npm run verify:erp-users`) ยังพิมพ์หัวข้อ U3 ด้วยคำว่า "menuuser.emp_id" อยู่
+ทั้งที่ตอนนี้อ่านค่ามาจาก `user_name` — อ่านผลของสคริปต์นั้นโดยรู้ตัวข้อนี้
+
 **หมายเหตุ:** ไม่มีข้อไหนใน U1-U7 บล็อก**การเขียนโค้ด**ของแผนนี้ (ทุกกลไกออกแบบให้ fail-safe ต่อคำตอบผิด)
 แต่ **U1, U3, U4/U7 บล็อก Phase 3** (การเปิดสวิตช์ `ERP_USER_SYNC_ENABLED=true` ของจริง) จนกว่าจะรัน
 `npm run verify:erp-users` (ขั้น F-1) แล้วอ่านผลด้วยตา และจนกว่าเจ้าของ ERP จะยืนยัน U4/U7 ตรง ๆ
@@ -457,7 +487,8 @@ export interface ErpUserRow {
   password: ErpSecret;  // menuuser.a_Password
   userLevel: string;    // menuuser.user_level (raw — เก็บไว้ตอบ U1)
   nameThai: string;     // menuuser.name_thai
-  empCode: string;       // menuuser.emp_id (anchor ของ users.emp_id — ดู U3)
+  empCode: string;       // menuuser.user_name — ตัวตนตาม ERP (USERID) ดู "⛔ U3" ด้านบน
+                         // (เดิมแผนเขียนว่า menuuser.emp_id — ผิด Employee ว่างทั้งตาราง)
 }
 
 export interface ErpAdapter {
@@ -484,7 +515,7 @@ private static readonly DEFAULT_USERS_SQL = `
          a_Password AS password,
          user_level AS user_level,
          name_thai  AS name_thai,
-         emp_id     AS emp_code
+         user_name  AS emp_code   -- ⛔ แผนเดิมเขียน emp_id — แก้แล้ว ดู "⛔ U3" ด้านบน
     FROM menuuser WITH (NOLOCK)
    ORDER BY user_name`;
 // ⚠️ ตัด LEFT JOIN Employee + EmpPict ทั้งก้อนตามที่ query ต้นฉบับผู้ใช้ให้มา (U5 — ดูเหตุผลในแผน)

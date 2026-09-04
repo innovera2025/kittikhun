@@ -1111,8 +1111,8 @@ describeWithDb('sync ผู้ใช้จาก ERP — วงจรจริ�
     });
 
     it('⭐ นับเฉพาะแถวที่ลูปหลักจะรับจริง — แถวที่ถูกปฏิเสธห้ามดันจำนวนจนชนเพดาน', async () => {
-      // ด่านเพดานเคยกรองแค่ "emp_id อ่านออก + map เป็น role ได้" ส่วนลูปหลักปฏิเสธ login ซ้ำ
-      // กันเองในรอบเดียว / รหัสผ่าน decode เพี้ยน / ชื่อว่างเพิ่มอีกชั้น → นับได้ 6 ทั้งที่จะ
+      // ด่านเพดานเคยกรองแค่ "ตัวตนอ่านออก + map เป็น role ได้" ส่วนลูปหลักปฏิเสธ login ซ้ำ
+      // กันเองในรอบเดียว / รหัสผ่าน decode เพี้ยน / ตัวตนผิดรูปเพิ่มอีกชั้น → นับได้ 6 ทั้งที่จะ
       // เลื่อนสิทธิ์จริงแค่ 3 แล้วการ์ดก็โยนการเลื่อนสิทธิ์ที่ถูกต้องทิ้งด้วยตัวเลขที่ไม่มีวันเกิดขึ้น
       await seedLocalAdmin();
       await seedSix();
@@ -1120,7 +1120,9 @@ describeWithDb('sync ผู้ใช้จาก ERP — วงจรจริ�
         ...SIX.slice(0, 3).map((e) =>
           erpUser(e, { userLevel: LEVEL_ADMIN, password: SEED_SECRET }),
         ),
-        erpUser('P04', { userLevel: LEVEL_ADMIN, nameThai: '' }),
+        // ⚠️ ชื่อไทยว่าง **ไม่ใช่แถวเสียแล้ว** (ERP จริงปล่อยว่างได้ — ดู `blank_name_thai`)
+        //    แถวที่ยังถูกปฏิเสธจริงในกลุ่มนี้คือ "ตัวตนผิดรูป" แทน
+        erpUser('P 4', { userLevel: LEVEL_ADMIN }),
         erpUser('P05', { userLevel: LEVEL_ADMIN, password: `พัง${REPLACEMENT_CHAR}` }),
         erpUser('P06', { userLevel: LEVEL_ADMIN, loginName: 'p01' }), // ซ้ำ P01 ในรอบเดียวกัน
       ];
@@ -1212,6 +1214,67 @@ describeWithDb('sync ผู้ใช้จาก ERP — วงจรจริ�
       expect(second.rowsTombstoned).toBe(1);
       expect(second.metrics).toMatchObject({ mapped: 2, rejected: 1, deactivated: 1 });
       expect(await credentialOf('E10')).toBeNull();
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────────────────
+  // รูปทรงของ ERP จริง (43.229.134.162 / db_TCL)
+  // `Employee` มี 0 แถว → `menuuser.emp_id` ว่างทุกแถว → ตัวตนคือ `user_name` (USERID)
+  // driver จึงส่ง user_name มาเป็นทั้ง `empCode` และ `loginName` ของแถวเดียวกัน
+  // ─────────────────────────────────────────────────────────────────────
+
+  describe('ตัวตนจาก ERP = user_name (USERID)', () => {
+    /** 3 แถวจริงของ menuuser — สะกดตามที่ ERP เก็บ (ตัวพิมพ์ใหญ่) */
+    const REAL = ['ADMIN', 'KRS', 'TEST'];
+
+    /** แถวแบบที่ driver จริงผลิต: empCode = loginName = user_name ดิบ */
+    const erpIdentityRow = (
+      userName: string,
+      over: Partial<{ userLevel: string; nameThai: string }> = {},
+    ): ErpUserRow => erpUser(userName, { loginName: userName, ...over });
+
+    it('⭐ USERID เป็นทั้ง users.emp_id และ login_name → ได้บัญชีครบทุกคน ไม่มีแถวไหนถูกปฏิเสธ', async () => {
+      // ก่อนแก้: sync ใช้ `menuuser.emp_id` เป็นตัวตน ซึ่งว่างทุกแถวบน ERP จริง →
+      // EMP_CODE_RE ปฏิเสธ 100% ของแถว = ไม่มีใครล็อกอินได้เลยสักคน
+      await seedLocalAdmin();
+      erp.users = REAL.map((u) => erpIdentityRow(u));
+
+      const res = await makeSync({ ERP_USER_MIN_EXPECTED_ROWS: 3 }).syncUsers('test');
+
+      expect(res.status).toBe('success');
+      expect(res.metrics).toMatchObject({ mapped: 3, rejected: 0 });
+      // `users.emp_id` เก็บ USERID **ตามที่ ERP สะกด** ส่วน `login_name` ถูก lower
+      // ตาม CHECK `user_credentials_login_fmt` — สองค่านี้มาจากคอลัมน์เดียวกันแต่ไม่ใช่
+      // สตริงเดียวกัน การเผลอ normalize ฝั่ง emp_id ทำให้ FK ทั้งเว็บชี้ไปคนละรหัส
+      for (const userName of REAL) {
+        expect(await userOf(userName)).not.toBeNull();
+        expect((await credentialOf(userName))?.login_name).toBe(userName.toLowerCase());
+      }
+    });
+
+    it('⭐ name_thai ว่าง → ใช้ USERID เป็นชื่อ + anomaly ไม่ใช่ปฏิเสธทั้งแถว', async () => {
+      // `users.name` เป็น NOT NULL + CHECK `users_name_notblank` → เขียนค่าว่างไม่ได้
+      // แต่ปฏิเสธทั้งแถวแปลว่าคนนั้นล็อกอินไม่ได้เลยเพราะ ERP ไม่ได้กรอกช่องที่ไม่บังคับ
+      await seedLocalAdmin();
+      erp.users = [
+        erpIdentityRow('KRS', { nameThai: '' }),
+        erpIdentityRow('TEST', { nameThai: '   ' }), // ช่องว่างล้วน = ว่างเหมือนกัน
+        erpIdentityRow('ADMIN', { nameThai: 'ผู้ดูแลระบบ' }),
+        // level ที่ไม่ได้ map ไม่มีวันได้ `users.name` → ชื่อว่างของเขาไม่ใช่เรื่องที่ต้องเตือน
+        erpIdentityRow('SALES01', { nameThai: '', userLevel: LEVEL_UNMAPPED }),
+      ];
+
+      const res = await makeSync({ ERP_USER_MIN_EXPECTED_ROWS: 4 }).syncUsers('test');
+
+      expect(res.status).toBe('success');
+      expect(res.metrics).toMatchObject({ mapped: 3, unmapped: 1, rejected: 0 });
+      expect((await userOf('KRS'))?.name).toBe('KRS');
+      expect((await userOf('TEST'))?.name).toBe('TEST');
+      expect((await userOf('ADMIN'))?.name).toBe('ผู้ดูแลระบบ');
+      // ผู้ดูแลต้องเห็นจาก sync_runs ว่าชื่อไหนเป็นค่าแทน — สองคน ไม่ใช่สามหรือสี่
+      const types = await anomalyTypes(res.runId);
+      expect(types.filter((t) => t === 'blank_name_thai')).toHaveLength(2);
+      expect(await anomalyOf(res.runId, 'blank_name_thai')).toMatchObject({ empCode: 'KRS' });
     });
   });
 

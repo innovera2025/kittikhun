@@ -469,20 +469,36 @@ OFFSET @offset ROWS FETCH NEXT @batch ROWS ONLY`;
 }
 
 /**
- * ผู้ใช้ทั้งหมดจาก `menuuser` — ตรงตาม query ต้นฉบับที่เจ้าของโปรเจคให้มา
+ * ผู้ใช้ทั้งหมดจาก `menuuser` — ตรงตาม query ต้นฉบับที่เจ้าของโปรเจคให้มา:
  *
- * ⚠️ ตัด `LEFT JOIN Employee` + `EmpPict` ทั้งก้อนทิ้ง (U5 — ไม่มีฟิลด์รูปใน UserProfile
- *    จึงไม่มีที่ลงในสัญญาปัจจุบัน การ join เพิ่มจึงเป็นภาระเปล่ากับ ERP)
+ *     SELECT user_name As USERID, a_Password, id_random, user_level As Ulevel,
+ *            name_thai, Employee.EmpPict
+ *     FROM  menuuser WITH (NOLOCK)
+ *     LEFT OUTER JOIN Employee WITH (NOLOCK) ON menuuser.emp_id = Employee.EmployeeCode
+ *     WHERE user_name = ?cUser
+ *     ORDER BY User_Name
+ *
+ * ⭐ **ตัวตนของผู้ใช้ = `user_name`** — query ต้นฉบับ alias มันเป็น `USERID` ตรง ๆ
+ *    `emp_id` เป็นเพียง join key เข้า `Employee` เท่านั้น ไม่ใช่ตัวตน → `emp_code`
+ *    (ที่ลงเป็น `users.emp_id` ฝั่งเรา) จึงดึงจาก `user_name` เหมือน `login_name`
+ *    วัดจาก ERP จริง (43.229.134.162 / db_TCL): `menuuser` 3 แถว · `Employee` **0 แถว**
+ *    → `menuuser.emp_id` ว่างทุกแถว การใช้มันเป็นตัวตนคือปฏิเสธผู้ใช้ 100%
+ *
+ * ⚠️ ตัด `LEFT JOIN Employee` + `EmpPict` ทั้งก้อนทิ้ง (U5) — และตอนนี้มีเหตุผลที่แข็งกว่าเดิม:
+ *    `Employee` ว่างทั้งตาราง join ไปก็ได้ NULL ทุกแถว ส่วน `EmpPict` ไม่มีที่ลงใน
+ *    `UserProfile` อยู่แล้ว → join เพิ่ม = ภาระเปล่ากับ ERP ล้วน ๆ
  * ⚠️ **ไม่มี WHERE กรองคลัง/แผนกเลย** — `menuuser` คือตารางบัญชีของ ERP ทั้งระบบ
  *    (บัญชี · ขาย · จัดซื้อ · superuser) เป็น known-tradeoff ที่แก้ด้วย allowlist ระดับ
  *    role map (`ERP_USER_LEVEL_ROLE_MAP`) ไม่ใช่ด้วย SQL filter เพราะ U4/U7 ยังไม่มี
  *    คอลัมน์ให้กรอง — level ที่ไม่ได้ map ไว้ = ไม่ได้บัญชีเลย
+ *    (query ต้นฉบับกรองด้วย `WHERE user_name = ?cUser` เพราะมันคือ query ตอน "ล็อกอินทีละคน"
+ *     ส่วนรอบ sync ต้องเห็นทั้งตารางเพื่อรู้ว่าใคร **หายไปแล้ว** จึงไม่มี WHERE)
  */
 export const DEFAULT_USERS_SQL = `SELECT user_name  AS login_name,
        a_Password AS password,
        user_level AS user_level,
        name_thai  AS name_thai,
-       emp_id     AS emp_code
+       user_name  AS emp_code
   FROM menuuser WITH (NOLOCK)
  ORDER BY user_name`;
 

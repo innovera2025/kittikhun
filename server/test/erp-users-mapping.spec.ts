@@ -96,4 +96,16 @@ describe('DEFAULT_USERS_SQL — query ดึงผู้ใช้ที่ใช
       expect(DEFAULT_USERS_SQL).toContain(column);
     }
   });
+
+  it('⭐ ตัวตนมาจาก user_name (USERID) ไม่ใช่ emp_id — บน ERP จริง Employee มี 0 แถว', () => {
+    // query ต้นฉบับของเจ้าของระบบ alias `user_name As USERID` = user_name คือตัวตน
+    // ส่วน `emp_id` เป็นแค่ join key เข้า `Employee` ซึ่งว่างทั้งตาราง → emp_id ว่างทุกแถว
+    // ถ้าใครเปลี่ยนบรรทัดนี้กลับไปเป็น `emp_id AS emp_code` ผู้ใช้จะถูกปฏิเสธ 100%
+    // ด้วย EMP_CODE_RE แล้วไม่มีใครล็อกอินได้เลยสักคน
+    expect(DEFAULT_USERS_SQL).toMatch(/user_name\s+AS\s+emp_code/i);
+    expect(DEFAULT_USERS_SQL).toMatch(/user_name\s+AS\s+login_name/i);
+    expect(DEFAULT_USERS_SQL).not.toMatch(/\bemp_id\b/i);
+    // และ LEFT JOIN Employee/EmpPict ต้องไม่ถูกใส่กลับมา (ได้ NULL ทุกแถว + ไม่มีที่ลง)
+    expect(DEFAULT_USERS_SQL).not.toMatch(/employee|emppict/i);
+  });
 });
