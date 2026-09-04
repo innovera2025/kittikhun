@@ -118,9 +118,14 @@ flowchart LR
 ### 4.1 PostgreSQL (server — system of record)
 
 ```sql
-users             (emp_id PK, name, pin_hash, role, shift, warehouse_code,
-                   role_version, must_change_pin, failed_attempts, throttle_until,
-                   created_at, updated_at)
+users             (emp_id PK, name, role, shift, warehouse_code,
+                   role_version, failed_attempts, throttle_until,
+                   created_at, updated_at,
+                   pin_hash·must_change_pin ← เลิกใช้แล้ว คาไว้เป็นตาข่ายย้อนกลับ ลบใน Phase 5)
+user_credentials  (login_name PK, emp_id FK UNIQUE, secret_hash argon2id, source,
+                   absent_since, secret_rotated_at, created_at, updated_at)
+                   -- credential แยกจาก users เพราะ users.emp_id ถูก FK อ้างจาก 9 ตาราง
+                   -- ลบสิทธิ์ = ลบแถวนี้ ไม่ใช่ลบคนออกจาก users
 refresh_tokens    (token_hash PK, emp_id FK, device_id, issued_at, expires_at,
                    rotated_from, revoked_at)
 devices           (device_id PK, model, app_version, last_seen_at,
@@ -169,15 +174,14 @@ kv_meta    — sync cursor (row_version), stock_as_of, config flags, clock offse
 
 | Endpoint | สิทธิ์ | หมายเหตุ |
 |---|---|---|
-| `POST /auth/login` | – | empId+PIN → access JWT (15 นาที) + refresh (30 วัน, rotate แบบมี grace window 60 วิ ต่อ device — กัน WiFi หลุดแล้วโดน revoke ทั้ง family) |
+| `POST /auth/login` | – | empId + รหัสผ่าน ERP → access JWT (15 นาที) + refresh (30 วัน, rotate แบบมี grace window 60 วิ ต่อ device — กัน WiFi หลุดแล้วโดน revoke ทั้ง family) |
 | `POST /auth/refresh` | – | **ห้าม version-gate** — เครื่องเก่า N-1 ต้อง refresh ได้เสมอ |
-| `POST /auth/change-pin` | ทุก role | บังคับตอน `must_change_pin` |
 | `POST /auth/unlock/:empId` | admin | ปลดล็อคพนักงานที่โดน throttle |
 | `GET /items?since={row_version}` | ทุก role | delta feed สำหรับ replica — **รวม tombstone**; cursor คือ `row_version` ภายใน ไม่ใช่เวลา ERP |
 | `GET /items/by-barcode/:code` | ทุก role | 404 → toast "ไม่พบบาร์โค้ดนี้ในคลัง · not found" |
 | `GET /items?q=` | ทุก role | ค้นหา substring (name+nameEn+sku+barcode) จำกัดผลลัพธ์ + แบ่งหน้า |
 | `GET /members?since=` | ทุก role | delta ของ roster + role — ส่งมากับทุกรอบ sync เพื่อให้ role gate ในเครื่อง update เร็ว |
-| `POST /members` | admin | สร้าง PIN เริ่มต้น + `must_change_pin`; ตอบ PIN กลับให้ admin แจ้งพนักงาน |
+| `POST /sync/users` | admin | ดึง roster จาก `menuuser` ของ ERP มา sync — **ไม่มี endpoint สร้างสมาชิกในแอปแล้ว** |
 | `PATCH /members/:empId/role` | admin | ตรวจ role กับ DB (`role_version`) ไม่เชื่อ JWT claim; กันลด role ตัวเองจน **ไม่มี admin เหลือ** |
 | `GET /count-sessions/active` | ทุก role | id, zone, รายการนับ, frozen qty, `erp_data_as_of` |
 | `POST /count-sessions/:id/submissions` | staff, admin | **batch + per-line result envelope** (ดู §6.3); **ห้าม version-gate**; viewer → 403 |
@@ -201,7 +205,7 @@ kv_meta    — sync cursor (row_version), stock_as_of, config flags, clock offse
 
 ### 6.2 ฝั่งเขียน — Outbox
 
-ทุก mutation (`submit_count_line`, `add_member`, `change_role`, `scan_event`) คือ command ใน outbox พร้อม:
+ทุก mutation (`submit_count_line`, `change_role`, `scan_event`) คือ command ใน outbox พร้อม:
 - **UUIDv7** idempotency key (time-ordered — index ดีกว่า v4)
 - `device_seq` monotonic ต่อเครื่อง (ตัดปัญหานาฬิกาเครื่องเพี้ยน — `counted_at` ใช้แสดงผลเท่านั้น และเก็บ clock offset จากทุก sync handshake ไว้ปรับแก้)
 - สถานะ `queued → inflight → acked | failed_terminal`
@@ -256,7 +260,7 @@ sequenceDiagram
 |---|---|---|---|
 | สแกน / ค้นหา / ดูข้อมูล | ✓ | ✓ | ✓ |
 | นับสต็อก + ส่งผลการนับ | ✗ (toast "สิทธิ์ viewer นับสต็อกไม่ได้") | ✓ | ✓ |
-| เปลี่ยน role / เพิ่มสมาชิก | ✗ | ✗ | ✓ |
+| เปลี่ยน role (สมาชิกมาจาก ERP — สร้างในแอปไม่ได้) | ✗ | ✗ | ✓ |
 | เปิด–ปิดรอบนับ / อนุมัติ variance / สั่ง sync | ✗ | ✗ | ✓ |
 
 - **Sign-out:** เคลียร์ token + หยุดกล้อง + reset UI **แต่ห้ามแตะ outbox** (งานค้างซิงค์ภายใต้ actor เดิม) — และ **เคลียร์ counts/query ของ user เดิม** (เครื่องใช้ร่วมกัน — deviation จาก demo ที่จงใจ ดู design-fidelity.md §6)
@@ -337,8 +341,7 @@ design ต้นแบบไม่ครอบคลุมสถานะที�
 1. จอ **pending-review** (งานที่ถูก reject ตอน sync)
 2. ตัวชี้วัดสถานะซิงค์ (queue-depth badge, ป้าย "ข้อมูล ณ HH:MM", online/offline)
 3. สถานะวงจรรอบนับ (ไม่มีรอบ active / รอบถูกปิดระหว่างออฟไลน์ / ใครนับล่าสุดต่อแถว)
-4. วงจร PIN (เปลี่ยนครั้งแรก / admin reset / โดน throttle / "เครื่องนี้ต้องต่อเน็ตครั้งแรก")
-5. จอแสดง PIN เริ่มต้นหลังเพิ่มสมาชิก
+4. วงจรล็อกอิน (รหัสผ่านผิด / โดน throttle / "เครื่องนี้ต้องต่อเน็ตครั้งแรก")
 6. first-run download + จอ update APK
 7. ช่องกรอกบาร์โค้ดมือ (แทนปุ่มจำลอง 1/2/3 ของ demo)
 8. รายการนับที่ยาวจริง (ค้นหาในรอบ, จัดกลุ่มตามโซน)
