@@ -11,7 +11,9 @@ import {
   BaseErpDriver,
   type CanonicalItem,
   type Cursor,
+  type ErpUserRow,
 } from '../erp-adapter';
+import { ErpSecret } from '../erp-secret';
 
 /**
  * ERP driver: Microsoft SQL Server 2019 · database `db_TCL` · collation `Thai_CI_AS`
@@ -340,6 +342,7 @@ const DriverEnvSchema = z.object({
   ERP_SQL_CHARSET: z.enum(['utf8', 'win874', 'tis620']).default('utf8'),
   ERP_SQL_ITEMS_VIEW: zSqlIdentifier.optional(),
   ERP_SQL_ITEMS_SQL_FILE: z.string().trim().min(1).optional(),
+  ERP_SQL_USERS_SQL_FILE: z.string().trim().min(1).optional(),
   WAREHOUSE_CODE: z.string().trim().min(1),
 });
 
@@ -356,6 +359,8 @@ interface MssqlDriverConfig {
   readonly charset: ThaiCharset;
   readonly itemsTable: string;
   readonly itemsSqlFile?: string;
+  /** override ของ query ดึงผู้ใช้ — ไม่ตั้ง = ใช้ DEFAULT_USERS_SQL ในไฟล์นี้ */
+  readonly usersSqlFile?: string;
   readonly warehouseCode: string;
   /** 🚨 ERP_UNSAFE_ALLOW_PRIVILEGED_ACCOUNT — ยอมให้ login เขียนได้ (sa) โดยไม่หยุด boot */
   readonly allowPrivilegedAccount: boolean;
@@ -375,6 +380,7 @@ function readDriverConfig(cfg: ConfigService<AppConfig, true>): MssqlDriverConfi
     ERP_SQL_CHARSET: cfg.get('ERP_SQL_CHARSET', { infer: true }),
     ERP_SQL_ITEMS_VIEW: cfg.get('ERP_SQL_ITEMS_VIEW', { infer: true }),
     ERP_SQL_ITEMS_SQL_FILE: cfg.get('ERP_SQL_ITEMS_SQL_FILE', { infer: true }),
+    ERP_SQL_USERS_SQL_FILE: cfg.get('ERP_SQL_USERS_SQL_FILE', { infer: true }),
     WAREHOUSE_CODE: cfg.get('WAREHOUSE_CODE', { infer: true }),
   });
 
@@ -402,6 +408,7 @@ function readDriverConfig(cfg: ConfigService<AppConfig, true>): MssqlDriverConfi
     charset: env.ERP_SQL_CHARSET,
     itemsTable: env.ERP_SQL_ITEMS_VIEW ?? DEFAULT_ITEMS_TABLE,
     itemsSqlFile: env.ERP_SQL_ITEMS_SQL_FILE,
+    usersSqlFile: env.ERP_SQL_USERS_SQL_FILE,
     warehouseCode: env.WAREHOUSE_CODE,
     allowPrivilegedAccount:
       cfg.get('ERP_UNSAFE_ALLOW_PRIVILEGED_ACCOUNT', { infer: true }) === true,
@@ -441,6 +448,24 @@ WHERE rn = 1
 ORDER BY ItemCode
 OFFSET @offset ROWS FETCH NEXT @batch ROWS ONLY`;
 }
+
+/**
+ * ผู้ใช้ทั้งหมดจาก `menuuser` — ตรงตาม query ต้นฉบับที่เจ้าของโปรเจคให้มา
+ *
+ * ⚠️ ตัด `LEFT JOIN Employee` + `EmpPict` ทั้งก้อนทิ้ง (U5 — ไม่มีฟิลด์รูปใน UserProfile
+ *    จึงไม่มีที่ลงในสัญญาปัจจุบัน การ join เพิ่มจึงเป็นภาระเปล่ากับ ERP)
+ * ⚠️ **ไม่มี WHERE กรองคลัง/แผนกเลย** — `menuuser` คือตารางบัญชีของ ERP ทั้งระบบ
+ *    (บัญชี · ขาย · จัดซื้อ · superuser) เป็น known-tradeoff ที่แก้ด้วย allowlist ระดับ
+ *    role map (`ERP_USER_LEVEL_ROLE_MAP`) ไม่ใช่ด้วย SQL filter เพราะ U4/U7 ยังไม่มี
+ *    คอลัมน์ให้กรอง — level ที่ไม่ได้ map ไว้ = ไม่ได้บัญชีเลย
+ */
+const DEFAULT_USERS_SQL = `SELECT user_name  AS login_name,
+       a_Password AS password,
+       user_level AS user_level,
+       name_thai  AS name_thai,
+       emp_id     AS emp_code
+  FROM menuuser WITH (NOLOCK)
+ ORDER BY user_name`;
 
 /**
  * หัวรอบนับแบบ dedupe แล้ว
@@ -499,6 +524,7 @@ export class MssqlDriver extends BaseErpDriver {
   private readonly sqlCfg: MssqlDriverConfig;
   private poolPromise?: Promise<sql.ConnectionPool>;
   private itemsSqlCache?: string;
+  private usersSqlCache?: string;
   private readOnlyVerified = false;
 
   constructor(cfg: ConfigService<AppConfig, true>) {
@@ -808,6 +834,32 @@ export class MssqlDriver extends BaseErpDriver {
     return items;
   }
 
+  /**
+   * ผู้ใช้ทั้งหมดจาก `menuuser` — SELECT ล้วน ยิงครั้งเดียวต่อรอบ sync
+   *
+   * ยิงแค่ **query เดียว** โดยตั้งใจ (ไม่แบ่งหน้า ไม่ยิงขนาน) เพื่อไม่ให้รอบผู้ใช้กิน
+   * connection ของ ERP เกินหนึ่งตัวจาก `ERP_SQL_POOL_MAX` (ค่าเริ่มต้น 3) — รอบ items
+   * ที่วิ่งอยู่พร้อมกันต้องเหลือ connection ใช้เสมอ
+   *
+   * 🚫 `password` ถูกห่อเป็น `ErpSecret` **ทันทีที่ข้าม boundary ของ driver** — ตั้งแต่
+   *    บรรทัดนั้นไปไม่มี plaintext เปลือย ๆ ลอยอยู่ในระบบอีก (ดู erp-secret.ts)
+   */
+  async fetchUsers(): Promise<ErpUserRow[]> {
+    const text = this.loadUsersSqlFile();
+    const rows = await this.runQuery('users-script', text);
+    logger.log(`ดึงผู้ใช้จาก ERP สำเร็จ: ${rows.length} แถว`);
+    // ⚠️ ไม่เรียก normalizeRow ซ้ำ — runQuery() decode ผ่าน decodeThai ให้ทุกคอลัมน์แล้ว
+    //    การ decode ซ้ำรอบสองอาจแปลงรหัสผ่านที่ decode ถูกแล้วให้เพี้ยนแบบเงียบ ๆ
+    return rows.map((row) => ({
+      loginName: asScalarString(row['login_name']),
+      // ⚠️ ห้าม trim ค่านี้ — ERP เทียบ a_Password แบบ string เป๊ะ ช่องว่างท้ายมีความหมาย
+      password: ErpSecret.of(asScalarString(row['password'])),
+      userLevel: asScalarString(row['user_level']),
+      nameThai: asScalarString(row['name_thai']),
+      empCode: asScalarString(row['emp_code']),
+    }));
+  }
+
   // -------------------------------------------------------------------------
   // ภายใน
   // -------------------------------------------------------------------------
@@ -993,6 +1045,44 @@ export class MssqlDriver extends BaseErpDriver {
     assertReadOnlySql(text);
     this.itemsSqlCache = text;
     logger.log(`ใช้ script ดึง item master จาก ${path} (${text.length} ตัวอักษร)`);
+    return text;
+  }
+
+  /**
+   * query ดึงผู้ใช้ — ใช้ `DEFAULT_USERS_SQL` เว้นแต่ตั้ง `ERP_SQL_USERS_SQL_FILE`
+   * ชั้นที่ 3 ของกฎเหล็ก (`assertReadOnlySql`) บังคับกับทั้งสองทาง แม้ค่ามาจาก default เอง
+   */
+  private loadUsersSqlFile(): string {
+    if (this.usersSqlCache) return this.usersSqlCache;
+
+    const path = this.sqlCfg.usersSqlFile;
+    let text: string;
+    if (path === undefined) {
+      text = DEFAULT_USERS_SQL.trim();
+    } else {
+      try {
+        text = readFileSync(path, 'utf8');
+      } catch (err) {
+        throw new MssqlDriverError(
+          'ERP_CONFIG',
+          `อ่านไฟล์ ERP_SQL_USERS_SQL_FILE ไม่ได้: ${path} — ${errMessage(err)}`,
+        );
+      }
+      text = text.replace(/^\uFEFF/, '').trim();
+      if (text.length === 0) {
+        throw new MssqlDriverError('ERP_CONFIG', `ไฟล์ ERP_SQL_USERS_SQL_FILE ว่างเปล่า: ${path}`);
+      }
+      if (/^\s*GO\s*$/im.test(text)) {
+        throw new MssqlDriverError(
+          'ERP_CONFIG',
+          `ERP_SQL_USERS_SQL_FILE ต้องเป็นคำสั่ง SELECT เดียว ห้ามมีตัวคั่นแบตช์ GO: ${path}`,
+        );
+      }
+      logger.log(`ใช้ script ดึงผู้ใช้จาก ${path} (${text.length} ตัวอักษร)`);
+    }
+
+    assertReadOnlySql(text);
+    this.usersSqlCache = text;
     return text;
   }
 

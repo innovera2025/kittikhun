@@ -303,6 +303,7 @@ class FieldBox extends StatelessWidget {
     this.height = TclTokens.hInput,
     this.radius = TclTokens.rInput,
     this.focused = false,
+    this.error = false,
     this.fill = TclTokens.s085,
     this.padding = const EdgeInsets.symmetric(horizontal: 14),
   });
@@ -311,6 +312,10 @@ class FieldBox extends StatelessWidget {
   final double height;
   final double radius;
   final bool focused;
+
+  /// ขอบแดง — ที่ทางเดียวของ `errorBorder` บนจอล็อกอินหลังเลิกใช้ช่อง PIN 6 เซลล์
+  /// (มาก่อนโฟกัสเสมอ: ช่องที่ถูกปฏิเสธต้องแดงแม้เคอร์เซอร์ยังอยู่ในนั้น)
+  final bool error;
   final Color fill;
   final EdgeInsets padding;
 
@@ -322,7 +327,9 @@ class FieldBox extends StatelessWidget {
         decoration: BoxDecoration(
           color: fill,
           border: Border.all(
-            color: focused ? TclTokens.accent : TclTokens.b15,
+            color: error
+                ? TclTokens.errorBorder
+                : (focused ? TclTokens.accent : TclTokens.b15),
           ),
           borderRadius: BorderRadius.circular(radius),
         ),

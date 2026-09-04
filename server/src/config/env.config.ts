@@ -2,6 +2,8 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { z } from 'zod';
 
+import { RoleSchema, type Role } from '../auth/auth.types';
+
 /**
  * คอนฟิกกลางของระบบ — zod schema ตรวจ `.env` ตอน boot (fail fast)
  *
@@ -84,13 +86,17 @@ function envStr(
   return schema;
 }
 
-function envInt(opts: { min: number; max: number; default: number; hint: string }) {
+/** จำนวนเต็มที่ยัง **ไม่มี** `.default()` — ใช้กับคีย์ที่จงใจไม่มีค่าเริ่มต้น (ต้องตั้งเองเท่านั้น) */
+function envIntBase(opts: { min: number; max: number; hint: string }) {
   return z.coerce
     .number({ invalid_type_error: `ต้องเป็นตัวเลข — ${opts.hint}` })
     .int(`ต้องเป็นจำนวนเต็ม (ไม่มีทศนิยม) — ${opts.hint}`)
     .min(opts.min, `ต้องไม่น้อยกว่า ${opts.min} — ${opts.hint}`)
-    .max(opts.max, `ต้องไม่เกิน ${opts.max} — ${opts.hint}`)
-    .default(opts.default);
+    .max(opts.max, `ต้องไม่เกิน ${opts.max} — ${opts.hint}`);
+}
+
+function envInt(opts: { min: number; max: number; default: number; hint: string }) {
+  return envIntBase(opts).default(opts.default);
 }
 
 const TRUE_WORDS = new Set(['true', '1', 'yes', 'y', 'on']);
@@ -265,6 +271,41 @@ const commonShape = {
     default: 15_000,
     hint: 'timeout ต่อ request/query ของ ERP (ms)',
   }),
+
+  // [5b] sync ผู้ใช้จาก ERP (`menuuser`) — สวิตช์คัตโอเวอร์ของการล็อกอินทั้งระบบ
+  /**
+   * 🔴 สวิตช์คัตโอเวอร์ตัวจริง — **ไม่มี default เป็น true เด็ดขาด**
+   * เปิดได้หลังผ่านด่านครบทั้งสาม (fleet readiness · break-glass admin · config ครบ) เท่านั้น
+   */
+  ERP_USER_SYNC_ENABLED: envBool(
+    false,
+    'เปิด sync ผู้ใช้จาก ERP จริง — เปิดหลัง Phase 0-2 ผ่านเท่านั้น (ดูแผนคัตโอเวอร์)',
+  ),
+  ERP_USER_SYNC_CRON: envStr('cron ของรอบ sync ผู้ใช้ เช่น 17 * * * *', {
+    pattern: CRON_RE,
+    // offset จาก ERP_SYNC_CRON (*/30) โดยตั้งใจ — สองรอบชนกันจะแย่ง ERP_SQL_POOL_MAX (ค่าเริ่มต้น 3)
+  }).default('17 * * * *'),
+  /**
+   * allowlist ล้วน: `"9=admin,5=staff,1=viewer"`
+   * ⚠️ `user_level` ที่ **ไม่ได้ระบุไว้ = ไม่ได้บัญชีเลย** ไม่ fallback เป็น viewer —
+   *    `menuuser` คือตารางบัญชีของ ERP ทั้งระบบ (บัญชี · ขาย · จัดซื้อ · superuser)
+   *    การ fallback เท่ากับเปิดให้ทุกบัญชีของบริษัทล็อกอินอ่านสต็อกคลังนี้ได้
+   */
+  ERP_USER_LEVEL_ROLE_MAP: envStr('แม็ป user_level→role เช่น 9=admin,5=staff,1=viewer', {
+    max: 512,
+  }).optional(),
+  ERP_USER_DEACTIVATE_MAX_PCT: envInt({
+    min: 1,
+    max: 100,
+    default: 10,
+    hint: 'เพดาน % ของ credential (erp+legacy_pin) ที่ลบได้ต่อรอบ sync',
+  }),
+  /** ไม่มี default โดยตั้งใจ — บังคับตั้งเมื่อ ERP_USER_SYNC_ENABLED=true (ดูกฎข้ามตัวแปร) */
+  ERP_USER_MIN_EXPECTED_ROWS: envIntBase({
+    min: 1,
+    max: 100_000,
+    hint: 'จำนวนแถวขั้นต่ำที่ ERP ต้องส่งมาถึงจะยอม deactivate (ตั้งจากผล npm run verify:erp-users)',
+  }).optional(),
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -301,6 +342,11 @@ const sqlSharedShape = {
     pattern: SQL_OBJECT_RE,
   }).optional(),
   ERP_SQL_ITEMS_SQL_FILE: envStr('พาธเต็มของไฟล์ .sql เช่น /config/inventory-items.sql', {
+    max: 512,
+    pattern: ABS_SQL_FILE_RE,
+  }).optional(),
+  /** ไม่ตั้ง = ใช้ query `menuuser` เริ่มต้นที่ฝังใน driver (ไม่ใช่ค่าบังคับเหมือน ITEMS) */
+  ERP_SQL_USERS_SQL_FILE: envStr('พาธไฟล์ .sql override สำหรับดึงผู้ใช้ เช่น /config/menuuser.sql', {
     max: 512,
     pattern: ABS_SQL_FILE_RE,
   }).optional(),
@@ -514,6 +560,55 @@ function normalizeEnv(raw: unknown): Record<string, string> {
   return normalized;
 }
 
+/**
+ * แปลง `ERP_USER_LEVEL_ROLE_MAP` (`"9=admin,5=staff,1=viewer"`) เป็น Map
+ *
+ * pure + export ไว้ให้ **ทั้งด่าน boot และ SyncService ใช้ตัวเดียวกัน** — ถ้าแยกกันเขียน
+ * สองที่ จะเกิดกรณี "boot ผ่านแต่ sync ตีความคนละแบบ" ซึ่งคือความผิดพลาดที่ทำให้ทุกคน
+ * ถูกลดสิทธิ์พร้อมกันได้ (allowlist ที่ตีความต่างกัน = allowlist ที่พึ่งไม่ได้)
+ *
+ * ⚠️ key คือค่าดิบของ `menuuser.user_level` (trim แล้ว) — ไม่ lower ไม่แปลงชนิด
+ *    เพราะ U1 ยังไม่ยืนยันว่า level เป็นตัวเลขหรือรหัสสั้น
+ */
+export function parseUserLevelRoleMap(raw: string): {
+  map: Map<string, Role>;
+  errors: readonly string[];
+} {
+  const map = new Map<string, Role>();
+  const errors: string[] = [];
+  const entries = raw
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+
+  if (entries.length === 0) {
+    errors.push('ไม่มีรายการ level=role เลย (ว่าง = ไม่มีใครได้บัญชี — sync จะไม่สร้างผู้ใช้เลย)');
+    return { map, errors };
+  }
+
+  for (const entry of entries) {
+    const eq = entry.indexOf('=');
+    if (eq <= 0 || eq === entry.length - 1) {
+      errors.push(`รายการ "${entry}" ต้องอยู่ในรูป level=role`);
+      continue;
+    }
+    const level = entry.slice(0, eq).trim();
+    const roleRaw = entry.slice(eq + 1).trim();
+    const role = RoleSchema.safeParse(roleRaw);
+    if (!role.success) {
+      errors.push(`รายการ "${entry}" ใช้ role ที่ไม่มีจริง (รับได้: ${listOf(RoleSchema.options)})`);
+      continue;
+    }
+    if (map.has(level)) {
+      errors.push(`level "${level}" ถูกระบุซ้ำ — เลือก role เดียวต่อ level`);
+      continue;
+    }
+    map.set(level, role.data);
+  }
+
+  return { map, errors };
+}
+
 /** กฎข้ามตัวแปร — ทำงานหลัง union ผ่านแล้ว จึง narrow ตาม ERP_DRIVER ได้ */
 function crossFieldRules(config: AppConfig, ctx: z.RefinementCtx): void {
   const addIssue = (variable: string, message: string): void => {
@@ -577,6 +672,35 @@ function crossFieldRules(config: AppConfig, ctx: z.RefinementCtx): void {
       if (config.ERP_SQL_WRITE_USER && config.ERP_SQL_WRITE_USER.trim().toLowerCase() === 'sa') {
         addIssue('ERP_SQL_WRITE_USER', 'ห้ามใช้บัญชี sa ต่อ ERP ไม่ว่ากรณีใด');
       }
+    }
+  }
+
+  // ── sync ผู้ใช้จาก ERP: ด่านที่แข็งกว่า runtime check ──────────────────────
+  // ตั้งไม่ครบ = **เซิร์ฟเวอร์บูตไม่ขึ้นเลย** ไม่ใช่ sync ข้ามรอบเงียบ ๆ ให้ค้นหาสาเหตุทีหลัง
+  if (config.ERP_USER_SYNC_ENABLED) {
+    const rawMap = config.ERP_USER_LEVEL_ROLE_MAP?.trim() ?? '';
+    if (rawMap.length === 0) {
+      addIssue(
+        'ERP_USER_LEVEL_ROLE_MAP',
+        'ต้องตั้งเมื่อ ERP_USER_SYNC_ENABLED=true (ว่าง = sync ปฏิเสธการรันเสมอ — ตั้งใจให้ fail-safe)',
+      );
+    } else {
+      const parsed = parseUserLevelRoleMap(rawMap);
+      for (const error of parsed.errors) addIssue('ERP_USER_LEVEL_ROLE_MAP', error);
+      // ไม่มี level ไหน map เป็น admin เลย = รอบ sync แรกจะพยายามลดสิทธิ์ admin ทุกคนพร้อมกัน
+      // (ด่าน last-admin ต่อแถวรับไว้ได้ก็จริง แต่ผิดตั้งแต่ตอนตั้งค่าแล้ว — หยุดที่ boot ดีกว่า)
+      if (parsed.errors.length === 0 && ![...parsed.map.values()].includes('admin')) {
+        addIssue(
+          'ERP_USER_LEVEL_ROLE_MAP',
+          'ต้องมีอย่างน้อย 1 level ที่ map เป็น admin — ดูค่า user_level จริงจาก npm run verify:erp-users',
+        );
+      }
+    }
+    if (config.ERP_USER_MIN_EXPECTED_ROWS === undefined) {
+      addIssue(
+        'ERP_USER_MIN_EXPECTED_ROWS',
+        'ต้องตั้งเมื่อ ERP_USER_SYNC_ENABLED=true — ใช้จำนวนแถวที่ npm run verify:erp-users รายงาน (Phase 0)',
+      );
     }
   }
 

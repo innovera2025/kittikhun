@@ -1,16 +1,5 @@
-import { randomInt } from 'node:crypto';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 
-import {
-  BadRequestException,
-  ConflictException,
-  Injectable,
-  Logger,
-  NotFoundException,
-} from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { z } from 'zod';
-
-import { AuthService } from '../auth/auth.service';
 import {
   AUTH_ERROR_MESSAGE_TH,
   EmpIdSchema,
@@ -18,8 +7,6 @@ import {
   RoleSchema,
   type Role,
 } from '../auth/auth.types';
-import { isWeakPin } from '../auth/pin-policy';
-import type { AppConfig } from '../config/env.config';
 import { PostgresService } from '../db/postgres.service';
 
 // ---------------------------------------------------------------------------
@@ -32,36 +19,6 @@ export interface MemberDto {
   shift: string | null;
   role: Role;
 }
-
-/**
- * ผลลัพธ์ของ `create()` / (ส่วน initialPin ใช้ร่วมกับ `resetPin()`)
- *
- * ⚠️ `initialPin` เป็น **plaintext ที่ส่งกลับครั้งเดียว** ให้ admin แจ้งพนักงาน
- *    (docs/architecture.md §5 · design-fidelity.md §7 ข้อ 5)
- *    🚫 ห้าม log · ห้ามเขียนลง audit_log · ห้าม cache — DB เก็บแต่ argon2id hash
- */
-export type MemberCreatedDto = MemberDto & { initialPin: string };
-
-// ---------------------------------------------------------------------------
-// zod: ข้อมูลจากภายนอก (bottom sheet "เพิ่มสมาชิกใหม่")
-// ---------------------------------------------------------------------------
-
-/** ข้อความเดียวกับ toast validation ใน design (design-fidelity.md §2.7) */
-const INCOMPLETE_TH = 'กรอกชื่อและรหัสพนักงานให้ครบ';
-
-/** กะเริ่มต้นเมื่อ admin ยังไม่กำหนด — สตริงเป๊ะตาม design */
-const DEFAULT_SHIFT = 'ยังไม่กำหนดกะ';
-
-export const MemberCreateSchema = z.object({
-  // แอปบังคับรหัสพนักงาน ≥3 หลัก (design) — EmpIdSchema เองยอมรับตั้งแต่ 1 ตัว
-  empId: EmpIdSchema.min(3, INCOMPLETE_TH),
-  name: z.string().trim().min(1, INCOMPLETE_TH).max(100, 'ชื่อยาวเกิน 100 ตัวอักษร'),
-  // sheet ตั้งค่าเริ่มต้นเป็น STAFF
-  role: RoleSchema.default('staff'),
-  shift: z.string().trim().min(1).max(32).optional(),
-});
-
-export type MemberCreateInput = z.input<typeof MemberCreateSchema>;
 
 // ---------------------------------------------------------------------------
 // แถวจาก Postgres
@@ -79,16 +36,26 @@ interface LockedUserRow {
   role: Role;
 }
 
+/** แหล่งที่มาของ credential — `'erp' | 'local' | 'legacy_pin'` (ไม่มีแถว = ล็อกอินไม่ได้อยู่แล้ว) */
+interface CredentialSourceRow {
+  source: string;
+}
+
 const AUDIT_SQL = `INSERT INTO audit_log (actor, action, payload) VALUES ($1, $2, $3::jsonb)`;
 
 const REVOKE_ALL_SQL = `UPDATE refresh_tokens SET revoked_at = now()
                          WHERE emp_id = $1 AND revoked_at IS NULL`;
 
 /**
- * จัดการผู้ใช้ของ **ระบบเราเอง** — สร้าง/เปลี่ยนสิทธิ์/รีเซ็ต PIN
+ * roster + การเปลี่ยนสิทธิ์ — **อ่าน/เขียนตาราง `users` ของระบบเราเท่านั้น**
  *
- * 🚫 ไฟล์นี้ไม่แตะ ERP เลย (users ไม่ได้ดึงจาก ERP และห้ามเขียนกลับ ERP)
+ * 🚫 ไฟล์นี้ไม่แตะ ERP เลย (ไม่ยิง query ไป ERP และห้ามเขียนกลับ ERP)
  *    ทุก statement วิ่งบน Postgres ของระบบเท่านั้น
+ *
+ * ⚠️ ตั้งแต่ย้ายล็อกอินไปที่ `user_credentials` แล้ว ไฟล์นี้ **ไม่สร้างผู้ใช้และ
+ *    ไม่ตั้ง/รีเซ็ตรหัสผ่านอีกต่อไป** — บัญชีมาจาก sync ผู้ใช้ของ ERP (source='erp')
+ *    หรือจาก CLI `create-admin` (source='local') เท่านั้น ที่นี่จึงเหลือแค่ roster
+ *    กับการสลับ role ของบัญชีที่ไม่ได้ผูกกับ ERP
  *
  * หลักการที่ต้องรักษา:
  * - เปลี่ยน role ต้อง **bump `role_version`** เสมอ → token เดิมใช้กับ endpoint
@@ -100,16 +67,8 @@ const REVOKE_ALL_SQL = `UPDATE refresh_tokens SET revoked_at = now()
 @Injectable()
 export class MembersService {
   private readonly logger = new Logger(MembersService.name);
-  private readonly warehouseCode: string;
 
-
-  constructor(
-    private readonly db: PostgresService,
-    private readonly auth: AuthService,
-    cfg: ConfigService<AppConfig, true>,
-  ) {
-    this.warehouseCode = cfg.get('WAREHOUSE_CODE', { infer: true });
-  }
+  constructor(private readonly db: PostgresService) {}
 
   // ── 1. รายชื่อสมาชิก ─────────────────────────────────────────────────
 
@@ -127,63 +86,22 @@ export class MembersService {
     return rows.map(MembersService.toDto);
   }
 
-  // ── 2. เพิ่มสมาชิก ───────────────────────────────────────────────────
-
-  /**
-   * สร้างพนักงานใหม่ + PIN เริ่มต้นที่สุ่มมา (must_change_pin = true)
-   *
-   * ⚠️ ค่าที่คืนมามี `initialPin` เป็น plaintext ครั้งเดียวเท่านั้น — ห้าม log
-   */
-  async create(input: unknown, actor: string): Promise<MemberCreatedDto> {
-    const parsed = MemberCreateSchema.safeParse(input);
-    if (!parsed.success) {
-      throw new BadRequestException({
-        code: 'VALIDATION',
-        message: parsed.error.issues[0]?.message ?? INCOMPLETE_TH,
-      });
-    }
-    const { empId, name, role, shift } = parsed.data;
-
-    const initialPin = MembersService.randomPin();
-    const pinHash = await this.auth.hashPin(initialPin);
-
-    const row = await this.db.transaction(async (client) => {
-      // ON CONFLICT DO NOTHING = กันชนแบบ race-safe (ไม่ต้อง pre-check แล้วเจอ TOCTOU)
-      const inserted = await client.query<MemberRow>(
-        `INSERT INTO users (emp_id, name, pin_hash, role, shift, warehouse_code, must_change_pin)
-         VALUES ($1, $2, $3, $4::user_role, $5, $6, true)
-         ON CONFLICT (emp_id) DO NOTHING
-         RETURNING emp_id, name, shift, role`,
-        [empId, name, pinHash, role, shift ?? DEFAULT_SHIFT, this.warehouseCode],
-      );
-      const insertedRows: MemberRow[] = inserted.rows;
-      const created = insertedRows[0];
-      if (!created) {
-        throw new ConflictException({
-          code: 'DUPLICATE_EMP_ID',
-          message: 'รหัสพนักงานนี้มีอยู่แล้ว',
-        });
-      }
-      // 🚫 ห้ามใส่ PIN ลง audit_log (append-only + อ่านได้ทีหลัง)
-      await client.query(AUDIT_SQL, [
-        actor,
-        'members.created',
-        JSON.stringify({ empId, role, by: actor }),
-      ]);
-      return created;
-    });
-
-    this.logger.log(`เพิ่มสมาชิก ${empId} (${role}) โดย ${actor}`);
-    return { ...MembersService.toDto(row), initialPin };
-  }
-
-  // ── 3. เปลี่ยนสิทธิ์ ─────────────────────────────────────────────────
+  // ── 2. เปลี่ยนสิทธิ์ ─────────────────────────────────────────────────
 
   /**
    * เปลี่ยน role + bump `role_version`
    *
    * ล็อกแถวเป้าหมาย **พร้อมกับแถว admin ทุกคนในคำสั่งเดียว** เรียงตาม emp_id
    * → นับ admin ที่เหลือได้แบบไม่มี race และไม่เกิด deadlock (ล็อกลำดับเดียวกันทุก tx)
+   *
+   * ⚠️ ด่าน "บัญชีของ ERP ห้ามแก้สิทธิ์ที่นี่" อยู่**ในทรานแซกชันเดียวกันนี้** และล็อกแถว
+   *    `user_credentials` ด้วย `FOR UPDATE` — เดิมเช็คไว้ที่ controller เป็นคนละ query
+   *    นอกทรานแซกชัน ซึ่งชนกับรอบ sync ผู้ใช้ได้ตรง ๆ: sync กำลังเปลี่ยนบัญชีคนนั้นจาก
+   *    `legacy_pin` เป็น `erp` อยู่พอดี → controller อ่านได้ค่าเก่า แล้ว UPDATE ทับสิทธิ์ที่
+   *    ERP เพิ่งกำหนด (ผล 200 ที่หายไปเงียบ ๆ ในรอบ sync ถัดไป — เคสที่ด่านนี้มีไว้กัน)
+   *
+   * ลำดับการล็อกต้องเป็น `users` ก่อนแล้วค่อย `user_credentials` เสมอ — ลำดับเดียวกับ
+   * `SyncService.runUsers()` เป๊ะ (สลับลำดับที่ใดที่หนึ่ง = deadlock ระหว่างสองเส้นทาง)
    */
   async changeRole(
     empId: string,
@@ -214,6 +132,20 @@ export class MembersService {
           message: AUTH_ERROR_MESSAGE_TH.UNKNOWN_EMPLOYEE,
         });
       }
+      // ── บัญชีที่ ERP เป็นเจ้าของ: ปฏิเสธตั้งแต่ยังไม่เขียนอะไร ───────────────
+      // อ่านใต้ล็อกเดียวกับที่จะ UPDATE → ค่าที่เห็นคือค่าที่ commit จริง ไม่ใช่ค่าที่
+      // รอบ sync กำลังเปลี่ยนอยู่ (ยอมให้แก้ = ตอบ 200 แล้วผลหายใน sync รอบถัดไป)
+      const cred = await client.query<CredentialSourceRow>(
+        `SELECT source FROM user_credentials WHERE emp_id = $1 FOR UPDATE`,
+        [id],
+      );
+      if (cred.rows[0]?.source === 'erp') {
+        throw new BadRequestException({
+          code: 'ERP_MANAGED',
+          message: 'บัญชีนี้ผูกกับ ERP — แก้สิทธิ์ที่ระบบ ERP แล้วรอ sync รอบถัดไป',
+        });
+      }
+
       const from = current.role;
       // ไม่มีอะไรเปลี่ยน → ไม่ bump role_version (ไม่ทำให้ token ทุกเครื่องเสียเปล่า ๆ)
       if (from === to) return { empId: id, role: from };
@@ -252,68 +184,13 @@ export class MembersService {
     });
   }
 
-  // ── 4. รีเซ็ต PIN ────────────────────────────────────────────────────
-
-  /**
-   * admin สั่งรีเซ็ต PIN — คืน PIN ใหม่เป็น plaintext ครั้งเดียว (⚠️ ห้าม log)
-   * เคลียร์ throttle ให้ด้วย เพราะเคสจริงคือ "พนักงานลืม PIN แล้วยิงผิดจนโดนหน่วง"
-   */
-  async resetPin(empId: string, actor: string): Promise<{ empId: string; initialPin: string }> {
-    const parsed = EmpIdSchema.safeParse(empId);
-    if (!parsed.success) {
-      throw new BadRequestException({ code: 'VALIDATION', message: 'ข้อมูลไม่ถูกต้อง' });
-    }
-    const id = parsed.data;
-
-    const initialPin = MembersService.randomPin();
-    const pinHash = await this.auth.hashPin(initialPin);
-
-    await this.db.transaction(async (client) => {
-      const updated = await client.query<{ emp_id: string }>(
-        `UPDATE users
-            SET pin_hash = $2, must_change_pin = true,
-                failed_attempts = 0, throttle_until = NULL, updated_at = now()
-          WHERE emp_id = $1
-        RETURNING emp_id`,
-        [id, pinHash],
-      );
-      if (updated.rows.length === 0) {
-        throw new NotFoundException({
-          code: 'UNKNOWN_EMPLOYEE',
-          message: AUTH_ERROR_MESSAGE_TH.UNKNOWN_EMPLOYEE,
-        });
-      }
-      // PIN เปลี่ยนแล้ว = เซสชันเดิมทุกเครื่องต้องตาย
-      await client.query(REVOKE_ALL_SQL, [id]);
-      await client.query(AUDIT_SQL, [
-        actor,
-        'members.pin_reset',
-        JSON.stringify({ empId: id, by: actor }),
-      ]);
-    });
-
-    this.logger.log(`รีเซ็ต PIN ของ ${id} โดย ${actor}`);
-    return { empId: id, initialPin };
-  }
-
-  // ── 5. helper ────────────────────────────────────────────────────────
+  // ── 3. helper ────────────────────────────────────────────────────────
 
   async countAdmins(): Promise<number> {
     const row = await this.db.one<{ n: number }>(
       `SELECT count(*)::int AS n FROM users WHERE role = 'admin'`,
     );
     return row?.n ?? 0;
-  }
-
-  /**
-   * PIN เริ่มต้น 6 หลักแบบสุ่มเข้ารหัส
-   * `crypto.randomInt` เท่านั้น (Math.random เดาย้อนได้จาก state ของ V8)
-   */
-  private static randomPin(): string {
-    for (;;) {
-      const pin = String(randomInt(0, 1_000_000)).padStart(6, '0');
-      if (!isWeakPin(pin)) return pin;
-    }
   }
 
   private static toDto(row: MemberRow): MemberDto {

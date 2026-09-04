@@ -8,8 +8,26 @@
  * — เครื่องออฟไลน์แล้วเทคิวพร้อมกัน · admin ปิดรอบตอนพนักงานยังส่งอยู่ ·
  * สองคนนับ SKU เดียวกัน · เครื่องเดิม retry ซ้ำ ไฟล์นี้จำลองสิ่งเหล่านั้นทั้งหมด
  *
- * 🚫 รันกับ **ระบบทดสอบเท่านั้น** — สร้างผู้ใช้/รอบนับ/ผลนับจริงลงฐานข้อมูล
- *    สคริปต์จะปฏิเสธถ้าฐานข้อมูลมีผู้ใช้อยู่แล้ว เว้นแต่ส่ง --keep
+ * ⚠️ **บัญชีผู้ใช้ไม่ได้สร้างจากที่นี่อีกแล้ว** — `POST /members` และ `POST /auth/change-pin`
+ *    ถูกลบทั้งเส้นทาง ตัวยืนยันตัวตนเป็นของตาราง `user_credentials` ที่รอบ sync ของ ERP
+ *    (`POST /sync/users`) เป็นเจ้าของ ฉาก 1 จึงเปลี่ยนจาก "สร้างพนักงาน" เป็น
+ *    "ยิง sync แล้วพิสูจน์ว่าบัญชีที่ได้มาถูกต้อง" และยังพิสูจน์ด้วยว่า endpoint ที่ลบไปแล้ว
+ *    **หายไปจริง** (404) ไม่ใช่ยังเปิดค้างอยู่เงียบ ๆ
+ *
+ * ต้องตั้งก่อนรัน:
+ *   SIM_ADMIN_EMP / SIM_ADMIN_PIN  admin break-glass ที่สร้างด้วย `npm run create-admin`
+ *                                  (credential `source='local'` ที่ sync ห้ามแตะ)
+ *   SIM_ERP_USERS                  บัญชีจาก ERP ที่ใช้เดินนับ "login:รหัสผ่าน,…" อย่างน้อย 3 ชุด
+ *                                  ค่าเริ่มต้นตรงกับ MockDriver (`ERP_DRIVER=mock`)
+ *   SIM_ERP_UNMAPPED               บัญชีที่ `user_level` ไม่อยู่ใน allowlist (ตั้ง '' = ข้ามด่านนี้)
+ *
+ * ⚠️ รหัสพนักงานของ admin break-glass **ต้องไม่ซ้ำกับแถวใดใน ERP** มิฉะนั้นรอบ sync จะเขียน
+ *    role ตาม `user_level` ทับ (credential ไม่ถูกแตะ แต่สิทธิ์ถูกลด) — fixture ของ
+ *    `ERP_DRIVER=mock` จองช่วง 52101–52105 ไว้ ค่าเริ่มต้นของ SIM_ADMIN_EMP จึงเป็น 52901
+ *    (ตัวเดียวกับตัวอย่าง `npm run create-admin` ใน README) ยิงกับ ERP จริงเมื่อไรก็ยังต้อง
+ *    เลือกรหัสที่ ERP ไม่มี — ฉาก 1 ตรวจข้อนี้ให้แล้วและหยุดทันทีพร้อมวิธีแก้ ถ้าเผลอชนกัน
+ *
+ * 🚫 รันกับ **ระบบทดสอบเท่านั้น** — เขียนผู้ใช้/รอบนับ/ผลนับจริงลงฐานข้อมูล
  */
 
 interface Json {
@@ -18,6 +36,16 @@ interface Json {
 
 const BASE = (process.argv[2] ?? 'http://127.0.0.1:18090').replace(/\/$/, '');
 const KEEP = process.argv.includes('--keep');
+
+/**
+ * บัญชีเริ่มต้นตรงกับ `MockDriver.USER_SEEDS` (ใช้ได้ทันทีเมื่อ `ERP_DRIVER=mock`)
+ * ยิงกับ ERP จริงเมื่อไร ให้ตั้ง SIM_ERP_USERS เป็นบัญชีทดสอบของ ERP นั้นแทน
+ * ⚠️ ค่าพวกนี้เป็นสตริงสมมติของ fixture ไม่ใช่ความลับของใคร
+ */
+const DEFAULT_ERP_USERS = 'suda.k:mock-staff-secret,anan.p:mock-staff-secret-2,somchai.a:mock-admin-secret';
+
+/** บัญชีที่ `user_level` ไม่อยู่ใน allowlist (ฝ่ายบัญชีของ fixture) — ตั้ง '' เพื่อข้ามด่านนี้ */
+const DEFAULT_ERP_UNMAPPED = 'account.one:mock-accounting-secret';
 
 let passed = 0;
 let failed = 0;
@@ -74,10 +102,16 @@ const uuid = (): string => crypto.randomUUID();
 
 // ── ตัวละครในคลัง ───────────────────────────────────────────────────────────
 
+/**
+ * คนหนึ่งคนที่เดินนับในคลัง
+ * ⚠️ `login` (ชื่อผู้ใช้ที่พิมพ์ตอนล็อกอิน = `menuuser.user_name` ตัวพิมพ์เล็ก) ไม่ใช่ค่าเดียวกับ
+ *    `empId` (รหัสพนักงานที่ผูกกับผลนับทุกแถว) อีกต่อไป — สองค่านี้ห้ามสลับกัน
+ */
 interface Staff {
+  login: string;
   empId: string;
   name: string;
-  pin: string;
+  role: string;
   deviceId: string;
   token: string;
 }
@@ -143,51 +177,50 @@ class DeviceQueue {
 
 // ── helper ──────────────────────────────────────────────────────────────────
 
-async function createUser(
-  adminToken: string,
-  empId: string,
-  name: string,
-  role: 'admin' | 'staff' | 'viewer',
-): Promise<string> {
-  const res = await req<{ initialPin?: string }>('POST', '/members', {
-    token: adminToken,
-    body: { empId, name, role, shift: 'กะเช้า · A' },
-  });
-  const pin = res.body.initialPin;
-  if (typeof pin !== 'string') {
-    throw new Error(`สร้างผู้ใช้ ${empId} ไม่สำเร็จ: ${JSON.stringify(res.body)}`);
-  }
-  return pin;
+/** body ที่ `POST /sync/*` ตอบกลับ (`metrics` มีเฉพาะรอบผู้ใช้ — ดู `sync_runs.metrics`) */
+interface SyncRunBody {
+  status?: string;
+  rowsRead?: number;
+  rowsUpserted?: number;
+  metrics?: Record<string, number>;
 }
 
-async function login(empId: string, pin: string, deviceId: string): Promise<string> {
-  const res = await req<{ accessToken?: string }>('POST', '/auth/login', {
-    body: { empId, pin, deviceId },
-  });
-  if (typeof res.body.accessToken !== 'string') {
-    throw new Error(`login ${empId} ไม่สำเร็จ (${res.status}): ${JSON.stringify(res.body)}`);
-  }
-  return res.body.accessToken;
+/** อ่านตัวนับจาก metrics แบบไม่ล้มถ้า server รุ่นเก่ายังไม่ส่งฟิลด์นี้มา */
+function num(metrics: Record<string, number>, key: string): number {
+  return metrics[key] ?? 0;
 }
 
-/** ผู้ใช้ใหม่ถูกบังคับตั้ง PIN ใหม่ก่อนใช้งาน — ทำให้ครบเหมือนของจริง */
-async function onboard(
-  empId: string,
-  name: string,
-  initialPin: string,
-  newPin: string,
-  deviceId: string,
-): Promise<Staff> {
-  const first = await login(empId, initialPin, deviceId);
-  const changed = await req('POST', '/auth/change-pin', {
-    token: first,
-    body: { currentPin: initialPin, newPin },
+interface LoginResult {
+  token: string;
+  user: { empId: string; name: string; role: string };
+}
+
+/**
+ * ล็อกอินตามสัญญา wire เดิมเป๊ะ — `{empId, pin, deviceId}`
+ * (ความหมายเปลี่ยน: `empId` = ชื่อผู้ใช้, `pin` = รหัสผ่าน ERP · ชื่อคีย์ห้ามเปลี่ยนเพราะ
+ *  APK ที่ sideload ค้างอยู่ในฟลีตยังส่งคีย์ชุดนี้)
+ */
+async function login(loginName: string, password: string, deviceId: string): Promise<LoginResult> {
+  const res = await req<{ accessToken?: string; user?: LoginResult['user'] }>('POST', '/auth/login', {
+    body: { empId: loginName, pin: password, deviceId },
   });
-  if (changed.status >= 400) {
-    throw new Error(`เปลี่ยน PIN ${empId} ไม่สำเร็จ: ${JSON.stringify(changed.body)}`);
+  if (typeof res.body.accessToken !== 'string' || res.body.user === undefined) {
+    throw new Error(`login ${loginName} ไม่สำเร็จ (${res.status}): ${JSON.stringify(res.body)}`);
   }
-  const token = await login(empId, newPin, deviceId);
-  return { empId, name, pin: newPin, deviceId, token };
+  return { token: res.body.accessToken, user: res.body.user };
+}
+
+/** "login:รหัสผ่าน,login:รหัสผ่าน" → คู่ค่า (รหัสผ่านมี ':' ได้ — ตัดที่ตัวแรกเท่านั้น) */
+function parseAccounts(raw: string): Array<{ login: string; password: string }> {
+  return raw
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+    .map((entry) => {
+      const at = entry.indexOf(':');
+      if (at <= 0) throw new Error(`รูปแบบบัญชีไม่ถูกต้อง (ต้องเป็น login:รหัสผ่าน): ${entry}`);
+      return { login: entry.slice(0, at).trim().toLowerCase(), password: entry.slice(at + 1) };
+    });
 }
 
 // ── การจำลอง ────────────────────────────────────────────────────────────────
@@ -204,26 +237,140 @@ async function main(): Promise<void> {
     throw new Error(`ระบบไม่พร้อม: HTTP ${health.status} ${JSON.stringify(health.body)}`);
   }
 
-  out('── ฉาก 1: เตรียมทีมงาน ────────────────────────────────────────');
+  out('── ฉาก 1: บัญชีทั้งหมดมาจากรอบ sync ของ ERP ────────────────────');
 
-  // admin คนแรกต้องมีอยู่แล้ว (สร้างด้วย create-admin) — ใช้ PIN จาก env
+  // admin break-glass ต้องถูกสร้างไว้ก่อนด้วย `npm run create-admin` (credential source='local')
+  // — ไม่มี endpoint สร้างผู้ใช้อีกแล้ว และ sync เองก็ปฏิเสธทั้งรอบถ้าไม่มีบัญชีนี้
   const adminPin = process.env['SIM_ADMIN_PIN'];
-  const adminEmp = process.env['SIM_ADMIN_EMP'] ?? '52104';
-  if (!adminPin) throw new Error('ต้องตั้ง SIM_ADMIN_PIN (PIN ของ admin ที่สร้างไว้แล้ว)');
+  const adminEmp = (process.env['SIM_ADMIN_EMP'] ?? '52901').trim();
+  if (!adminPin) throw new Error('ต้องตั้ง SIM_ADMIN_PIN (รหัสผ่านของ admin ที่สร้างไว้แล้ว)');
 
-  const adminToken = await login(adminEmp, adminPin, 'device-admin');
-  check('admin login ได้', true);
+  const admin = await login(adminEmp.toLowerCase(), adminPin, 'device-admin');
+  const adminToken = admin.token;
+  check('admin break-glass ล็อกอินได้', admin.user.role === 'admin', `role=${admin.user.role}`);
 
-  const staff: Staff[] = [];
-  for (const [empId, name, device] of [
-    ['52201', 'สมชาย ใจดี', 'device-A'],
-    ['52202', 'ปิยะนุช ศรีทอง', 'device-B'],
-    ['52203', 'วีระ ตั้งใจ', 'device-C'],
-  ] as const) {
-    const initial = await createUser(adminToken, empId, name, 'staff');
-    staff.push(await onboard(empId, name, initial, '839204', device));
+  // 🔒 เส้นทางที่ถูกลบต้องหายจริง — ถ้ายังเปิดค้างอยู่ จะมีคนไปตั้งรหัสผ่านทับของที่รอบ sync
+  //    เป็นเจ้าของ แล้วผลหายเงียบ ๆ ในรอบถัดไป (เหตุผลเดียวกับที่ตัดสินใจลบทั้งเส้นทาง)
+  const goneMembers = await req('POST', '/members', {
+    token: adminToken,
+    body: { empId: '59999', name: 'ไม่ควรสร้างได้', role: 'staff' },
+  });
+  check(
+    '🔒 POST /members ถูกลบแล้วจริง (สร้างผู้ใช้จากแอปไม่ได้อีก)',
+    goneMembers.status === 404,
+    `HTTP ${goneMembers.status}`,
+  );
+
+  // ⚠️ ส่งค่าสมมติเท่านั้น — ห้ามใส่รหัสผ่านจริงลงคำขอที่จงใจให้ล้มเหลว
+  const goneChangePin = await req('POST', '/auth/change-pin', {
+    token: adminToken,
+    body: { currentPin: '000000', newPin: '918273' },
+  });
+  check(
+    '🔒 POST /auth/change-pin ถูกลบแล้วจริง (รหัสผ่านเป็นของ ERP)',
+    goneChangePin.status === 404,
+    `HTTP ${goneChangePin.status}`,
+  );
+
+  // ── รอบ sync ผู้ใช้ = ทางเดียวที่บัญชีพนักงานเกิดขึ้น ────────────────────
+  const usersSync = await req<SyncRunBody>('POST', '/sync/users', { token: adminToken });
+  const m1 = usersSync.body.metrics ?? {};
+  check(
+    `sync ผู้ใช้จาก ERP สำเร็จ (อ่าน ${String(usersSync.body.rowsRead ?? '?')} · เขียน ${String(usersSync.body.rowsUpserted ?? '?')} แถว)`,
+    usersSync.status === 200 &&
+      (usersSync.body.status === 'success' || usersSync.body.status === 'partial'),
+    `HTTP ${usersSync.status} ${JSON.stringify(usersSync.body)}`,
+  );
+  // 'partial' = ERP ส่งมาไม่ถึง ERP_USER_MIN_EXPECTED_ROWS → ข้ามการปิดล็อกอินทั้งรอบ (fail-safe)
+  out(
+    `    (map ได้ ${num(m1, 'mapped')} · level ไม่อยู่ใน allowlist ${num(m1, 'unmapped')} · ` +
+      `หายจาก ERP ${num(m1, 'absent')} · ปิดล็อกอิน ${num(m1, 'deactivated')} · สถานะ ${String(usersSync.body.status)})`,
+  );
+
+  const roster = await req<Array<{ empId: string; name: string; role: string }>>('GET', '/members', {
+    token: adminToken,
+  });
+  const adminRow = roster.body.find((r) => r.empId.toLowerCase() === adminEmp.toLowerCase());
+  if (adminRow !== undefined && adminRow.role !== 'admin') {
+    // หยุดทันที ไม่ปล่อยให้ล้มต่อกันเป็นทอด ๆ: ทุกฉากหลังจากนี้ต้องใช้สิทธิ์ admin
+    throw new Error(
+      `รอบ sync ลดสิทธิ์ admin break-glass ${adminEmp} เป็น ${adminRow.role} — ` +
+        'รหัสพนักงานนี้ซ้ำกับแถวใน ERP (fixture ของ ERP_DRIVER=mock ใช้ 52101–52105) ' +
+        'สร้าง admin ใหม่ด้วยรหัสที่ ERP ไม่มี แล้วตั้ง SIM_ADMIN_EMP ให้ตรง',
+    );
   }
-  check(`สร้างพนักงาน ${staff.length} คน + บังคับตั้ง PIN ใหม่ครบ`, staff.length === 3);
+  check(
+    '🔒 sync ไม่แตะสิทธิ์ของ admin break-glass (credential source=local)',
+    adminRow?.role === 'admin',
+    `roster: ${JSON.stringify(adminRow)}`,
+  );
+
+  // ── พนักงานล็อกอินด้วยรหัสผ่านของ ERP (สัญญา wire เดิม: {empId, pin, deviceId}) ──
+  const accounts = parseAccounts(process.env['SIM_ERP_USERS'] ?? DEFAULT_ERP_USERS);
+  if (accounts.length < 3) {
+    throw new Error('SIM_ERP_USERS ต้องมีบัญชีอย่างน้อย 3 ชุด (เครื่อง A · B · C)');
+  }
+  const staff: Staff[] = [];
+  for (const [i, account] of accounts.slice(0, 3).entries()) {
+    const deviceId = `device-${'ABC'[i]}`;
+    const res = await login(account.login, account.password, deviceId);
+    staff.push({
+      login: account.login,
+      empId: res.user.empId,
+      name: res.user.name,
+      role: res.user.role,
+      deviceId,
+      token: res.token,
+    });
+  }
+  check(
+    `ล็อกอินด้วยรหัสผ่าน ERP ได้ ${staff.length} คน (${staff.map((s) => `${s.login}·${s.role}`).join(' ')})`,
+    staff.length === 3,
+  );
+  check(
+    'ทุกคนที่ล็อกอินได้มีแถวใน roster ที่ sync เขียนไว้ (รหัสพนักงานผูกกับผลนับ)',
+    staff.every((s) => roster.body.some((r) => r.empId === s.empId)),
+    JSON.stringify(staff.map((s) => s.empId)),
+  );
+
+  // 🔒 allowlist ล้วน: user_level ที่ไม่ได้ map ไว้ = ไม่ได้บัญชีเลย (ไม่ fallback เป็น viewer)
+  const unmapped = parseAccounts(process.env['SIM_ERP_UNMAPPED'] ?? DEFAULT_ERP_UNMAPPED)[0];
+  if (unmapped !== undefined) {
+    const denied = await req<{ code?: string }>('POST', '/auth/login', {
+      body: { empId: unmapped.login, pin: unmapped.password, deviceId: 'device-unmapped' },
+    });
+    check(
+      '🔒 user_level ที่ไม่อยู่ใน allowlist → ไม่ได้บัญชีเลย (ล็อกอินไม่ผ่าน)',
+      denied.status === 401 && denied.body.code === 'UNKNOWN_EMPLOYEE',
+      `HTTP ${denied.status} ${JSON.stringify(denied.body)}`,
+    );
+  }
+
+  // 🔒 สิทธิ์ของบัญชี ERP แก้จากแอปไม่ได้ — รอบ sync ถัดไปเขียนทับอยู่ดี
+  const erpManaged = await req<{ code?: string }>(
+    'PATCH',
+    `/members/${encodeURIComponent(staff[0].empId)}/role`,
+    { token: adminToken, body: { role: 'viewer' } },
+  );
+  check(
+    '🔒 แก้สิทธิ์บัญชีที่ ERP เป็นเจ้าของ → ถูกปฏิเสธ (ERP_MANAGED) ไม่ใช่ตอบ 200 แล้วผลหาย',
+    erpManaged.status === 400 && erpManaged.body.code === 'ERP_MANAGED',
+    `HTTP ${erpManaged.status} ${JSON.stringify(erpManaged.body)}`,
+  );
+
+  // 🔒 ยิง sync ซ้ำติด ๆ ต้องไม่ปิดล็อกอินใคร และไม่เตะคนที่รหัสผ่านไม่ได้เปลี่ยนออกจากระบบ
+  const usersSync2 = await req<SyncRunBody>('POST', '/sync/users', { token: adminToken });
+  const m2 = usersSync2.body.metrics ?? {};
+  check(
+    '🔒 sync ผู้ใช้รอบสองไม่ปิดล็อกอินใครเลย (ทุกคนยังอยู่ในผล ERP)',
+    usersSync2.status === 200 && num(m2, 'deactivated') === 0,
+    `HTTP ${usersSync2.status} ${JSON.stringify(usersSync2.body)}`,
+  );
+  const reLogin = await login(staff[0].login, accounts[0].password, staff[0].deviceId);
+  check(
+    '🔒 รหัสผ่านที่ไม่เปลี่ยนใน ERP → ล็อกอินเดิมยังใช้ได้หลัง sync (ไม่ rotate ทิ้งทุกชั่วโมง)',
+    reLogin.user.empId === staff[0].empId,
+  );
   out();
 
   // ── ฉาก 2: sync ยอดจาก ERP แล้วเปิดรอบ ────────────────────────────────
@@ -474,46 +621,28 @@ async function main(): Promise<void> {
   // ── ฉาก 8: ช่องโหว่ด้านความปลอดภัยที่เพิ่งปิด ─────────────────────────
   out('── ฉาก 8: ทดสอบช่องโหว่ที่เพิ่งปิดไป ──────────────────────────');
 
-  // 🔒 เดา PIN ผ่าน changePin (เดิมไม่มีการหน่วงเลย)
-  const victim = staff[0];
-  const guesses = await Promise.all(
-    Array.from({ length: 8 }, (_, i) =>
-      req<{ code?: string }>('POST', '/auth/change-pin', {
-        token: victim.token,
-        body: { currentPin: String(100000 + i), newPin: '918273' },
-      }),
-    ),
-  );
-  void guesses;
-  // คำขอที่ยิงพร้อมกันทั้งชุดผ่านด่านไปก่อนได้เป็นเรื่องปกติ (ยังไม่มีใครเขียนตัวนับเสร็จ)
-  // สิ่งที่ต้องพิสูจน์คือ **คำขอถัดไปต้องถูกหน่วง** ซึ่งเดิมไม่เกิดขึ้นเลย
-  const afterGuess = await req<{ code?: string; retryAfterMs?: number }>(
-    'POST',
-    '/auth/change-pin',
-    { token: victim.token, body: { currentPin: '111112', newPin: '918273' } },
-  );
-  check(
-    `🔒 เดา PIN ผ่าน change-pin แล้วคำขอถัดไปถูกหน่วง (${String(afterGuess.body.retryAfterMs ?? 0)}ms)`,
-    afterGuess.body.code === 'THROTTLED' || (afterGuess.body.retryAfterMs ?? 0) > 0,
-    JSON.stringify(afterGuess.body),
-  );
-
   // 🔒 ตัวนับความล้มเหลวต้องไม่ค้างเมื่อยิงพร้อมกัน
-  const burstEmp = staff[1].empId;
+  // (เดารหัสผ่านผ่าน change-pin ไม่ใช่ช่องทางอีกแล้ว — endpoint ถูกลบ พิสูจน์ไว้ในฉาก 1)
+  const burstLogin = staff[1].login;
   await Promise.all(
     Array.from({ length: 12 }, () =>
       req('POST', '/auth/login', {
-        body: { empId: burstEmp, pin: '111112', deviceId: 'attacker' },
+        body: { empId: burstLogin, pin: 'ผิดแน่นอน-111112', deviceId: 'attacker' },
       }),
     ),
   );
   const after = await req<{ code?: string; retryAfterMs?: number }>('POST', '/auth/login', {
-    body: { empId: burstEmp, pin: '111112', deviceId: 'attacker' },
+    body: { empId: burstLogin, pin: 'ผิดแน่นอน-111112', deviceId: 'attacker' },
   });
   check(
-    `🔒 ยิง PIN ผิดพร้อมกัน 12 ครั้ง → ระบบหน่วงจริง (retryAfter ${String(after.body.retryAfterMs ?? 0)}ms)`,
+    `🔒 ยิงรหัสผ่านผิดพร้อมกัน 12 ครั้ง → ระบบหน่วงจริง (retryAfter ${String(after.body.retryAfterMs ?? 0)}ms)`,
     after.body.code === 'THROTTLED' || (after.body.retryAfterMs ?? 0) > 1000,
     JSON.stringify(after.body),
+  );
+  // 🔒 หน่วงเท่านั้น ห้ามล็อกบัญชี — ไม่งั้นใครก็ล็อกเพื่อนร่วมงานออกจากระบบได้ด้วยการเดารหัสผ่าน
+  check(
+    '🔒 บัญชีที่ถูกยิงรัว ๆ ไม่ถูกล็อก (token ที่ถือไว้ยังทำงานได้)',
+    (await req('GET', '/members', { token: staff[1].token })).status === 200,
   );
 
   // 🔒 scan-events จากเครื่องที่ไม่เคย login
@@ -530,12 +659,21 @@ async function main(): Promise<void> {
     JSON.stringify(scan.body),
   );
 
-  // สิทธิ์: staff เปิดรอบไม่ได้
-  const staffOpen = await req('POST', '/count-sessions', {
-    token: staff[2].token,
-    body: {},
-  });
-  check('staff เปิดรอบนับไม่ได้ (ต้องเป็น admin)', staffOpen.status === 403);
+  // สิทธิ์: staff เปิดรอบไม่ได้ — role มาจาก user_level ของ ERP จึงต้องเลือกคนที่ไม่ใช่ admin จริง ๆ
+  const nonAdmin = staff.find((s) => s.role !== 'admin');
+  if (nonAdmin === undefined) {
+    out('    ⚠️ ข้ามด่านสิทธิ์: SIM_ERP_USERS เป็น admin ทั้งหมด (ตั้งบัญชี staff อย่างน้อย 1 คน)');
+  } else {
+    const staffOpen = await req('POST', '/count-sessions', {
+      token: nonAdmin.token,
+      body: {},
+    });
+    check(
+      `${nonAdmin.role} เปิดรอบนับไม่ได้ (ต้องเป็น admin)`,
+      staffOpen.status === 403,
+      `HTTP ${staffOpen.status}`,
+    );
+  }
   out();
 
   // ── ฉาก 9: รายงานสรุป ─────────────────────────────────────────────────

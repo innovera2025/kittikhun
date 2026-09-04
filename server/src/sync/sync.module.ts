@@ -18,10 +18,11 @@ import { z } from 'zod';
 
 import { CurrentUser, RequireFreshRole, Roles } from '../auth/auth.guards';
 import { AuthModule } from '../auth/auth.module';
-import type { AuthenticatedUser } from '../auth/auth.types';
+import { AuthService } from '../auth/auth.service';
+import { ROLE_RANK, type AuthenticatedUser, type Role } from '../auth/auth.types';
 import { CatalogModule } from '../catalog/catalog.module';
 import { CatalogService, TombstoneGuardrailError } from '../catalog/catalog.service';
-import type { AppConfig } from '../config/env.config';
+import { parseUserLevelRoleMap, type AppConfig } from '../config/env.config';
 import { PostgresService } from '../db/postgres.service';
 import {
   ERP_ADAPTER,
@@ -54,16 +55,55 @@ export interface SyncRunResult {
   rowsTombstoned: number;
   error?: string;
   anomalies: unknown[];
+  /** ตัวนับสรุปของรอบ (ดู `sync_runs.metrics`) — รอบ items ไม่มี */
+  metrics?: Record<string, number>;
+}
+
+/**
+ * ตัวนับของรอบผู้ใช้ที่ต้องเห็นได้จาก `sync_runs.metrics` โดยไม่ต้องเปิดโค้ด
+ *
+ * ⚠️ `unmapped` กับ `absent` เป็นคนละเรื่องกันโดยสิ้นเชิง และนี่คือจุดที่เคยพลาด:
+ *   `unmapped` = ปรากฏใน ERP แต่ `user_level` ไม่อยู่ใน allowlist → **ปัญหา config**
+ *                (map ตกไปค่าหนึ่ง / ERP เปลี่ยน level ให้คน) ห้ามลบ credential เด็ดขาด
+ *   `absent`   = ไม่ปรากฏในผล ERP เลย → **ปัญหาคน** (ลาออก/ถูกปิดบัญชี) เท่านั้นที่เข้า sweep ได้
+ */
+interface UserSyncMetrics extends Record<string, number> {
+  /** map เป็น role ได้ → เขียน users + credential */
+  mapped: number;
+  /** ปรากฏใน ERP แต่ level ไม่อยู่ใน allowlist — ไม่แตะแถวเดิมเลย */
+  unmapped: number;
+  /** ในจำนวน unmapped มีกี่คนที่ยังถือ credential อยู่ (ตัวเลขที่ฟ้องว่า map ตกค่าไหนไป) */
+  unmappedKeptCredential: number;
+  /** แถวที่รูปแบบใช้ไม่ได้ (emp_id/login/ชื่อ/รหัสผ่าน decode เพี้ยน) หรือ login ซ้ำในรอบเดียว */
+  rejected: number;
+  /** credential (erp/legacy_pin) ที่ไม่ปรากฏในผล ERP รอบนี้ — กำลังนับเวลา grace */
+  absent: number;
+  /** ในจำนวน absent ที่ค้างนานพ้น grace แล้ว = เข้าเกณฑ์ลบได้ */
+  graceElapsed: number;
+  /** ลบจริงในรอบนี้ */
+  deactivated: number;
+  /**
+   * ในจำนวน `deactivated` มีกี่คนที่เป็น admin — ตัวเลขที่ต้องดูก่อนตัวอื่นทั้งหมด
+   *
+   * ⚠️ เพดาน last-admin ยอมให้ผ่านตราบใดที่เหลือ admin ที่ล็อกอินได้ **อย่างน้อย 1 คน**
+   *    ซึ่งอาจเป็น break-glass (`source='local'`) เพียงคนเดียว = คลังไม่เหลือ admin ตัวจริงเลย
+   *    ทั้งที่รอบนั้นรายงานว่า 'success' → ตัวนับนี้กับ anomaly `admin_credentials_deactivated`
+   *    คือสิ่งเดียวที่ทำให้ผู้ดูแลรู้ตัว
+   */
+  adminsDeactivated: number;
+  /** พ้น grace แล้วแต่การ์ดปฏิเสธ (เพดาน %, เพดานแถวขั้นต่ำ, last-admin floor) */
+  refused: number;
 }
 
 /** ตรงกับ enum `sync_kind` ใน Postgres */
 /**
  * ชนิดของรอบ sync
- * ⚠️ เหลือ 'items' อย่างเดียวตั้งแต่ 22 ส.ค. 2569 — 'stock' และ 'count_sessions' ถูกตัดออก
- *    (ยอดคงเหลือมาพร้อม item master แล้ว · ไม่ mirror รอบนับของ ERP อีกต่อไป)
- *    ค่าเดิมยังมีในคอลัมน์ sync_runs.kind ของข้อมูลเก่า จึงไม่ลบออกจาก enum ใน DB
+ * ⚠️ 'stock' และ 'count_sessions' ถูกตัดออก 22 ส.ค. 2569 (ยอดคงเหลือมาพร้อม item master แล้ว ·
+ *    ไม่ mirror รอบนับของ ERP อีกต่อไป) ค่าเดิมยังมีในคอลัมน์ sync_runs.kind ของข้อมูลเก่า
+ *    จึงไม่ลบออกจาก enum ใน DB
+ * 'users' = รอบดึงผู้ใช้จาก `menuuser` (เพิ่มเข้า enum ด้วย ALTER TYPE ... ADD VALUE ใน schema.sql)
  */
-export type SyncKind = 'items';
+export type SyncKind = 'items' | 'users';
 
 /** อายุข้อมูลล่าสุดต่อ kind — CountService ใช้ตัดสิน `opened_on_stale_cache` */
 export interface SyncFreshness {
@@ -85,6 +125,8 @@ export interface SyncRunDto {
   status: SyncRunResult['status'] | 'running';
   error: string | null;
   anomalies: unknown[];
+  /** ตัวนับสรุปของรอบ — `{}` สำหรับรอบที่ไม่ได้บันทึกอะไร (เช่นรอบ items) */
+  metrics: Record<string, unknown>;
   stockAsOf: string | null;
   triggeredBy: string | null;
 }
@@ -104,11 +146,47 @@ export interface SyncStatusDto {
  */
 const LOCK_KEY: Readonly<Record<SyncKind, number>> = {
   items: 872_001,
+  users: 872_002, // คนละ key จาก items — รอบ users ไม่บล็อกรอบ items และกลับกัน
 };
 
 /** กันไม่ให้ jsonb ของ 1 รอบบวมจนอ่านไม่ได้ */
 const MAX_ANOMALIES = 200;
 const MAX_ERROR_LEN = 1000;
+
+/**
+ * ⚠️ สำเนาของ statement เดียวกับ `MembersService` โดยตั้งใจ — ทั้งสองไฟล์เขียน `users`/
+ * `refresh_tokens` ด้วยกติกาเดียวกันเป๊ะ (ลดสิทธิ์ = ตัด refresh token ทุกเครื่อง)
+ * ไม่ import ข้ามโมดูลเพราะ MembersModule ไม่ได้ export ค่าเหล่านี้ และ SyncModule
+ * ไม่ควรต้อง import ทั้ง MembersModule เพื่อเอาสตริงสองบรรทัด
+ */
+const AUDIT_SQL = `INSERT INTO audit_log (actor, action, payload) VALUES ($1, $2, $3::jsonb)`;
+
+const REVOKE_ALL_SQL = `UPDATE refresh_tokens SET revoked_at = now()
+                         WHERE emp_id = $1 AND revoked_at IS NULL`;
+
+/** กะเริ่มต้นของผู้ใช้ที่ sync มาจาก ERP — `menuuser` ไม่มีคอลัมน์กะ (สตริงเดียวกับ MembersService) */
+const DEFAULT_SHIFT = 'ยังไม่กำหนดกะ';
+
+/** `menuuser.emp_id` ต้องผ่านรูปแบบเดียวกับ CHECK `users_emp_id_fmt` ไม่งั้น INSERT ล้มทั้ง run */
+const EMP_CODE_RE = /^[A-Za-z0-9._-]{1,32}$/;
+
+/** ความยาวสูงสุดของ login_name ตาม CHECK `user_credentials_login_fmt` */
+const MAX_LOGIN_NAME_LEN = 64;
+
+/** U+FFFD ในรหัสผ่าน = decode charset ผิด — hash ค่าที่เพี้ยนไว้จะทำให้คนนั้นล็อกอินไม่ได้ตลอดไป */
+const REPLACEMENT_CHAR = '\uFFFD';
+
+/**
+ * \u0E15\u0E49\u0E2D\u0E07 "\u0E2B\u0E32\u0E22\u0E08\u0E32\u0E01\u0E1C\u0E25 ERP" \u0E15\u0E48\u0E2D\u0E40\u0E19\u0E37\u0E48\u0E2D\u0E07\u0E19\u0E32\u0E19\u0E40\u0E17\u0E48\u0E32\u0E19\u0E35\u0E49\u0E01\u0E48\u0E2D\u0E19\u0E16\u0E39\u0E01\u0E1B\u0E34\u0E14\u0E25\u0E47\u0E2D\u0E01\u0E2D\u0E34\u0E19 (cron \u0E23\u0E32\u0E22\u0E0A\u0E31\u0E48\u0E27\u0E42\u0E21\u0E07 \u2248 24 \u0E23\u0E2D\u0E1A\u0E15\u0E34\u0E14)
+ *
+ * \u0E40\u0E1B\u0E47\u0E19\u0E01\u0E32\u0E23\u0E4C\u0E14\u0E04\u0E19\u0E25\u0E30\u0E0A\u0E31\u0E49\u0E19\u0E01\u0E31\u0E1A\u0E40\u0E1E\u0E14\u0E32\u0E19 % \u0E41\u0E25\u0E30\u0E40\u0E1E\u0E14\u0E32\u0E19\u0E41\u0E16\u0E27\u0E02\u0E31\u0E49\u0E19\u0E15\u0E48\u0E33: \u0E2A\u0E2D\u0E07\u0E15\u0E31\u0E27\u0E19\u0E31\u0E49\u0E19\u0E04\u0E38\u0E21 "\u0E23\u0E2D\u0E1A\u0E19\u0E35\u0E49\u0E25\u0E1A\u0E40\u0E22\u0E2D\u0E30\u0E44\u0E1B\u0E44\u0E2B\u0E21"
+ * \u0E2A\u0E48\u0E27\u0E19\u0E15\u0E31\u0E27\u0E19\u0E35\u0E49\u0E04\u0E38\u0E21 "\u0E25\u0E1A\u0E08\u0E32\u0E01\u0E2B\u0E25\u0E31\u0E01\u0E10\u0E32\u0E19\u0E23\u0E2D\u0E1A\u0E40\u0E14\u0E35\u0E22\u0E27\u0E44\u0E2B\u0E21" \u2014 ERP \u0E15\u0E2D\u0E1A\u0E40\u0E1E\u0E35\u0E49\u0E22\u0E19\u0E2B\u0E19\u0E36\u0E48\u0E07\u0E23\u0E2D\u0E1A (query \u0E16\u0E39\u0E01\u0E15\u0E31\u0E14\u0E17\u0E2D\u0E19 /
+ * \u0E15\u0E32\u0E23\u0E32\u0E07\u0E16\u0E39\u0E01\u0E25\u0E47\u0E2D\u0E01 / deploy \u0E01\u0E25\u0E32\u0E07\u0E04\u0E31\u0E19) \u0E15\u0E49\u0E2D\u0E07\u0E44\u0E21\u0E48\u0E17\u0E33\u0E43\u0E2B\u0E49\u0E43\u0E04\u0E23\u0E25\u0E47\u0E2D\u0E01\u0E2D\u0E34\u0E19\u0E44\u0E21\u0E48\u0E44\u0E14\u0E49 \u0E19\u0E32\u0E2C\u0E34\u0E01\u0E32\u0E16\u0E39\u0E01\u0E25\u0E49\u0E32\u0E07\u0E17\u0E31\u0E19\u0E17\u0E35\u0E17\u0E35\u0E48\u0E01\u0E25\u0E31\u0E1A\u0E21\u0E32\u0E1E\u0E1A
+ */
+const ABSENCE_GRACE_HOURS = 24;
+
+/** ค่าเดียวกันในรูป interval ของ Postgres — ทั้ง sweep และด่าน last-admin ต่อแถวต้องใช้ตัวนี้ตัวเดียว */
+const ABSENCE_GRACE_INTERVAL = `${ABSENCE_GRACE_HOURS} hours`;
 
 function errorMessage(err: unknown): string {
   const raw = err instanceof Error ? err.message : String(err);
@@ -143,13 +221,52 @@ interface SyncRunRow {
   status: SyncRunDto['status'];
   error: string | null;
   anomalies: unknown;
+  metrics: unknown;
   stock_as_of: Date | null;
   triggered_by: string | null;
 }
 
+/** แถว `users` ที่ถูกล็อกไว้ระหว่างตัดสิน role (รูปเดียวกับ MembersService.changeRole) */
+interface LockedUserRow {
+  emp_id: string;
+  role: Role;
+}
+
+/** ⚠️ `secret_hash` เป็น argon2id เท่านั้น ห้ามหลุดออกจากขอบเขตของ verify/hash */
+interface CredentialRow {
+  source: string;
+  secret_hash: string;
+}
+
+interface DoomedCredentialRow {
+  login_name: string;
+  emp_id: string;
+  /** role ปัจจุบันของเจ้าของแถว — ใช้นับว่าลบแล้วยังเหลือ admin ที่ล็อกอินได้ไหม */
+  role: Role;
+}
+
+/**
+ * sweep รอบนี้จะทำให้ไม่เหลือ credential ของ admin เลย → ห้าม commit
+ *
+ * โยนจาก**ในทรานแซกชัน**ของ sweep โดยตั้งใจ เพื่อให้การลบทั้งก้อน rollback พร้อมกัน
+ * (ลบไปครึ่งทางแล้วค่อยรู้ตัว = ยังล็อกคนออกอยู่ดี) รอบถูกบันทึกเป็น 'failed'
+ */
+class AdminCredentialFloorError extends Error {
+  constructor(
+    readonly adminCredentials: number,
+    readonly doomedAdmins: number,
+  ) {
+    super(
+      `ยกเลิกการปิดล็อกอิน ${doomedAdmins} บัญชี: จะไม่เหลือ admin ที่ล็อกอินได้เลย ` +
+        `(admin ที่มี credential ทั้งหมด ${adminCredentials} คน) — ตรวจ ERP_USER_LEVEL_ROLE_MAP ก่อน`,
+    );
+    this.name = 'AdminCredentialFloorError';
+  }
+}
+
 const SELECT_RUNS_SQL = `SELECT id, driver, kind, warehouse_code, started_at, finished_at,
                                 rows_read, rows_upserted, rows_tombstoned, status, error,
-                                anomalies, stock_as_of, triggered_by
+                                anomalies, metrics, stock_as_of, triggered_by
                            FROM sync_runs
                           ORDER BY started_at DESC, id DESC
                           LIMIT $1`;
@@ -177,6 +294,8 @@ export class SyncService implements OnModuleInit {
     private readonly catalog: CatalogService,
     private readonly registry: SchedulerRegistry,
     private readonly cfg: ConfigService<AppConfig, true>,
+    /** ใช้ hashPin/verifyPin ตัวเดียวกับ login — pepper เดียวกันเท่านั้น (ห้ามมี pepper แยกของ sync) */
+    private readonly auth: AuthService,
   ) {
     this.driver = cfg.get('ERP_DRIVER', { infer: true });
     this.warehouseCode = cfg.get('WAREHOUSE_CODE', { infer: true });
@@ -195,6 +314,19 @@ export class SyncService implements OnModuleInit {
     this.registerJob('kk:sync:items', this.cfg.get('ERP_SYNC_CRON', { infer: true }), timeZone, () =>
       this.tick('items'),
     );
+
+    // ⚠️ ต่างจาก items ที่ลงทะเบียนเสมอ — รอบผู้ใช้ลงทะเบียน **เฉพาะเมื่อเปิดสวิตช์คัตโอเวอร์**
+    //    (ERP_USER_SYNC_ENABLED ไม่มี default เป็น true — ต้องมีคนกดเปิดเองเท่านั้น)
+    if (this.cfg.get('ERP_USER_SYNC_ENABLED', { infer: true })) {
+      this.registerJob(
+        'kk:sync:users',
+        this.cfg.get('ERP_USER_SYNC_CRON', { infer: true }),
+        timeZone,
+        () => this.tick('users'),
+      );
+    } else {
+      this.logger.log('ERP_USER_SYNC_ENABLED=false — ไม่ตั้งรอบ sync ผู้ใช้ (ล็อกอินใช้ข้อมูลเดิม)');
+    }
 
     if (this.driver === 'mock') {
       this.logger.warn('ERP_DRIVER=mock — scheduler ทำงานกับข้อมูล fixture ไม่ใช่ ERP จริง');
@@ -223,7 +355,8 @@ export class SyncService implements OnModuleInit {
   /** tick ของ cron — ห้าม throw ออกไปนอกนี้เด็ดขาด */
   private async tick(kind: SyncKind): Promise<void> {
     try {
-      const result = await this.syncItems('scheduler');
+      const result =
+        kind === 'users' ? await this.syncUsers('scheduler') : await this.syncItems('scheduler');
       this.logger.log(
         `รอบ ${kind} #${result.runId}: ${result.status} · อ่าน ${result.rowsRead} · เขียน ${result.rowsUpserted} · tombstone ${result.rowsTombstoned}`,
       );
@@ -315,6 +448,580 @@ export class SyncService implements OnModuleInit {
     return this.finishRun(runId, { status, rowsRead, rowsUpserted, rowsTombstoned, error, anomalies });
   }
 
+  // ── 2b. syncUsers ───────────────────────────────────────────────────────
+
+  /** ดึงผู้ใช้จาก `menuuser` เข้า users/user_credentials — ไม่ throw เมื่อ ERP ล่ม */
+  async syncUsers(triggeredBy: string): Promise<SyncRunResult> {
+    return this.withLock('users', triggeredBy, (by) => this.runUsers(by));
+  }
+
+  /**
+   * รอบผู้ใช้ — เขียน `users` (ตัวตน/สิทธิ์) + `user_credentials` (ตัวยืนยันตัวตน)
+   *
+   * 🚫 plaintext ของ ERP: `.expose()` ถูกเรียกแล้วส่งเข้า argon2 **ในบรรทัดเดียวกัน** ทุกจุด
+   *    ไม่มีการ assign ผลลัพธ์เก็บไว้เป็นตัวแปร ไม่มี anomaly/audit/log บรรทัดไหนรับค่านี้
+   *
+   * ⚠️ "level ไม่ได้ map" กับ "หายไปจาก ERP" คือคนละเรื่อง และห้ามเดินเส้นทางเดียวกัน:
+   *    level ที่ไม่ได้ map = **ปัญหา config ของเราเอง** (ตกไปค่าหนึ่ง / ERP เปลี่ยน level ให้คน)
+   *    → คนนั้นไม่ได้บัญชีใหม่ แต่ credential เดิม **ห้ามถูกแตะแม้แถวเดียว**
+   *    มีแต่ "ไม่ปรากฏในผล ERP เลย" เท่านั้นที่ป้อนเข้า deactivation sweep ได้
+   *
+   * ด่านที่ต้องมีครบ (ถอดออกข้อใดข้อหนึ่ง = ล็อกคนทั้งคลังออกได้ในรอบเดียว):
+   *  0. ต้องมี break-glass admin (`source='local'`) อยู่ก่อน มิฉะนั้นปฏิเสธทั้ง run
+   *  1. allowlist ล้วน — `user_level` ที่ไม่ได้ map = ไม่ได้บัญชีเลย (ไม่ fallback viewer)
+   *  2. last-admin floor ต่อแถว ด้วย `SELECT ... FOR UPDATE` แบบเดียวกับ MembersService.changeRole
+   *  3. deactivation sweep ผ่านครบทั้งสี่ชั้น: เพดานแถวขั้นต่ำ · grace หลายรอบ · เพดาน % ·
+   *     last-admin floor ของทั้ง sweep (ไม่ผ่านชั้นสุดท้าย = rollback ทั้งก้อน + รอบล้มเหลว)
+   */
+  private async runUsers(triggeredBy: string): Promise<SyncRunResult> {
+    const runId = await this.startRun('users', triggeredBy);
+    const anomalies: unknown[] = [];
+    const metrics: UserSyncMetrics = {
+      mapped: 0,
+      unmapped: 0,
+      unmappedKeptCredential: 0,
+      rejected: 0,
+      absent: 0,
+      graceElapsed: 0,
+      deactivated: 0,
+      adminsDeactivated: 0,
+      refused: 0,
+    };
+    let rowsRead = 0;
+
+    try {
+      // ── ด่าน 0: ต้องมี break-glass admin อยู่แล้วก่อนแตะอะไรเลย ──────────────
+      // create-admin เขียน source='local' ซึ่ง sync ห้ามแตะ → ถ้าไม่มีเลยแปลว่าไม่มี
+      // ทางกลับเข้าระบบถ้ารอบนี้ตีความ role ผิด จึงไม่ยอมเขียนอะไรทั้งสิ้น
+      const localAdmin = await this.db.query(
+        `SELECT 1 FROM user_credentials c JOIN users u ON u.emp_id = c.emp_id
+          WHERE c.source = 'local' AND u.role = 'admin' LIMIT 1`,
+      );
+      if (localAdmin.rows.length === 0) {
+        return this.finishRun(runId, {
+          status: 'failed',
+          error: 'ไม่มีบัญชี local admin (break-glass) เลย — รัน npm run create-admin ก่อน sync ผู้ใช้',
+          rowsRead: 0,
+          rowsUpserted: 0,
+          rowsTombstoned: 0,
+          anomalies,
+          metrics,
+        });
+      }
+
+      const roleMap = this.userLevelRoleMap();
+      const rows = await this.erp.fetchUsers();
+      rowsRead = rows.length;
+      const minExpected = this.cfg.get('ERP_USER_MIN_EXPECTED_ROWS', { infer: true });
+      // ⚠️ ไม่ได้ตั้งค่า = ไม่รู้ว่า "ครบ" คือกี่แถว → ถือว่าไม่ผ่านเพดานเสมอ ห้าม deactivate ใคร
+      //    (ด่าน boot บังคับตั้งค่านี้เมื่อ ERP_USER_SYNC_ENABLED=true แต่ POST /sync/users
+      //     ยิงด้วยมือได้แม้สวิตช์ปิดอยู่ — ตรงนั้นต้องไม่กลายเป็นทางลัดที่ไม่มีเพดาน)
+      const rowCountOk = minExpected !== undefined && rows.length >= minExpected;
+
+      // ⚠️ ชุดนี้คือ "ยังอยู่ใน ERP" ไม่ใช่ "ได้บัญชีรอบนี้" — เก็บทุกแถวที่ ERP ส่งมาและ
+      //    emp_id อ่านออก ไม่ว่าจะ map ไม่ได้ / login ซ้ำ / ชื่อว่าง ก็ตาม เพราะ sweep
+      //    ตอบคำถามเดียวคือ "คนนี้หายไปจาก ERP แล้วหรือยัง" ปนคำถามอื่นเข้าไปเมื่อไร
+      //    ค่า map ที่ตกไปค่าเดียวจะกลายเป็นการล้าง credential ทั้งคลังทันที
+      //
+      //    ประกอบให้ครบ **ก่อน** เข้าลูป (ไม่ใช่เติมทีละแถวระหว่างลูปแบบเดิม) เพราะด่าน
+      //    last-admin ต่อแถวต้องรู้ตั้งแต่แถวแรกว่า admin คนไหนกำลังจะถูก sweep ลบท้ายรอบ
+      //    เงื่อนไขคัดเข้าเหมือนเดิมเป๊ะ: emp_id ที่ผ่าน EMP_CODE_RE เท่านั้น
+      const presentEmpIds = new Set<string>(
+        rows.map((r) => r.empCode.trim()).filter((code) => EMP_CODE_RE.test(code)),
+      );
+
+      // ── admin ที่ "ยังเป็น admin อยู่ตอนนี้ แต่ credential จะถูกลบท้ายรอบนี้แน่ ๆ" ──────
+      // ห้ามนับคนกลุ่มนี้เป็นตาข่ายของด่าน last-admin ต่อแถว มิฉะนั้นลูปจะยอมลดสิทธิ์ admin
+      // คนสุดท้ายที่ล็อกอินได้จริง (โดยอ้างคนที่กำลังจะหายไป) แล้วรอบนั้นก็จบด้วยการที่
+      // sweep ต้อง rollback ทั้งก้อน — คลังเสียทั้งสิทธิ์และรอบ sync ไปพร้อมกัน
+      // นับเฉพาะรอบที่ sweep จะได้ทำงานจริง (rowCountOk) ไม่งั้นจะกันสิทธิ์คนโดยไม่มีเหตุ
+      const doomedAdminEmpIds = rowCountOk
+        ? await this.doomedAdminEmpIds(presentEmpIds)
+        : new Set<string>();
+      const seenLoginNames = new Set<string>(); // กันชนกันเองภายในรอบเดียว
+      const unmappedLevelsSeen = new Set<string>();
+      const unmappedEmpIds = new Set<string>(); // ใช้ตรวจว่ามีคนถือ credential ค้างอยู่กี่คน
+      let upserted = 0;
+
+      for (const row of rows) {
+        const login = row.loginName.trim().toLowerCase();
+        const empCode = row.empCode.trim();
+        const nameThai = row.nameThai.trim();
+        if (!EMP_CODE_RE.test(empCode)) {
+          // emp_id อ่านไม่ออก = จับคู่กับแถวใน user_credentials ไม่ได้อยู่แล้ว (CHECK เดียวกัน)
+          // 🚫 anomaly เก็บได้แค่ตัวระบุ — ห้ามมี password/hash ใด ๆ (sync_runs.anomalies อ่านได้ทีหลัง)
+          pushAnomaly(anomalies, { type: 'rejected_row', empCode, login });
+          metrics.rejected += 1;
+          continue;
+        }
+        // ⚠️ แถวนี้ถูก "นับว่ายังอยู่ใน ERP" ไปแล้วตั้งแต่ตอนประกอบ presentEmpIds ข้างบน —
+        //    ก่อนด่านอื่นทุกด่านโดยตั้งใจ (ตกด่านไหนหลังจากนี้ก็ยังไม่ใช่คนที่หายจาก ERP)
+
+        if (
+          login.length === 0 ||
+          login.length > MAX_LOGIN_NAME_LEN ||
+          nameThai.length === 0 ||
+          row.password.expose().includes(REPLACEMENT_CHAR)
+        ) {
+          pushAnomaly(anomalies, { type: 'rejected_row', empCode, login });
+          metrics.rejected += 1;
+          continue;
+        }
+        if (seenLoginNames.has(login)) {
+          pushAnomaly(anomalies, { type: 'duplicate_login', login });
+          metrics.rejected += 1;
+          continue;
+        }
+        seenLoginNames.add(login);
+
+        const mappedRole = roleMap.get(row.userLevel);
+        if (mappedRole === undefined) {
+          // ── allowlist ล้วน — level ที่ไม่ได้ map ไว้ "ไม่ได้บัญชีใหม่" ─────────
+          // แต่ **ห้ามลบของเดิม**: นี่คือปัญหา config ไม่ใช่หลักฐานว่าคนนี้ออกจาก ERP
+          // audit หนึ่งรายการต่อค่า level ที่ต่างกัน (ไม่ใช่ต่อแถว) ไม่งั้นบัญชีทั้ง ERP
+          // ที่ไม่เกี่ยวกับคลังจะท่วม audit_log ซึ่งเป็น append-only ลบไม่ได้
+          metrics.unmapped += 1;
+          unmappedEmpIds.add(empCode);
+          if (!unmappedLevelsSeen.has(row.userLevel)) {
+            unmappedLevelsSeen.add(row.userLevel);
+            await this.audit('scheduler', 'users.erp_level_unmapped', {
+              userLevel: row.userLevel,
+            });
+            pushAnomaly(anomalies, { type: 'erp_level_unmapped', userLevel: row.userLevel });
+          }
+          continue;
+        }
+
+        await this.db.transaction(async (client) => {
+          // ── ล็อกเป้าหมาย + admin ทุกคนพร้อมกัน เรียงตาม emp_id (ลำดับเดียวกันทุก tx =
+          //    ไม่มี deadlock) แล้ว **อ่าน role เก่าไว้ในโค้ดก่อน UPDATE**
+          //    ⚠️ ห้ามกลับไปใช้ `UPDATE ... RETURNING role` เพื่อเทียบ role เก่า/ใหม่:
+          //    RETURNING คืนค่า **ใหม่** เสมอ การเทียบกับตัวเองไม่มีทางเป็นจริง →
+          //    การเพิกถอน refresh token ตอนลดสิทธิ์จะไม่เคยทำงานแบบเงียบสนิท
+          const locked = await client.query<LockedUserRow>(
+            `SELECT emp_id, role FROM users WHERE emp_id = $1 OR role = 'admin'
+              ORDER BY emp_id FOR UPDATE`,
+            [empCode],
+          );
+          const lockedRows: LockedUserRow[] = locked.rows;
+          const current = lockedRows.find((r) => r.emp_id === empCode);
+          const fromRole = current?.role ?? null;
+          // ⚠️ ตัดคนที่ credential พ้น grace แล้วและ sweep จะลบท้ายรอบนี้ออกจากการนับ —
+          //    "ยังเป็น admin อยู่ ณ วินาทีนี้" ไม่ได้แปลว่าจะยังล็อกอินได้ตอนรอบจบ
+          const adminCountExcluding = lockedRows.filter(
+            (r) => r.role === 'admin' && r.emp_id !== empCode && !doomedAdminEmpIds.has(r.emp_id),
+          ).length;
+
+          // ── ด่าน last-admin ต่อแถว: ห้ามลดสิทธิ์ admin คนสุดท้ายไม่ว่า ERP จะบอกว่าอะไร ──
+          let effectiveRole = mappedRole;
+          let blockedByFloor = false;
+          if (fromRole === 'admin' && mappedRole !== 'admin' && adminCountExcluding === 0) {
+            effectiveRole = 'admin';
+            blockedByFloor = true;
+          }
+
+          if (!current) {
+            // ⚠️ ไม่เขียน pin_hash เลย (คอลัมน์ผ่อนเป็น nullable แล้ว) — credential อยู่คนละตาราง
+            await client.query(
+              `INSERT INTO users (emp_id, name, role, shift, warehouse_code, must_change_pin)
+               VALUES ($1, $2, $3::user_role, $4, $5, false)`,
+              [empCode, nameThai, effectiveRole, DEFAULT_SHIFT, this.warehouseCode],
+            );
+          } else {
+            // WHERE ... IS DISTINCT FROM: ไม่มีอะไรเปลี่ยน = ไม่แตะแถวเลย (updated_at ไม่ขยับ)
+            // role_version bump เฉพาะตอน role เปลี่ยนจริง (`role` ใน SET อ้างค่าเก่าเสมอ)
+            await client.query(
+              `UPDATE users SET name = $2, role = $3::user_role,
+                      role_version = role_version + CASE WHEN role <> $3::user_role THEN 1 ELSE 0 END,
+                      updated_at = now()
+                WHERE emp_id = $1
+                  AND (name IS DISTINCT FROM $2 OR role IS DISTINCT FROM $3::user_role)`,
+              [empCode, nameThai, effectiveRole],
+            );
+          }
+
+          if (blockedByFloor) {
+            await client.query(AUDIT_SQL, [
+              'scheduler',
+              'users.erp_last_admin_floor_blocked',
+              JSON.stringify({ empId: empCode, attemptedRole: mappedRole }),
+            ]);
+          } else if (fromRole !== null && fromRole !== effectiveRole) {
+            if (ROLE_RANK[effectiveRole] < ROLE_RANK[fromRole]) {
+              // ลดสิทธิ์ → ตัด refresh token ทุกเครื่อง ไม่ให้ทำงานต่อด้วยสิทธิ์เก่า
+              await client.query(REVOKE_ALL_SQL, [empCode]);
+            }
+            await client.query(AUDIT_SQL, [
+              'scheduler',
+              'users.erp_role_changed',
+              JSON.stringify({ empId: empCode, from: fromRole, to: effectiveRole }),
+            ]);
+          }
+
+          // ── credential upsert — source='local' ห้ามแตะเด็ดขาด ──────────────
+          const cred = await client.query<CredentialRow>(
+            `SELECT source, secret_hash FROM user_credentials WHERE emp_id = $1 FOR UPDATE`,
+            [empCode],
+          );
+          const existing: CredentialRow | undefined = cred.rows[0];
+
+          if (existing?.source === 'local') {
+            // no-op โดยตั้งใจ — break-glass เป็นทางกลับเข้าระบบ sync ห้ามเขียนทับ
+            return;
+          }
+
+          if (existing === undefined) {
+            await client.query(
+              `INSERT INTO user_credentials
+                 (login_name, emp_id, secret_hash, source, erp_user_level, erp_last_seen_at)
+               VALUES ($1, $2, $3, 'erp', $4, now())`,
+              [login, empCode, await this.auth.hashPin(row.password.expose()), row.userLevel],
+            );
+            await client.query(AUDIT_SQL, [
+              'scheduler',
+              'users.erp_created',
+              JSON.stringify({ empId: empCode, loginName: login, userLevel: row.userLevel }),
+            ]);
+            return;
+          }
+
+          // argon2 hash มี salt → เทียบ hash ตรง ๆ ไม่ได้ `verify` คือวิธีเดียวที่บอกได้ว่า
+          // รหัสผ่านเปลี่ยนไหม และช่วยไม่ให้ revoke token ทุกเครื่องทุกชั่วโมงโดยไม่จำเป็น
+          if (await this.auth.verifyPin(existing.secret_hash, row.password.expose())) {
+            await client.query(
+              `UPDATE user_credentials
+                  SET login_name = $1, erp_user_level = $2, erp_last_seen_at = now(),
+                      source = 'erp', updated_at = now()
+                WHERE emp_id = $3`,
+              [login, row.userLevel, empCode],
+            );
+            return;
+          }
+
+          // รหัสผ่านเปลี่ยนที่ ERP (หรือแถวเดิมเป็น legacy_pin ที่กำลังถูกเปลี่ยนสัญชาติ)
+          await client.query(
+            `UPDATE user_credentials
+                SET login_name = $1, secret_hash = $2, secret_rotated_at = now(),
+                    erp_user_level = $3, erp_last_seen_at = now(), source = 'erp', updated_at = now()
+              WHERE emp_id = $4`,
+            [login, await this.auth.hashPin(row.password.expose()), row.userLevel, empCode],
+          );
+          await client.query(REVOKE_ALL_SQL, [empCode]); // ตัดเซสชันเก่าทั้งหมด
+          await client.query(AUDIT_SQL, [
+            'scheduler',
+            'users.erp_secret_rotated',
+            JSON.stringify({ empId: empCode }),
+          ]);
+        });
+        upserted += 1;
+        metrics.mapped += 1;
+      }
+
+      // ── คนที่ level ไม่ได้ map แต่ยังถือ credential อยู่ = สัญญาณว่า map ตกค่าไหนไป ────
+      // ไม่ทำอะไรกับแถวเขาเลยโดยตั้งใจ — แค่ทำให้ผู้ดูแลเห็นตัวเลขนี้จาก sync_runs ตรง ๆ
+      if (unmappedEmpIds.size > 0) {
+        const kept = await this.db.one<{ n: number }>(
+          `SELECT count(*)::int AS n FROM user_credentials WHERE emp_id = ANY($1::text[])`,
+          [[...unmappedEmpIds]],
+        );
+        metrics.unmappedKeptCredential = kept?.n ?? 0;
+        if (metrics.unmappedKeptCredential > 0) {
+          pushAnomaly(anomalies, {
+            type: 'erp_level_unmapped_kept_credential',
+            credentials: metrics.unmappedKeptCredential,
+            levels: [...unmappedLevelsSeen],
+          });
+          this.logger.warn(
+            `ผู้ใช้ ${metrics.unmappedKeptCredential} คนมี user_level ที่ไม่อยู่ใน ` +
+              `ERP_USER_LEVEL_ROLE_MAP (${[...unmappedLevelsSeen].join(', ')}) — ` +
+              'คงบัญชีเดิมไว้ทุกแถว (ปัญหา config ไม่ใช่การลาออก)',
+          );
+        }
+      }
+
+      // ── deactivation + legacy-pin retirement = sweep เดียวที่มีการ์ดครบสี่ชั้น ────
+      let tombstoned = 0;
+      if (rowCountOk) {
+        const swept = await this.sweepAbsentCredentials(presentEmpIds, anomalies);
+        metrics.absent = swept.absent;
+        metrics.graceElapsed = swept.graceElapsed;
+        metrics.deactivated = swept.deactivated;
+        metrics.adminsDeactivated = swept.adminsDeactivated;
+        metrics.refused = swept.refused;
+        tombstoned = swept.deactivated;
+      } else {
+        // ดึงมาน้อยกว่าที่ควรเป็น = สงสัยว่า query/ERP ผิด → ห้ามแตะนาฬิกา grace และ
+        // ห้าม deactivate ใครทั้งสิ้น (นับไว้ให้เห็นว่าปฏิเสธไปกี่คน)
+        const absent = await this.db.one<{ n: number }>(
+          `SELECT count(*)::int AS n FROM user_credentials
+            WHERE source IN ('erp', 'legacy_pin') AND emp_id <> ALL($1::text[])`,
+          [[...presentEmpIds]],
+        );
+        metrics.absent = absent?.n ?? 0;
+        metrics.refused = metrics.absent;
+        pushAnomaly(anomalies, {
+          type: 'row_count_below_floor',
+          rowsRead: rows.length,
+          minExpected: minExpected ?? null,
+          absent: metrics.absent,
+        });
+        this.logger.warn(
+          `ERP ส่งผู้ใช้มา ${rows.length} แถว ไม่ถึง ERP_USER_MIN_EXPECTED_ROWS=` +
+            `${minExpected ?? 'ไม่ได้ตั้งค่า'} — ข้ามการ deactivate ทั้งหมดในรอบนี้`,
+        );
+      }
+
+      return this.finishRun(
+        runId,
+        {
+          status: rowCountOk ? 'success' : 'partial',
+          rowsRead: rows.length,
+          rowsUpserted: upserted,
+          rowsTombstoned: tombstoned,
+          anomalies,
+          metrics,
+        },
+        // รอบผู้ใช้ไม่แตะป้าย "ข้อมูล ณ HH:MM" ของสต็อก มิฉะนั้นป้ายจะโกหกว่าสต็อกเพิ่งอัปเดต
+        { setStockAsOf: false },
+      );
+    } catch (err) {
+      const error = errorMessage(err);
+      this.logger.error(`รอบผู้ใช้ล้มเหลว: ${error}`);
+      // ตัวนับที่เดินมาได้ก่อนล้มยังต้องเห็นใน sync_runs — ไม่งั้นรอบที่ล้มกลางทาง
+      // (เช่น last-admin floor ตัด sweep ทิ้ง) จะดูเหมือนรอบที่ไม่ได้ทำอะไรเลย
+      return this.finishRun(
+        runId,
+        {
+          status: 'failed',
+          error,
+          rowsRead,
+          rowsUpserted: metrics.mapped,
+          rowsTombstoned: metrics.deactivated,
+          anomalies,
+          metrics,
+        },
+        { setStockAsOf: false },
+      );
+    }
+  }
+
+  /**
+   * ปิดล็อกอินของคนที่ **หายไปจากผล ERP** — และเฉพาะคนกลุ่มนั้นเท่านั้น
+   *
+   * `presentEmpIds` คือ emp_id ทุกตัวที่ ERP ส่งมาในรอบนี้ (รวมคนที่ level ไม่ได้ map และ
+   * แถวที่ถูกปฏิเสธด้วยเหตุอื่น) — คนที่ยังอยู่ใน ERP ห้ามเข้ามาถึงบรรทัดนี้เด็ดขาด
+   *
+   * การ์ดสามชั้นในเมธอดนี้ (ชั้นที่สี่คือเพดานแถวขั้นต่ำ ผู้เรียกตรวจให้แล้ว):
+   *  1. **grace** — ต้องหายต่อเนื่องเกิน ABSENCE_GRACE_HOURS ชม. ไม่ใช่เห็นหายรอบเดียวแล้วลบ
+   *  2. **เพดาน %** — `ERP_USER_DEACTIVATE_MAX_PCT` ของ credential ที่ยังมีชีวิต
+   *  3. **last-admin floor ของทั้ง sweep** — ลบแล้วต้องเหลือ admin ที่ล็อกอินได้อย่างน้อย 1 คน
+   *     ไม่ผ่าน = โยนออกจากทรานแซกชัน → ไม่มีการลบไหน commit และรอบถูกบันทึกเป็น 'failed'
+   *
+   * ทั้งหมดอยู่ในทรานแซกชันเดียว (จำนวนแถวถูกเพดาน % คุมไว้แล้วจึงเล็กเสมอ)
+   */
+  private async sweepAbsentCredentials(
+    presentEmpIds: ReadonlySet<string>,
+    anomalies: unknown[],
+  ): Promise<{
+    absent: number;
+    graceElapsed: number;
+    deactivated: number;
+    adminsDeactivated: number;
+    refused: number;
+  }> {
+    const present = [...presentEmpIds];
+    const grace = ABSENCE_GRACE_INTERVAL;
+    const maxPct = this.cfg.get('ERP_USER_DEACTIVATE_MAX_PCT', { infer: true });
+
+    return this.db.transaction(async (client) => {
+      // กลับมาพบใน ERP แล้ว → หยุดนาฬิกาทันที (คนที่กลับมาต้องได้ grace เต็มใหม่รอบหน้า)
+      await client.query(
+        `UPDATE user_credentials SET absent_since = NULL
+          WHERE absent_since IS NOT NULL AND emp_id = ANY($1::text[])`,
+        [present],
+      );
+      // ไม่พบใน ERP → เริ่มจับเวลา **ครั้งแรกครั้งเดียว** (รอบถัด ๆ ไปห้ามรีเซ็ตให้นาฬิกาถอยหลัง)
+      await client.query(
+        `UPDATE user_credentials SET absent_since = now()
+          WHERE source IN ('erp', 'legacy_pin') AND absent_since IS NULL
+            AND emp_id <> ALL($1::text[])`,
+        [present],
+      );
+
+      const scope = await client.query<{ absent: number; grace_elapsed: number }>(
+        `SELECT count(*)::int AS absent,
+                count(*) FILTER (WHERE absent_since <= now() - $2::interval)::int AS grace_elapsed
+           FROM user_credentials
+          WHERE source IN ('erp', 'legacy_pin') AND emp_id <> ALL($1::text[])`,
+        [present, grace],
+      );
+      const absent = scope.rows[0]?.absent ?? 0;
+      const graceElapsed = scope.rows[0]?.grace_elapsed ?? 0;
+      if (graceElapsed === 0) {
+        return { absent, graceElapsed, deactivated: 0, adminsDeactivated: 0, refused: 0 };
+      }
+
+      // ล็อกเฉพาะแถว credential ที่จะลบ (FOR UPDATE OF c) — ไม่ล็อก users ทั้งตาราง
+      const doomed = await client.query<DoomedCredentialRow>(
+        `SELECT c.login_name, c.emp_id, u.role
+           FROM user_credentials c
+           JOIN users u ON u.emp_id = c.emp_id
+          WHERE c.source IN ('erp', 'legacy_pin')
+            AND c.emp_id <> ALL($1::text[])
+            AND c.absent_since <= now() - $2::interval
+          ORDER BY c.emp_id
+            FOR UPDATE OF c`,
+        [present, grace],
+      );
+      const doomedRows: DoomedCredentialRow[] = doomed.rows;
+      const live = await client.query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM user_credentials WHERE source IN ('erp', 'legacy_pin')`,
+      );
+      const liveTotal = live.rows[0]?.n ?? 0;
+      const ratio = liveTotal > 0 ? doomedRows.length / liveTotal : 0;
+
+      if (doomedRows.length === 0) {
+        return { absent, graceElapsed, deactivated: 0, adminsDeactivated: 0, refused: 0 };
+      }
+      if (ratio > maxPct / 100) {
+        pushAnomaly(anomalies, {
+          type: 'deactivate_guardrail_blocked',
+          doomed: doomedRows.length,
+          live: liveTotal,
+          ratio,
+        });
+        this.logger.warn(
+          `ข้าม deactivate ผู้ใช้: จะลบ ${doomedRows.length} จาก ${liveTotal} แถว ` +
+            `(${Math.round(ratio * 100)}% เกินเพดาน ${maxPct}%)`,
+        );
+        return {
+          absent,
+          graceElapsed,
+          deactivated: 0,
+          adminsDeactivated: 0,
+          refused: doomedRows.length,
+        };
+      }
+
+      // ── last-admin floor ของทั้ง sweep ────────────────────────────────────
+      // ด่าน 0 ตอนต้นรอบเช็คไว้ก่อนลูป แต่ลูปเองลด role ของคนได้ (รวมเจ้าของ credential
+      // ที่เป็น source='local' ซึ่ง sync ไม่แตะแถว credential แต่แตะ users.role ได้)
+      // จึงต้องนับใหม่ ณ ที่นี่ ไม่ใช่เชื่อผลตอนต้นรอบ
+      const admins = await client.query<{ n: number }>(
+        `SELECT count(*)::int AS n
+           FROM user_credentials c
+           JOIN users u ON u.emp_id = c.emp_id
+          WHERE u.role = 'admin'`,
+      );
+      const adminCredentials = admins.rows[0]?.n ?? 0;
+      const doomedAdmins = doomedRows.filter((d) => d.role === 'admin').length;
+      if (adminCredentials - doomedAdmins <= 0) {
+        // anomaly ถูก push ไว้ในหน่วยความจำก่อนโยน — rollback ไม่ได้ลบมันทิ้ง
+        // ผู้เรียกจึงยังบันทึกลง sync_runs ได้ในเส้นทาง 'failed'
+        pushAnomaly(anomalies, {
+          type: 'admin_credential_floor_blocked',
+          adminCredentials,
+          doomedAdmins,
+          doomed: doomedRows.length,
+        });
+        throw new AdminCredentialFloorError(adminCredentials, doomedAdmins);
+      }
+
+      // ── ผ่านเพดานแล้ว ≠ ไม่มีอะไรต้องบอก ────────────────────────────────
+      // เพดานข้างบนต้องการแค่ "เหลือ admin ที่ล็อกอินได้ ≥ 1 คน" ซึ่งถูกแล้ว (break-glass
+      // ต้องรอดเสมอ) แต่รอบที่ลบ admin ของ ERP ทิ้งจนเหลือแต่ break-glass จะรายงาน
+      // 'success' เงียบ ๆ ถ้าไม่มี anomaly ตัวนี้ — ผู้ดูแลจะรู้ตัวก็ตอนไม่มีใครเปิดรอบนับได้
+      if (doomedAdmins > 0) {
+        const survivors = await client.query<{ local_admins: number; other_admins: number }>(
+          `SELECT count(*) FILTER (WHERE c.source = 'local')::int  AS local_admins,
+                  count(*) FILTER (WHERE c.source <> 'local')::int AS other_admins
+             FROM user_credentials c
+             JOIN users u ON u.emp_id = c.emp_id
+            WHERE u.role = 'admin' AND c.login_name <> ALL($1::text[])`,
+          [doomedRows.map((d) => d.login_name)],
+        );
+        const localAdminsLeft = survivors.rows[0]?.local_admins ?? 0;
+        const otherAdminsLeft = survivors.rows[0]?.other_admins ?? 0;
+        pushAnomaly(anomalies, {
+          type: 'admin_credentials_deactivated',
+          deactivated: doomedAdmins,
+          // 🚫 ตัวระบุอย่างเดียว — ห้ามมี hash/รหัสผ่านใน anomaly (sync_runs อ่านได้ทีหลัง)
+          empIds: doomedRows.filter((d) => d.role === 'admin').map((d) => d.emp_id),
+          localAdminsLeft,
+          otherAdminsLeft,
+        });
+        this.logger.warn(
+          `ปิดล็อกอิน admin ${doomedAdmins} บัญชีที่หายจาก ERP — เหลือ admin ที่ล็อกอินได้ ` +
+            `${otherAdminsLeft} บัญชีจาก ERP + ${localAdminsLeft} บัญชี break-glass` +
+            (otherAdminsLeft === 0
+              ? ' ⚠️ ไม่เหลือ admin ตัวจริงเลย เหลือแต่บัญชี break-glass'
+              : ''),
+        );
+      }
+
+      for (const d of doomedRows) {
+        // ลบเฉพาะ credential — **ไม่แตะแถว users เลย** ประวัติการนับ (count_submissions
+        // เป็น ON DELETE RESTRICT) และ FK อีก 9 ตารางจึงอยู่ครบทุกแถว
+        await client.query(`DELETE FROM user_credentials WHERE login_name = $1`, [d.login_name]);
+        await client.query(REVOKE_ALL_SQL, [d.emp_id]);
+        await client.query(AUDIT_SQL, [
+          'scheduler',
+          'users.erp_deactivated',
+          JSON.stringify({ empId: d.emp_id, loginName: d.login_name }),
+        ]);
+      }
+      this.logger.log(
+        `ปิดล็อกอิน ${doomedRows.length} บัญชีที่หายจาก ERP เกิน ${ABSENCE_GRACE_HOURS} ชม. ` +
+          `(ยังมีอีก ${absent - graceElapsed} บัญชีที่นับเวลา grace อยู่)`,
+      );
+      return {
+        absent,
+        graceElapsed,
+        deactivated: doomedRows.length,
+        adminsDeactivated: doomedAdmins,
+        refused: graceElapsed - doomedRows.length,
+      };
+    });
+  }
+
+  /**
+   * admin ที่ credential พ้น grace แล้วและจะถูก `sweepAbsentCredentials` ลบท้ายรอบนี้
+   *
+   * ใช้เงื่อนไขชุดเดียวกับ sweep เป๊ะ ๆ (source · ไม่อยู่ใน ERP รอบนี้ · พ้น grace) เพื่อให้
+   * ด่าน last-admin ต่อแถวไม่ไปนับคนที่กำลังจะหายเป็น "ตาข่าย" ของ admin คนสุดท้าย
+   *
+   * ⚠️ คนในชุดนี้ **ไม่อยู่ใน `presentEmpIds`** อยู่แล้ว ลูปจึงไม่มีวันแก้ role ของเขาระหว่างรอบ
+   *    ค่าที่อ่านมาครั้งเดียวก่อนลูปจึงยังจริงตลอดรอบ
+   */
+  private async doomedAdminEmpIds(presentEmpIds: ReadonlySet<string>): Promise<Set<string>> {
+    const result = await this.db.query<{ emp_id: string }>(
+      `SELECT c.emp_id
+         FROM user_credentials c
+         JOIN users u ON u.emp_id = c.emp_id
+        WHERE u.role = 'admin'
+          AND c.source IN ('erp', 'legacy_pin')
+          AND c.emp_id <> ALL($1::text[])
+          AND c.absent_since <= now() - $2::interval`,
+      [[...presentEmpIds], ABSENCE_GRACE_INTERVAL],
+    );
+    return new Set(result.rows.map((r) => r.emp_id));
+  }
+
+  /**
+   * allowlist จาก `ERP_USER_LEVEL_ROLE_MAP` — ตัวเดียวกับที่ด่าน boot ตรวจไว้แล้ว
+   * ถ้าถึงตรงนี้แล้วยังพังแปลว่ามีคนแก้ค่าโดยข้ามการ validate → ปฏิเสธทั้ง run (ไม่เดา)
+   */
+  private userLevelRoleMap(): Map<string, Role> {
+    const raw = this.cfg.get('ERP_USER_LEVEL_ROLE_MAP', { infer: true }) ?? '';
+    const parsed = parseUserLevelRoleMap(raw);
+    if (parsed.errors.length > 0 || parsed.map.size === 0) {
+      throw new Error(
+        `ERP_USER_LEVEL_ROLE_MAP ใช้ไม่ได้: ${parsed.errors.join(' · ') || 'ไม่มีรายการ level=role'}`,
+      );
+    }
+    return parsed.map;
+  }
+
   // ── 3. syncCountSessions ────────────────────────────────────────────────
 
   /*
@@ -352,6 +1059,10 @@ export class SyncService implements OnModuleInit {
       status: row.status,
       error: row.error,
       anomalies: Array.isArray(row.anomalies) ? row.anomalies : [],
+      metrics:
+        typeof row.metrics === 'object' && row.metrics !== null && !Array.isArray(row.metrics)
+          ? (row.metrics as Record<string, unknown>)
+          : {},
       stockAsOf: iso(row.stock_as_of),
       triggeredBy: row.triggered_by,
     }));
@@ -423,22 +1134,36 @@ export class SyncService implements OnModuleInit {
     return Number(row.id);
   }
 
+  /**
+   * ปิดรอบใน `sync_runs`
+   *
+   * `setStockAsOf` (default `true` เพื่อไม่กระทบ `runItems` เดิม) — ตั้ง `false` สำหรับรอบที่
+   * ไม่ได้ดึงสต็อก (เช่นรอบผู้ใช้) มิฉะนั้นป้าย "ข้อมูล ณ HH:MM" ใน `GET /sync/status`
+   * จะโกหกว่าสต็อกเพิ่งอัปเดตทั้งที่รอบนั้นไม่ได้แตะ items_cache เลย
+   */
   private async finishRun(
     runId: number,
     outcome: {
       status: SyncRunResult['status'];
-      rowsRead: number;
-      rowsUpserted: number;
-      rowsTombstoned: number;
+      rowsRead?: number;
+      rowsUpserted?: number;
+      rowsTombstoned?: number;
       error?: string;
       anomalies: unknown[];
+      metrics?: Record<string, number>;
     },
+    opts: { setStockAsOf?: boolean } = {},
   ): Promise<SyncRunResult> {
     // CHECK ใน DB: status='failed' ต้องมี error · stock_as_of มีได้เฉพาะ success
     const error =
       outcome.status === 'failed'
         ? (outcome.error ?? 'ดึงข้อมูลจาก ERP ไม่สำเร็จ (ไม่มีรายละเอียดจาก driver)')
         : (outcome.error ?? null);
+
+    const rowsRead = toCount(outcome.rowsRead ?? 0);
+    const rowsUpserted = toCount(outcome.rowsUpserted ?? 0);
+    const rowsTombstoned = toCount(outcome.rowsTombstoned ?? 0);
+    const setStockAsOf = opts.setStockAsOf ?? true;
 
     await this.db.query(
       `UPDATE sync_runs
@@ -449,29 +1174,51 @@ export class SyncService implements OnModuleInit {
               status          = $5,
               error           = $6,
               anomalies       = $7::jsonb,
-              stock_as_of     = CASE WHEN $5::sync_run_status = 'success' THEN now() ELSE NULL END
+              metrics         = $9::jsonb,
+              stock_as_of     = CASE WHEN $8::boolean AND $5::sync_run_status = 'success'
+                                     THEN now() ELSE NULL END
         WHERE id = $1`,
       [
         runId,
-        toCount(outcome.rowsRead),
-        toCount(outcome.rowsUpserted),
-        toCount(outcome.rowsTombstoned),
+        rowsRead,
+        rowsUpserted,
+        rowsTombstoned,
         outcome.status,
         error,
         JSON.stringify(outcome.anomalies),
+        setStockAsOf,
+        JSON.stringify(outcome.metrics ?? {}),
       ],
     );
 
     const result: SyncRunResult = {
       runId,
       status: outcome.status,
-      rowsRead: toCount(outcome.rowsRead),
-      rowsUpserted: toCount(outcome.rowsUpserted),
-      rowsTombstoned: toCount(outcome.rowsTombstoned),
+      rowsRead,
+      rowsUpserted,
+      rowsTombstoned,
       anomalies: outcome.anomalies,
     };
     if (error !== null) result.error = error;
+    if (outcome.metrics !== undefined) result.metrics = outcome.metrics;
     return result;
+  }
+
+  /**
+   * บันทึก audit นอกทรานแซกชัน (ในทรานแซกชันใช้ `client.query(AUDIT_SQL, ...)` ตรง ๆ)
+   *
+   * 🚫 payload ต้องมีแต่ตัวระบุ — `audit_log` เป็น append-only ที่ระดับ engine
+   *    (`deny_mutation()` trigger) ถ้าเผลอเขียนรหัสผ่านลงไปแล้ว **ลบคืนไม่ได้เลย**
+   * audit ล้มเหลวห้ามทำให้รอบ sync ล้ม (เหมือน AuthService.audit)
+   */
+  private async audit(
+    actor: string,
+    action: string,
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    await this.db.query(AUDIT_SQL, [actor, action, JSON.stringify(payload)]).catch((err: unknown) => {
+      this.logger.warn(`เขียน audit_log ไม่สำเร็จ: ${errorMessage(err)}`);
+    });
   }
 
   /** รอบที่ถูกข้ามก็ต้องเห็นใน sync_runs ไม่งั้นผู้ดูแลจะไม่รู้ว่ารอบก่อนยังค้าง */
@@ -525,6 +1272,18 @@ export class SyncController {
   @HttpCode(200)
   async runItems(@CurrentUser() user: AuthenticatedUser): Promise<SyncRunResult> {
     return this.sync.syncItems(`manual:${user.empId}`);
+  }
+
+  /**
+   * trigger รอบผู้ใช้ด้วยมือ — จุดที่ Phase 3 ของคัตโอเวอร์กดครั้งแรก
+   * (guard เดียวกับ items: admin + role ต้องสด เพราะ blast radius คือสิทธิ์ของทุกคน)
+   */
+  @Post('users')
+  @Roles('admin')
+  @RequireFreshRole()
+  @HttpCode(200)
+  async runUsers(@CurrentUser() user: AuthenticatedUser): Promise<SyncRunResult> {
+    return this.sync.syncUsers(`manual:${user.empId}`);
   }
 
   /** ประวัติรอบล่าสุด — ทุก role ที่ login แล้วดูได้ */

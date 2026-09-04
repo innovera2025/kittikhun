@@ -297,7 +297,7 @@ kk logs -f api      # ดูว่ามีอะไรผิดไหม
 
 ```bash
 kk exec api node dist/cli/create-admin.js \
-  --emp-id 52104 --name "ชื่อ ผู้ดูแล" --shift "กะเช้า · A"
+  --emp-id 52901 --name "ชื่อ ผู้ดูแล" --shift "กะเช้า · A"
 # → พิมพ์ PIN เริ่มต้นครั้งเดียว · login แล้วระบบบังคับตั้ง PIN ใหม่
 ```
 

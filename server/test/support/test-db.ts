@@ -68,6 +68,7 @@ const TABLES = [
   'item_barcodes',
   'items_cache',
   'refresh_tokens',
+  'user_credentials',
   'devices',
   'sync_runs',
   'users',

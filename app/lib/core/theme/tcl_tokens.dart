@@ -225,11 +225,7 @@ class TclTokens extends ThemeExtension<TclTokens> {
   static TextStyle sheetTitle() =>
       thai(size: 23, weight: FontWeight.w600, color: tBrightest);
 
-  /// keypad 21/500
-  static TextStyle keypadKey() =>
-      display(size: 21, weight: FontWeight.w500, color: tBody);
-
-  /// ช่องรหัสพนักงาน 19/500 ls.14em
+  /// ช่องชื่อผู้ใช้ 19/500 ls.14em
   static TextStyle empIdInput() =>
       display(size: 19, weight: FontWeight.w500, color: tBrightest, letterSpacing: 2.66);
 
@@ -299,7 +295,6 @@ class TclTokens extends ThemeExtension<TclTokens> {
   static const double rLogoLarge = 17;
   static const double rTeamAction = 17;
   static const double rInput = 16;
-  static const double rKeypad = 16;
   static const double rCardAction = 16;
   static const double rFab = 16;
   static const double rStatTile = 16;
@@ -312,7 +307,6 @@ class TclTokens extends ThemeExtension<TclTokens> {
   static const double rCountInput = 14;
   static const double rDemoButton = 11;
   static const double rLogoSmall = 11;
-  static const double rPinCell = 6;
   static const double rPill = 999;
 
   // ══════════════════════════════════════════════════════════════════
@@ -381,7 +375,8 @@ class TclTokens extends ThemeExtension<TclTokens> {
   static const Duration dGlow = Duration(milliseconds: 2400);
   static const double glowMaxSpread = 14;
 
-  /// keypad transition
+  /// transition ของพื้น/ขอบช่องกรอกและปุ่ม (เดิมชื่อตาม keypad ที่ถอดทิ้งแล้ว —
+  /// ชื่อคงเดิมเพราะเป็นค่าเดียวกับที่ design กำหนดให้ทุก state change 140ms)
   static const Duration dKeypad = Duration(milliseconds: 140);
 
   /// toast แสดง 2400ms
@@ -402,7 +397,6 @@ class TclTokens extends ThemeExtension<TclTokens> {
   static const double hSignIn = 56;
   static const double hTabButton = 56;
   static const double hSubmit = 54;
-  static const double hKeypadKey = 54;
   static const double hTeamAction = 52;
   static const double hInput = 52;
   static const double hSearchInput = 52;
@@ -413,7 +407,6 @@ class TclTokens extends ThemeExtension<TclTokens> {
   static const double hRoleOption = 46;
   static const double hStepper = 44;
   static const double hDemoButton = 34;
-  static const double hPinCell = 12;
 
   // ══════════════════════════════════════════════════════════════════
   // ฟังก์ชันสถานะสต็อก (ใช้ร่วมทั้ง scan / search / count)

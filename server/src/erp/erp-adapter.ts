@@ -17,6 +17,8 @@
 
 import { z } from 'zod';
 
+import { ErpSecret } from './erp-secret';
+
 // ────────────────────────────────────────────────────────────────────────────
 // 1. Canonical types (รูปข้อมูลหลัง map จาก ERP แล้ว — domain ไม่เห็นชื่อคอลัมน์ ERP)
 // ────────────────────────────────────────────────────────────────────────────
@@ -62,6 +64,26 @@ export interface CanonicalItem {
  *
  *    รอบนับทั้งหมด **เปิดจากแอปเราเอง** → freeze ยอดจาก items_cache
  */
+
+/**
+ * ผู้ใช้ 1 คนจากตาราง `menuuser` ของ ERP (รูปข้อมูลกลาง — domain ไม่เห็นชื่อคอลัมน์ ERP)
+ *
+ * 🚫 `password` เป็น `ErpSecret` โดยตั้งใจ ไม่ใช่ `string` — plaintext ของ ERP ห้ามหลุด
+ *    ผ่าน template literal / `JSON.stringify` / logger โดยไม่ตั้งใจ (ดู erp-secret.ts)
+ *    ค่าดิบดึงได้จุดเดียวคือ `.expose()` แล้วต้องเข้า argon2 ทันที
+ */
+export interface ErpUserRow {
+  /** `menuuser.user_name` — ยังไม่ normalize (ผู้เรียกเป็นคน trim/lower เอง) */
+  loginName: string;
+  /** `menuuser.a_Password` — ⚠️ ห้าม trim ห้าม normalize (ERP เทียบแบบ string เป๊ะ) */
+  password: ErpSecret;
+  /** `menuuser.user_level` แบบดิบ — เก็บไว้ตอบคำถาม U1 จากข้อมูลจริงได้ทุกเมื่อ */
+  userLevel: string;
+  /** `menuuser.name_thai` */
+  nameThai: string;
+  /** `menuuser.emp_id` — anchor ของ `users.emp_id` ฝั่งเรา (ดู U3) ไม่ใช่ login handle */
+  empCode: string;
+}
 
 /** สถานะ ERP สำหรับ `GET /healthz/erp` — ERP ล่มห้ามทำให้ container unhealthy */
 export interface ErpHealth {
@@ -130,6 +152,15 @@ export interface ErpAdapter {
    * ยังเป็น SELECT ล้วน — ชื่อขึ้นต้น `fetch` โดยตั้งใจให้ผ่าน `WriteishMethodName`
    */
   fetchItemsBySku(skus: readonly string[]): Promise<CanonicalItem[]>;
+
+  /**
+   * อ่านผู้ใช้ทั้งหมดจาก `menuuser` — ยังเป็น SELECT ล้วน ชื่อขึ้นต้น `fetch` โดยตั้งใจ
+   * ให้ผ่าน `WriteishMethodName` เหมือน `fetchItemsBySku`
+   *
+   * คืนอาเรย์เดียว (ไม่ stream) — จำนวนผู้ใช้อยู่หลักร้อย และ deactivation sweep
+   * ต้องเห็น "ชุดครบ" ของรอบนั้นถึงจะตัดสินได้ว่าใครหายไปจาก ERP แล้วจริง
+   */
+  fetchUsers(): Promise<ErpUserRow[]>;
 
   healthCheck(): Promise<ErpHealth>;
 }
@@ -407,6 +438,7 @@ export abstract class BaseErpDriver implements ErpAdapter {
   abstract capabilities(): ErpCapabilities;
   abstract fetchItems(since?: ErpCursor): AsyncIterable<CanonicalItem[]>;
   abstract fetchItemsBySku(skus: readonly string[]): Promise<CanonicalItem[]>;
+  abstract fetchUsers(): Promise<ErpUserRow[]>;
   abstract healthCheck(): Promise<ErpHealth>;
 
   /**

@@ -4,7 +4,6 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'core/theme/tcl_tokens.dart';
-import 'features/login/change_pin_screen.dart';
 import 'features/login/login_screen.dart';
 import 'features/shell/app_shell.dart';
 import 'state/app_state.dart';
@@ -112,25 +111,11 @@ class TclRoot extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final signedIn = ref.watch(appProvider.select((s) => s.signedIn));
-    final mustChangePin =
-        ref.watch(appProvider.select((s) => s.mustChangePin));
 
-    // ลำดับจอ: ยังไม่ล็อกอิน → Login
-    //          ล็อกอินแล้วแต่ต้องตั้ง PIN ใหม่ (PIN เริ่มต้นจาก admin / ถูก reset)
-    //            → บังคับตั้ง PIN ก่อนเข้าใช้งาน
-    //          ปกติ → AppShell
-    final Widget screen;
-    if (!signedIn) {
-      screen = const LoginScreen();
-    } else if (mustChangePin) {
-      screen = ChangePinScreen(
-        forced: true,
-        onDone: () => ref.read(appProvider.notifier).pinChanged(),
-        onSignOut: () => ref.read(appProvider.notifier).signOut(),
-      );
-    } else {
-      screen = const AppShell();
-    }
+    // ลำดับจอมีสองสถานะเท่านั้น: ยังไม่ล็อกอิน → Login · ล็อกอินแล้ว → AppShell
+    // (จอ "บังคับตั้ง PIN ใหม่" ถูกถอดทิ้งพร้อมกับ PIN — รหัสผ่านเป็นของ ERP
+    //  เปลี่ยนที่ ERP แล้ว sync รอบถัดไปจะตามมาเอง)
+    final Widget screen = signedIn ? const AppShell() : const LoginScreen();
 
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: _overlayLight,

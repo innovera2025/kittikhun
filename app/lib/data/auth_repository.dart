@@ -6,16 +6,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'api_client.dart';
 import 'models.dart';
 
-/// Repository ชั้น auth + members — **ผู้ใช้เป็นของระบบเราเอง ไม่ดึงจาก ERP**
+/// Repository ชั้น auth + members — **ผู้ใช้มาจาก ERP (`menuuser`) ผ่าน sync**
 ///
 /// กติกาของไฟล์นี้:
 /// - ไม่แปลข้อความ error เอง: backend ส่ง `message` เป็นภาษาไทยตาม design มาแล้ว
 ///   ชั้นนี้ปล่อย [ApiException] ขึ้นไปให้ UI แสดงตามที่ได้รับ
-/// - ⚠️ **ห้าม log PIN / initialPin / token** ไม่ว่ากรณีใด (เครื่องคลังใช้ร่วมกัน)
+/// - ⚠️ **ห้าม log รหัสผ่าน / token** ไม่ว่ากรณีใด (เครื่องคลังใช้ร่วมกัน)
 /// - token ทั้งหมดอยู่ใน TokenStore (flutter_secure_storage) เท่านั้น
-
-/// เวอร์ชันแอปที่ส่งไปกับ login (ตรงกับ `version:` ใน pubspec.yaml)
-const String _kAppVersion = '4.0.0';
+/// - แอปสร้าง/รีเซ็ตผู้ใช้ไม่ได้ — แก้ที่ ERP แล้วรอ sync รอบถัดไป
 
 /// ข้อความกะเริ่มต้นเมื่อ server ยังไม่กำหนดกะให้ (ตรงตาม design)
 const String _kUnassignedShift = 'ยังไม่กำหนดกะ';
@@ -33,7 +31,6 @@ class UserProfile {
     required this.role,
     required this.shift,
     required this.warehouseCode,
-    required this.mustChangePin,
   });
 
   final String empId;
@@ -42,54 +39,33 @@ class UserProfile {
 
   /// กะ — `null` จาก server ถูกแทนด้วย 'ยังไม่กำหนดกะ' แล้ว
   final String shift;
-  final String warehouseCode;
 
-  /// true = ต้องตั้ง PIN ใหม่ก่อนใช้งาน (PIN เริ่มต้นจาก admin หรือถูก reset)
-  final bool mustChangePin;
+  /// คลังของผู้ใช้ — `null` เมื่อ server ส่งค่าว่าง/ช่องว่างล้วนมา
+  /// (หัวจอต้องขึ้น "คลัง" เปล่า ๆ ไม่ได้ ต้องรู้ว่าไม่มีค่าแล้วเลือกคำเอง)
+  final String? warehouseCode;
 
+  /// ⚠️ ไม่มี `mustChangePin` แล้ว — server ยังส่งคีย์นี้มาในสัญญา wire แต่เป็น
+  /// `false` เสมอหลังย้ายไปล็อกอินด้วยข้อมูลรับรองของ ERP (แผน B-2) ฝั่งแอปจึง
+  /// เลือกไม่อ่านมันเลย ดีกว่าถือค่าที่ไม่มีวันเป็นจริงไว้ให้เข้าใจผิด
   factory UserProfile.fromJson(Map<String, dynamic> json) => UserProfile(
         empId: _requireString(json['empId'], 'empId'),
         name: _asString(json['name']),
         role: _roleFromApi(json['role']),
         shift: _shiftOrDefault(json['shift']),
-        warehouseCode: _asString(json['warehouseCode']),
-        mustChangePin: json['mustChangePin'] == true,
+        warehouseCode: _emptyToNull(_asString(json['warehouseCode'])),
       );
 
   /// แปลงเป็น [Member] เพื่อใช้ร่วมกับรายชื่อสมาชิกในหน้า Team
   Member toMember() =>
       Member(name: name, empId: empId, shift: shift, role: role);
-
-  UserProfile copyWith({bool? mustChangePin}) => UserProfile(
-        empId: empId,
-        name: name,
-        role: role,
-        shift: shift,
-        warehouseCode: warehouseCode,
-        mustChangePin: mustChangePin ?? this.mustChangePin,
-      );
 }
 
 /// ผลของการเข้าสู่ระบบสำเร็จ
 @immutable
 class LoginResult {
-  const LoginResult({required this.user, required this.mustChangePin});
+  const LoginResult({required this.user});
 
   final UserProfile user;
-
-  /// เท่ากับ `user.mustChangePin` — แยกออกมาให้ชั้น routing อ่านง่าย
-  final bool mustChangePin;
-}
-
-/// ผลของการเพิ่มสมาชิก — `initialPin` แสดงให้ admin เห็น **ครั้งเดียว**
-@immutable
-class AddMemberResult {
-  const AddMemberResult({required this.member, required this.initialPin});
-
-  final Member member;
-
-  /// ⚠️ PIN เริ่มต้นที่ server สุ่มให้ — ห้าม log ห้ามเก็บลง storage
-  final String initialPin;
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -113,11 +89,12 @@ class AuthRepository {
       'empId': empId,
       'pin': pin,
       'deviceId': deviceId,
-      'appVersion': _kAppVersion,
+      'appVersion': ApiConfig.appVersion,
     });
     await _saveTokens(json);
-    final user = UserProfile.fromJson(_asMap(json['user'], '/auth/login.user'));
-    return LoginResult(user: user, mustChangePin: user.mustChangePin);
+    return LoginResult(
+      user: UserProfile.fromJson(_asMap(json['user'], '/auth/login.user')),
+    );
   }
 
   /// ออกจากระบบ — เคลียร์ token บนเครื่องให้สำเร็จเสมอ แม้ request ล้มเหลว
@@ -132,17 +109,6 @@ class AuthRepository {
     } finally {
       await store.clear();
     }
-  }
-
-  /// ตั้ง PIN ใหม่ — ใช้ทั้งกรณีบังคับครั้งแรก (mustChangePin) และเปลี่ยนตามปกติ
-  Future<void> changePin({
-    required String currentPin,
-    required String newPin,
-  }) async {
-    await api.post('/auth/change-pin', body: {
-      'currentPin': currentPin,
-      'newPin': newPin,
-    });
   }
 
   /// กู้เซสชันตอนเปิดแอป — refresh แล้วดึงโปรไฟล์ตัวเองจาก `GET /members`
@@ -182,10 +148,7 @@ class AuthRepository {
         name: me.name,
         role: me.role,
         shift: me.shift,
-        warehouseCode: _asString(claims['wh']),
-        // refresh ไม่ส่ง mustChangePin กลับมา — ถ้ายังต้องเปลี่ยน PIN
-        // endpoint ที่ถูก gate จะตอบ MUST_CHANGE_PIN ให้ UI พาไปตั้ง PIN เอง
-        mustChangePin: false,
+        warehouseCode: _emptyToNull(_asString(claims['wh'])),
       );
     } catch (_) {
       return null;
@@ -237,45 +200,15 @@ class MembersRepository {
         .toList(growable: false);
   }
 
-  /// เพิ่มสมาชิก (admin) — คืน PIN เริ่มต้นที่ server สุ่มให้ **แสดงครั้งเดียว**
-  Future<AddMemberResult> add({
-    required String empId,
-    required String name,
-    required Role role,
-    String? shift,
-  }) async {
-    final body = <String, dynamic>{
-      'empId': empId,
-      'name': name,
-      'role': _roleToApi(role),
-    };
-    final trimmedShift = shift?.trim();
-    if (trimmedShift != null && trimmedShift.isNotEmpty) {
-      body['shift'] = trimmedShift;
-    }
-    final json = _asMap(await api.post('/members', body: body), '/members');
-    return AddMemberResult(
-      member: _memberFromJson(json),
-      initialPin: _requireString(json['initialPin'], 'initialPin'),
-    );
-  }
-
-  /// เปลี่ยนสิทธิ์ (admin)
+  /// เปลี่ยนสิทธิ์ (admin) — mutation เดียวที่แอปทำกับสมาชิกได้
+  ///
+  /// ⚠️ ไม่มี `add` / `resetPin` แล้ว: ชื่อผู้ใช้และรหัสผ่านเป็นของ ERP
+  /// (`POST /members` และ `POST /members/:empId/reset-pin` ถูกลบทิ้งฝั่ง server)
   Future<void> changeRole({required String empId, required Role role}) async {
     await api.patch(
       '/members/${Uri.encodeComponent(empId)}/role',
       body: {'role': _roleToApi(role)},
     );
-  }
-
-  /// รีเซ็ต PIN (admin) — คืน PIN เริ่มต้นใหม่ **แสดงครั้งเดียว**
-  /// ใช้แทน unlock ด้วย: ไม่มี endpoint `/auth/unlock/:empId`
-  Future<String> resetPin(String empId) async {
-    final json = _asMap(
-      await api.post('/members/${Uri.encodeComponent(empId)}/reset-pin'),
-      '/members/:empId/reset-pin',
-    );
-    return _requireString(json['initialPin'], 'initialPin');
   }
 }
 
@@ -310,6 +243,12 @@ String _shiftOrDefault(Object? raw) {
 }
 
 String _asString(Object? raw) => raw is String ? raw : '';
+
+/// ช่องว่างล้วน/สตริงว่าง = "ไม่มีค่า" ไม่ใช่ค่าที่เอาไปต่อท้ายคำว่า 'คลัง' ได้
+String? _emptyToNull(String raw) {
+  final s = raw.trim();
+  return s.isEmpty ? null : s;
+}
 
 /// ฟิลด์ที่ขาดไม่ได้ — ผิดสัญญา backend ถือเป็นบั๊ก ไม่ใช่ error ที่ผู้ใช้แก้ได้
 /// (ข้อความเป็นภาษาอังกฤษโดยเจตนา: dev-facing ไม่ใช่ข้อความบน UI

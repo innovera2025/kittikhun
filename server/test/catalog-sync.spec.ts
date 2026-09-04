@@ -1,6 +1,6 @@
 import { CatalogService, TombstoneGuardrailError } from '../src/catalog/catalog.service';
 import type { PostgresService } from '../src/db/postgres.service';
-import type { CanonicalItem, ErpAdapter } from '../src/erp/erp-adapter';
+import type { CanonicalItem, ErpAdapter, ErpUserRow } from '../src/erp/erp-adapter';
 import {
   applySchema,
   describeWithDb,
@@ -45,6 +45,13 @@ const makeFakeErp = (): FakeErp => {
       fake.calls.push([...skus]);
       if (fake.failWith !== null) throw fake.failWith;
       return fake.liveRows;
+    },
+    /**
+     * `CatalogService` ไม่แตะเส้นทางผู้ใช้เลย — มีไว้ให้ครบ `ErpAdapter` เท่านั้น
+     * ถ้าวันหนึ่ง catalog เผลอเรียกเส้นทางนี้ อาเรย์ว่างจะทำให้เทสต์ที่เกี่ยวข้องแดงเอง
+     */
+    fetchUsers(): Promise<ErpUserRow[]> {
+      return Promise.resolve([]);
     },
   };
   return fake;

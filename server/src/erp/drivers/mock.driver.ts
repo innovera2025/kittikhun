@@ -1,4 +1,5 @@
 import type { ErpAdapter, ErpHealth } from '../erp-adapter';
+import { ErpSecret } from '../erp-secret';
 
 /**
  * Mock driver — fixture canonical จาก design ต้นแบบ (`Stock Scan Mobile.dc.html`)
@@ -17,6 +18,7 @@ type ItemBatch =
   ReturnType<ErpAdapter['fetchItems']> extends AsyncIterable<infer TBatch> ? TBatch : never;
 type CanonicalItem = ItemBatch[number];
 type ErpCapabilities = ReturnType<ErpAdapter['capabilities']>;
+type ErpUserRow = Awaited<ReturnType<ErpAdapter['fetchUsers']>>[number];
 
 /**
  * mock ยึดรหัสคลังตาม design (`WH-BKK-02`)
@@ -168,6 +170,61 @@ function toCanonicalItem(seed: ItemSeed): CanonicalItem {
   };
 }
 
+/**
+ * ผู้ใช้จำลองของ `menuuser` — ครอบทุกสาขาที่ `runUsers()` ต้องเดินจริง
+ *
+ * ⚠️ ค่า `password` ทั้งหมดเป็น **สตริงสมมติสำหรับ dev/CI เท่านั้น** ไม่ใช่ความลับของใคร
+ *    และไม่มีทางไปโผล่ที่ ERP จริง (ไฟล์นี้ทำงานเฉพาะเมื่อ `ERP_DRIVER=mock`)
+ *
+ * `userLevel` จงใจมีค่าที่ **ไม่อยู่ใน allowlist** ปนมาหนึ่งค่า ('3' = ฝ่ายบัญชี) เพื่อให้
+ * เทสต์ allowlist มีของจริงให้ยืนยันว่า level ที่ไม่ได้ map ไว้ **ไม่ได้บัญชีเลย**
+ * (ไม่ fallback เป็น viewer) — `menuuser` คือตารางบัญชีของ ERP ทั้งระบบ ไม่ใช่แค่คลัง
+ */
+const USER_SEEDS: readonly {
+  readonly loginName: string;
+  readonly password: string;
+  readonly userLevel: string;
+  readonly nameThai: string;
+  readonly empCode: string;
+}[] = [
+  {
+    loginName: 'somchai.a',
+    password: 'mock-admin-secret',
+    userLevel: '9',
+    nameThai: 'สมชาย อารีย์',
+    empCode: '52101',
+  },
+  {
+    loginName: 'Suda.K',
+    password: 'mock-staff-secret',
+    userLevel: '5',
+    nameThai: 'สุดา กมลชัย',
+    empCode: '52102',
+  },
+  {
+    loginName: 'anan.p',
+    password: 'mock-staff-secret-2',
+    userLevel: '5',
+    nameThai: 'อนันต์ พงษ์ศิริ',
+    empCode: '52103',
+  },
+  {
+    loginName: 'wipa.s',
+    password: 'mock-viewer-secret',
+    userLevel: '1',
+    nameThai: 'วิภา สุขใจ',
+    empCode: '52104',
+  },
+  {
+    // ฝ่ายบัญชี — ไม่ควรมีบัญชีในแอปคลัง (level นี้ห้ามอยู่ใน ERP_USER_LEVEL_ROLE_MAP)
+    loginName: 'account.one',
+    password: 'mock-accounting-secret',
+    userLevel: '3',
+    nameThai: 'บัญชี หนึ่ง',
+    empCode: '52105',
+  },
+];
+
 export class MockDriver implements ErpAdapter {
   /** fixture ไม่มี updated-at ที่เชื่อถือได้ → server ใช้ full snapshot + diff */
   capabilities(): ErpCapabilities {
@@ -184,6 +241,22 @@ export class MockDriver implements ErpAdapter {
 
   async *fetchItems(): AsyncGenerator<CanonicalItem[]> {
     yield ITEM_SEEDS.map(toCanonicalItem);
+  }
+
+  /**
+   * ผู้ใช้จำลองจาก `menuuser` — คืนชุดครบรอบเดียวเหมือน driver จริง
+   * ห่อ plaintext ด้วย `ErpSecret` ตั้งแต่ตรงนี้ เพื่อให้เส้นทาง mock เจอกฎเดียวกับของจริง
+   */
+  fetchUsers(): Promise<ErpUserRow[]> {
+    return Promise.resolve(
+      USER_SEEDS.map((seed) => ({
+        loginName: seed.loginName,
+        password: ErpSecret.of(seed.password),
+        userLevel: seed.userLevel,
+        nameThai: seed.nameThai,
+        empCode: seed.empCode,
+      })),
+    );
   }
 
   /** mock ไม่ต้องต่ออะไร — แต่ต้องมีตาม contract เพื่อให้ ErpModule เรียกได้เหมือนกันทุก driver */

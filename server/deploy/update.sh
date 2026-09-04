@@ -91,6 +91,15 @@ SELECT 'ux_count_sessions_open    : ' ||
                    FROM pg_indexes WHERE indexname='ux_count_sessions_open'), 'ยังไม่มี ⚠️');
 SQL
 
+# ตัวยืนยันของแผนล็อกอินผ่าน ERP — "users ไม่มี credential" ต้องเป็น 0 เสมอก่อนคัตโอเวอร์
+# (backfill ใน schema.sql การันตีให้อยู่แล้ว ตัวเลขนี้คือหลักฐานว่ามันทำงานจริงรอบนี้)
+# หลังคัตโอเวอร์ Phase 3 ตัวเลขนี้ > 0 ได้ตามดีไซน์ = คนที่ถูก deactivate ไปแล้ว
+psql_value <<'SQL' | sed 's/^/     /'
+SELECT 'user_credentials ทั้งหมด : ' || count(*) FROM user_credentials;
+SELECT 'users ไม่มี credential   : ' || count(*)
+  FROM users u WHERE NOT EXISTS (SELECT 1 FROM user_credentials c WHERE c.emp_id = u.emp_id);
+SQL
+
 # ── 5. build + ขึ้นระบบ ─────────────────────────────────────────────────────
 say "5. build image แล้วสลับคอนเทนเนอร์ api"
 $COMPOSE build api

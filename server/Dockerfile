@@ -22,6 +22,7 @@ COPY sql ./sql
 # db/schema.sql ถูก mount โดย compose สำหรับ init ครั้งแรก
 USER node
 EXPOSE 8080
-# migration รันใน entrypoint ใต้ Postgres advisory lock (รันครั้งเดียวแน่นอน
-# แม้ scale api หลาย replica) — ดู docs/architecture.md §8.1
+# ⚠️ คอนเทนเนอร์นี้ **ไม่ได้รัน migration ตอน boot** (`dist/main.js` ไม่แตะ DB เลยก่อน
+#    listen — ดู src/main.ts) migration คือ `npm run migrate` ที่มนุษย์รันเอง ก่อน build
+#    และสลับคอนเทนเนอร์เสมอ (ดู deploy/update.sh ขั้น 4)
 CMD ["node", "dist/main.js"]

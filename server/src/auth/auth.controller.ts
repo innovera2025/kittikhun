@@ -12,7 +12,6 @@ import { CurrentUser, Public } from './auth.guards';
 import {
   AUTH_ERROR_MESSAGE_TH,
   AuthErrorCode,
-  ChangePinRequestSchema,
   LoginRequestSchema,
   RefreshRequestSchema,
   type AuthenticatedUser,
@@ -21,7 +20,12 @@ import {
 } from './auth.types';
 
 /**
- * Auth — **ผู้ใช้เป็นของระบบเราเองทั้งหมด สร้างและจัดการที่นี่ ไม่ดึงจาก ERP**
+ * Auth — เหลือ `login` / `refresh` / `logout` เท่านั้น (`change-pin` ถูกลบทั้งเส้นทาง:
+ * credential เป็นของ ERP รอบ sync ถัดไปเขียนทับอยู่ดี endpoint ที่ผลถูกลบภายในไม่กี่ชั่วโมง
+ * แย่กว่าไม่มี endpoint)
+ *
+ * ⚠️ **ชื่อฟิลด์และ error code ของ `login` ห้ามเปลี่ยน** — APK sideload ทั้งฟลีตอัปเดตไม่พร้อมกัน
+ *    เปลี่ยนชื่อฟิลด์ = เครื่องที่ยังไม่อัปเดตได้ 400 ทันทีที่ deploy โดยไม่มีทางถอย
  *
  * ⚠️ `POST /auth/refresh` ต้อง**ไม่**ถูก version-gate ด้วย APP_MIN_VERSION
  *    เครื่องที่ออฟไลน์ทั้งกะต้อง refresh ได้เพื่อส่งงานนับค้าง ก่อนถูกบังคับอัปเดตแอป
@@ -75,27 +79,6 @@ export class AuthController {
     }
     // หมายเหตุ: ไม่แตะ outbox ของเครื่อง — งานนับที่ยังไม่ซิงค์ต้องอยู่รอด
     await this.auth.logout(user.empId, deviceId);
-  }
-
-  /** ตั้ง PIN ใหม่ — ใช้ทั้งกรณีบังคับครั้งแรก (mustChangePin) และเปลี่ยนตามปกติ */
-  @Post('change-pin')
-  @HttpCode(204)
-  async changePin(
-    @CurrentUser() user: AuthenticatedUser,
-    @Body() body: unknown,
-  ): Promise<void> {
-    const parsed = ChangePinRequestSchema.safeParse(body);
-    if (!parsed.success) {
-      throw new BadRequestException({
-        code: 'VALIDATION',
-        message: parsed.error.issues[0]?.message ?? 'PIN ต้องเป็นตัวเลข 6 หลัก',
-      });
-    }
-    try {
-      await this.auth.changePin(user.empId, parsed.data);
-    } catch (err) {
-      throw AuthController.toHttp(err);
-    }
   }
 
   /** แปลง AuthError → HTTP พร้อม code ให้แอป map เป็นข้อความไทยตาม design */

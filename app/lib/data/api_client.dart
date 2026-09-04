@@ -1,9 +1,15 @@
 /// ชั้นเชื่อมต่อ backend ของแอป — dio + เก็บ token + refresh อัตโนมัติ
 ///
-/// สัญญา API อยู่ที่ `server/docs/` (NestJS, ไม่มี global prefix):
+/// สัญญา API อยู่ที่ `server/docs/` (NestJS, ไม่มี global prefix)
+///
+/// เส้นทางที่ชั้นนี้กับ `auth_repository.dart` เรียก:
 /// `POST /auth/login` · `POST /auth/refresh` · `POST /auth/logout`
-/// `POST /auth/change-pin` · `GET|POST /members` · `PATCH /members/:empId/role`
-/// `POST /members/:empId/reset-pin`
+/// `GET /members` · `PATCH /members/:empId/role`
+/// (`/items`, `/count-sessions`, `/count-documents`, `/sync` อยู่ที่ `stock_repository.dart`)
+///
+/// ⚠️ **ไม่มี** `POST /auth/change-pin`, `POST /members`,
+/// `POST /members/:empId/reset-pin` แล้ว — ถูกลบทั้งฝั่ง server:
+/// ชื่อผู้ใช้/รหัสผ่านเป็นของ ERP (`menuuser`) แก้ที่ต้นทางแล้วรอ sync รอบถัดไป
 ///
 /// ข้อความ error ไทยมาจาก backend (`{code, message}`) — ชั้นนี้ไม่แปลใหม่
 /// มีเพียงข้อความ fallback ตอน transport พังจนไม่มี body ให้อ่าน
@@ -42,9 +48,14 @@ class ApiConfig {
   );
 
   /// เวอร์ชันแอปที่ส่งไปกับ `POST /auth/login` (backend เทียบ `APP_MIN_VERSION`)
+  ///
+  /// ⚠️ **ค่าเดียวของทั้งแอป** — `AuthRepository` ส่งค่านี้ตรง ๆ ห้ามมีสำเนาที่สอง
+  /// 5.0.0 = รุ่นที่มีฟอร์มชื่อผู้ใช้/รหัสผ่าน · `verify:fleet-readiness` ฝั่ง server
+  /// เทียบค่านี้กับ `devices.app_version` เพื่อตัดสินว่าเปิด sync ผู้ใช้ได้หรือยัง
+  /// (เครื่องที่ยังเป็นรุ่นเก่าพิมพ์ชื่อผู้ใช้ ERP ไม่ได้เลย — keypad ตัวเลขล้วน)
   static const String appVersion = String.fromEnvironment(
     'APP_VERSION',
-    defaultValue: '4.0.0',
+    defaultValue: '5.0.0',
   );
 
   /// true = ต่อ backend จริง · false = โหมด offline/fixture
@@ -260,7 +271,6 @@ class ApiException implements Exception {
   static const String codeUnknownEmployee = 'UNKNOWN_EMPLOYEE';
   static const String codeInvalidPin = 'INVALID_PIN';
   static const String codeThrottled = 'THROTTLED';
-  static const String codeMustChangePin = 'MUST_CHANGE_PIN';
   static const String codeInsufficientRole = 'INSUFFICIENT_ROLE';
 
   /// fallback เดียวของชั้น transport
@@ -307,7 +317,7 @@ class ApiException implements Exception {
 /// dio ตัวกลางของแอป — แนบ Bearer, refresh อัตโนมัติ, แปลง error เป็น [ApiException]
 ///
 /// พฤติกรรม 401:
-/// - path `/auth/*` → ปล่อยผ่าน (401 ของ `change-pin` คือ PIN ผิด ไม่ใช่ token หมดอายุ)
+/// - path `/auth/*` → ปล่อยผ่าน (401 ของ `login` คือรหัสผ่านผิด ไม่ใช่ token หมดอายุ)
 /// - path อื่น → refresh หนึ่งรอบร่วมกันทุกเส้น แล้ว **retry request เดิมครั้งเดียว**
 /// - refresh ล้ม → ล้าง token + โยน [ApiException] code [ApiException.codeSessionExpired]
 class ApiClient {
@@ -348,7 +358,7 @@ class ApiClient {
         // ⚠️ **ห้ามตั้ง contentType ที่นี่** — Dio จะใส่ให้ทุก request รวมถึงที่ไม่มี body
         //    และ `Options(contentType: null)` ต่อ request **ไม่ล้างค่านี้** (ตกกลับมาใช้ค่านี้)
         //    ฝั่ง Fastify เห็น `Content-Type: application/json` พร้อม body ว่าง จะปฏิเสธ
-        //    ด้วย 400 "Body cannot be empty" ก่อนถึง handler → ปิดรอบนับ / sync / reset-pin
+        //    ด้วย 400 "Body cannot be empty" ก่อนถึง handler → ปิดรอบนับ / sync
         //    พังทั้งหมด · ตั้งต่อ request ใน `_send()` เฉพาะเมื่อมี body แทน
         responseType: ResponseType.json,
         headers: const {'Accept': Headers.jsonContentType},
@@ -584,7 +594,7 @@ class ApiClient {
   }
 
   /// ทุก path ใต้ `/auth/` ไม่เข้ากลไก refresh อัตโนมัติ
-  /// (401 ของ `change-pin` = PIN ปัจจุบันผิด ไม่ใช่ token หมดอายุ)
+  /// (401 ของ `login` = ชื่อผู้ใช้/รหัสผ่านผิด ไม่ใช่ token หมดอายุ)
   static bool _isAuthPath(String path) => _normalize(path).contains('/auth/');
 
   static String _normalize(String path) {

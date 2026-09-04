@@ -7,10 +7,8 @@ import * as argon2 from 'argon2';
 
 import type { AppConfig } from '../config/env.config';
 import { PostgresService } from '../db/postgres.service';
-import { WEAK_PIN_MESSAGE_TH, isWeakPin } from './pin-policy';
 import {
   AuthErrorCode,
-  type ChangePinRequest,
   type JwtPayload,
   type LoginRequest,
   type LoginResponse,
@@ -32,15 +30,17 @@ export class AuthError extends Error {
   }
 }
 
+/**
+ * แถวผู้ใช้จากตาราง `users` — **ไม่มี secret ติดมาด้วยโดยตั้งใจ**
+ * (เส้นทาง refresh/rotate/profile ไม่มีเหตุผลจะดึง hash ขึ้นมาไว้ในหน่วยความจำ)
+ */
 interface UserRow {
   emp_id: string;
   name: string;
-  pin_hash: string;
   role: Role;
   shift: string | null;
   warehouse_code: string;
   role_version: number;
-  must_change_pin: boolean;
   failed_attempts: number;
   /**
    * ⚠️ `timestamptz` ของ Postgres เป็น `infinity` / `-infinity` ได้ ซึ่ง node-pg
@@ -50,10 +50,17 @@ interface UserRow {
   throttle_until: Date | number | null;
 }
 
+/** แถวผู้ใช้ + secret จาก `user_credentials` — ใช้เฉพาะเส้นทางล็อกอินเท่านั้น */
+interface CredentialUserRow extends UserRow {
+  /** เดิมชื่อ pin_hash — มาจาก user_credentials.secret_hash แล้ว */
+  secret_hash: string;
+}
+
 /**
- * Auth ของระบบเราเอง — **ผู้ใช้ถูกสร้างและจัดการในระบบนี้ทั้งหมด ไม่ดึงจาก ERP**
+ * Auth — ตรวจตัวตนจากตาราง `user_credentials` (login_name → secret_hash) ไม่ใช่
+ * `users.pin_hash` อีกต่อไป · ฐานคือ Postgres ของเราเองเสมอ **ล็อกอินจึงทำงานได้แม้ ERP ล่ม**
  *
- * มาตรการที่ใช้กับ PIN 6 หลัก (เอนโทรปีต่ำ):
+ * มาตรการที่ใช้กับ secret เอนโทรปีต่ำ (PIN 6 หลักเดิม และรหัสผ่าน ERP ที่คุมความยาวไม่ได้):
  * - argon2id + server pepper (`PIN_PEPPER`) → hash ช้าพอที่ brute force ออฟไลน์ไม่คุ้ม
  * - **escalating delay ต่อ empId** (1s → 5s → 30s → … เพดาน AUTH_THROTTLE_MAX_MS)
  *   ⚠️ จงใจ**ไม่ใช้การล็อคตายตัว** เพราะ empId เดาง่าย (52xxx บนป้ายชื่อ) →
@@ -98,14 +105,15 @@ export class AuthService {
     this.throttleMaxMs = cfg.get('AUTH_THROTTLE_MAX_MS', { infer: true });
   }
 
-  // ── PIN hashing ──────────────────────────────────────────────────────
+  // ── Secret hashing ───────────────────────────────────────────────────
 
-  /** hash PIN พร้อม server pepper — pepper ทำให้ hash ที่หลุดจาก DB ใช้ crack ไม่ได้ */
+  /** hash secret พร้อม server pepper — pepper ทำให้ hash ที่หลุดจาก DB ใช้ crack ไม่ได้ */
   async hashPin(pin: string): Promise<string> {
     return argon2.hash(pin + this.pepper, AuthService.ARGON_OPTS);
   }
 
-  private async verifyPin(hash: string, pin: string): Promise<boolean> {
+  /** ⚠️ public โดยตั้งใจ — รอบ sync ผู้ใช้ต้องเรียกเพื่อเช็คว่ารหัสผ่าน ERP เปลี่ยนไปหรือยัง */
+  async verifyPin(hash: string, pin: string): Promise<boolean> {
     try {
       return await argon2.verify(hash, pin + this.pepper);
     } catch {
@@ -116,24 +124,28 @@ export class AuthService {
   // ── Login ────────────────────────────────────────────────────────────
 
   async login(req: LoginRequest): Promise<LoginResponse> {
-    const user = await this.db.one<UserRow>(
-      `SELECT emp_id, name, pin_hash, role, shift, warehouse_code,
-              role_version, must_change_pin, failed_attempts, throttle_until
-         FROM users WHERE emp_id = $1`,
-      [req.empId],
+    // สิ่งที่ผู้ใช้พิมพ์คือ login_name (lower เสมอ) ไม่ใช่ users.emp_id ตรง ๆ อีกต่อไป
+    const loginName = req.empId.trim().toLowerCase();
+    const user = await this.db.one<CredentialUserRow>(
+      `SELECT u.emp_id, u.name, u.role, u.shift, u.warehouse_code, u.role_version,
+              u.failed_attempts, u.throttle_until, c.secret_hash
+         FROM user_credentials c
+         JOIN users u ON u.emp_id = c.emp_id
+        WHERE c.login_name = $1`,
+      [loginName],
     );
 
     if (!user) {
-      // design กำหนดให้แยกข้อความ "ไม่พบรหัสพนักงาน" ออกจาก "PIN ผิด"
-      // → หน่วงเวลาเท่ากับกรณี PIN ผิด เพื่อไม่ให้จับเวลาแยกได้ (timing oracle)
+      // design กำหนดให้แยกข้อความ "ไม่พบชื่อผู้ใช้" ออกจาก "รหัสผ่านผิด"
+      // → หน่วงเวลาเท่ากับกรณีรหัสผ่านผิด เพื่อไม่ให้จับเวลาแยกได้ (timing oracle)
       await this.dummyWork();
-      this.logger.warn(`login ล้มเหลว: ไม่พบรหัสพนักงาน (device=${req.deviceId})`);
+      this.logger.warn(`login ล้มเหลว: ไม่พบชื่อผู้ใช้ (device=${req.deviceId})`);
       throw new AuthError(AuthErrorCode.UNKNOWN_EMPLOYEE);
     }
 
     this.assertNotThrottled(user);
 
-    const ok = await this.verifyPin(user.pin_hash, req.pin);
+    const ok = await this.verifyPin(user.secret_hash, req.pin);
     if (!ok) {
       const retryAfterMs = await this.registerFailure(user);
       throw new AuthError(AuthErrorCode.INVALID_PIN, undefined, retryAfterMs);
@@ -196,8 +208,8 @@ export class AuthService {
   }
 
   /**
-   * ปฏิเสธทันทีถ้ายังอยู่ในช่วงหน่วงเวลา — ใช้ร่วมกันทุกเส้นทางที่ตรวจ PIN
-   * (`login` และ `changePin`) ไม่งั้นเส้นทางที่ลืมเรียกจะกลายเป็นช่องเดา PIN แบบไม่จำกัด
+   * ปฏิเสธทันทีถ้ายังอยู่ในช่วงหน่วงเวลา — ต้องเรียกใน**ทุก**เส้นทางที่ตรวจ secret
+   * (ตอนนี้เหลือ `login` ทางเดียว) ไม่งั้นเส้นทางที่ลืมเรียกจะกลายเป็นช่องเดารหัสแบบไม่จำกัด
    */
   private assertNotThrottled(user: UserRow): void {
     const until = AuthService.throttleUntilMs(user.throttle_until);
@@ -354,46 +366,16 @@ export class AuthService {
     );
   }
 
-  // ── เปลี่ยน PIN ───────────────────────────────────────────────────────
-
-  /** เปลี่ยน PIN เอง (ใช้ทั้งกรณีบังคับตั้งใหม่ครั้งแรก และเปลี่ยนตามปกติ) */
-  async changePin(empId: string, req: ChangePinRequest): Promise<void> {
-    const user = await this.requireUser(empId);
-
-    // ⚠️ เส้นทางนี้ตรวจ PIN เหมือน login จึงต้องมีด่านกัน brute force เหมือนกัน
-    //    เดิมไม่มีเลย → เครื่องคลังที่ login ค้างไว้ใช้เดา PIN ได้ไม่จำกัดครั้ง
-    //    ไม่มีหน่วงเวลา และไม่ถูกนับ ซึ่ง bypass การป้องกันของ login ทั้งหมด
-    this.assertNotThrottled(user);
-
-    if (!(await this.verifyPin(user.pin_hash, req.currentPin))) {
-      const retryAfterMs = await this.registerFailure(user, 'auth.change_pin_failed');
-      throw new AuthError(AuthErrorCode.INVALID_PIN, undefined, retryAfterMs);
-    }
-    if (req.newPin === req.currentPin) {
-      throw new AuthError(AuthErrorCode.INVALID_PIN, 'PIN ใหม่ต้องไม่ซ้ำกับ PIN เดิม');
-    }
-    // กติกาเดียวกับตัวสุ่ม PIN เริ่มต้นของ MembersService — นิยามอยู่ที่ pin-policy.ts ที่เดียว
-    if (isWeakPin(req.newPin)) {
-      throw new AuthError(AuthErrorCode.INVALID_PIN, WEAK_PIN_MESSAGE_TH);
-    }
-
-    const hash = await this.hashPin(req.newPin);
-    await this.db.query(
-      `UPDATE users
-          SET pin_hash = $2, must_change_pin = false,
-              failed_attempts = 0, throttle_until = NULL, updated_at = now()
-        WHERE emp_id = $1`,
-      [empId, hash],
-    );
-    await this.audit(empId, 'auth.pin_changed', {});
-  }
-
   // ── helper ───────────────────────────────────────────────────────────
 
+  /**
+   * อ่านผู้ใช้เพื่อออก token ใหม่ (เส้นทาง refresh) — ไม่ดึง secret ขึ้นมาด้วยโดยตั้งใจ
+   * ⚠️ `changePin` ถูกลบทั้งเส้นทางแล้ว: credential เป็นของ ERP รอบ sync ถัดไปเขียนทับอยู่ดี
+   */
   private async requireUser(empId: string): Promise<UserRow> {
     const user = await this.db.one<UserRow>(
-      `SELECT emp_id, name, pin_hash, role, shift, warehouse_code,
-              role_version, must_change_pin, failed_attempts, throttle_until
+      `SELECT emp_id, name, role, shift, warehouse_code,
+              role_version, failed_attempts, throttle_until
          FROM users WHERE emp_id = $1`,
       [empId],
     );
@@ -456,7 +438,8 @@ export class AuthService {
       role: u.role,
       shift: u.shift,
       warehouseCode: u.warehouse_code,
-      mustChangePin: u.must_change_pin,
+      // คงฟิลด์ไว้ในสัญญา wire แต่ค่าตายตัว — ไม่มีเส้นทางเปลี่ยน PIN ในระบบแล้ว (ดู auth.types.ts)
+      mustChangePin: false,
     };
   }
 
