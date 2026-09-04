@@ -487,10 +487,12 @@ OFFSET @offset ROWS FETCH NEXT @batch ROWS ONLY`;
  * ⚠️ ตัด `LEFT JOIN Employee` + `EmpPict` ทั้งก้อนทิ้ง (U5) — และตอนนี้มีเหตุผลที่แข็งกว่าเดิม:
  *    `Employee` ว่างทั้งตาราง join ไปก็ได้ NULL ทุกแถว ส่วน `EmpPict` ไม่มีที่ลงใน
  *    `UserProfile` อยู่แล้ว → join เพิ่ม = ภาระเปล่ากับ ERP ล้วน ๆ
- * ⚠️ **ไม่มี WHERE กรองคลัง/แผนกเลย** — `menuuser` คือตารางบัญชีของ ERP ทั้งระบบ
- *    (บัญชี · ขาย · จัดซื้อ · superuser) เป็น known-tradeoff ที่แก้ด้วย allowlist ระดับ
- *    role map (`ERP_USER_LEVEL_ROLE_MAP`) ไม่ใช่ด้วย SQL filter เพราะ U4/U7 ยังไม่มี
- *    คอลัมน์ให้กรอง — level ที่ไม่ได้ map ไว้ = ไม่ได้บัญชีเลย
+ * 🚨 **ไม่มี WHERE กรองคลัง/แผนกเลย** — `menuuser` คือตารางบัญชีของ ERP ทั้งระบบ
+ *    (บัญชี · ขาย · จัดซื้อ · superuser) เดิมเป็น known-tradeoff ที่แก้ด้วย allowlist ระดับ
+ *    role map (`ERP_USER_LEVEL_ROLE_MAP`) — **allowlist นั้นถูกถอดออกแล้ว 5 ก.ย. 2569**
+ *    ตามคำสั่งลูกค้า ("ทำทั้งหมดให้อยู่ใน Role เดียวกัน") ทุกแถวที่ query นี้คืนมาจึงได้บัญชี
+ *    ในแอปคลังด้วย `ERP_USER_FIXED_ROLE` เท่ากันหมด · ถ้าจะกันบัญชีที่ไม่เกี่ยวข้องอีกครั้ง
+ *    ต้องใส่ WHERE ที่นี่ (ผ่าน `ERP_SQL_USERS_SQL_FILE`) ซึ่ง U4/U7 ยังไม่มีคอลัมน์ให้กรอง
  *    (query ต้นฉบับกรองด้วย `WHERE user_name = ?cUser` เพราะมันคือ query ตอน "ล็อกอินทีละคน"
  *     ส่วนรอบ sync ต้องเห็นทั้งตารางเพื่อรู้ว่าใคร **หายไปแล้ว** จึงไม่มี WHERE)
  */

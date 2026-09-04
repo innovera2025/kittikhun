@@ -19,10 +19,10 @@ import { z } from 'zod';
 import { CurrentUser, RequireFreshRole, Roles } from '../auth/auth.guards';
 import { AuthModule } from '../auth/auth.module';
 import { AuthService } from '../auth/auth.service';
-import { ROLE_RANK, type AuthenticatedUser, type Role } from '../auth/auth.types';
+import { ROLE_RANK, RoleSchema, type AuthenticatedUser, type Role } from '../auth/auth.types';
 import { CatalogModule } from '../catalog/catalog.module';
 import { CatalogService, TombstoneGuardrailError } from '../catalog/catalog.service';
-import { parseUserLevelRoleMap, type AppConfig } from '../config/env.config';
+import { type AppConfig } from '../config/env.config';
 import { PostgresService } from '../db/postgres.service';
 import {
   ERP_ADAPTER,
@@ -63,18 +63,18 @@ export interface SyncRunResult {
 /**
  * ตัวนับของรอบผู้ใช้ที่ต้องเห็นได้จาก `sync_runs.metrics` โดยไม่ต้องเปิดโค้ด
  *
- * ⚠️ `unmapped` กับ `absent` เป็นคนละเรื่องกันโดยสิ้นเชิง และนี่คือจุดที่เคยพลาด:
- *   `unmapped` = ปรากฏใน ERP แต่ `user_level` ไม่อยู่ใน allowlist → **ปัญหา config**
- *                (map ตกไปค่าหนึ่ง / ERP เปลี่ยน level ให้คน) ห้ามลบ credential เด็ดขาด
+ * ⚠️ `rejected` กับ `absent` เป็นคนละเรื่องกันโดยสิ้นเชิง และนี่คือจุดที่เคยพลาด:
+ *   `rejected` = ปรากฏใน ERP แต่แถวใช้เขียนไม่ได้ (ตัวตนผิดรูป · login ซ้ำ/ยาวเกิน ·
+ *                รหัสผ่าน decode เพี้ยน) → **ปัญหาข้อมูล/คอนฟิก** ห้ามลบ credential เด็ดขาด
  *   `absent`   = ไม่ปรากฏในผล ERP เลย → **ปัญหาคน** (ลาออก/ถูกปิดบัญชี) เท่านั้นที่เข้า sweep ได้
+ *
+ * ⚠️ ตัวนับ `unmapped` / `unmappedKeptCredential` ถูกตัดทิ้งพร้อม `ERP_USER_LEVEL_ROLE_MAP`
+ *    (5 ก.ย. 2569) — ไม่มี allowlist แล้ว จึงไม่มีแถวไหน "map ไม่ได้" ได้อีก แถวเก่าใน
+ *    `sync_runs.metrics` ยังมีคีย์นั้นอยู่ตามเดิม (jsonb — ไม่ย้อนไปแก้ประวัติ)
  */
 interface UserSyncMetrics extends Record<string, number> {
-  /** map เป็น role ได้ → เขียน users + credential */
+  /** แถวที่ผ่านด่านรูปแบบ → เขียน users + credential (ทุกคนได้ `ERP_USER_FIXED_ROLE` เท่ากัน) */
   mapped: number;
-  /** ปรากฏใน ERP แต่ level ไม่อยู่ใน allowlist — ไม่แตะแถวเดิมเลย */
-  unmapped: number;
-  /** ในจำนวน unmapped มีกี่คนที่ยังถือ credential อยู่ (ตัวเลขที่ฟ้องว่า map ตกค่าไหนไป) */
-  unmappedKeptCredential: number;
   /**
    * แถวที่รูปแบบใช้ไม่ได้ (USERID ผิดรูป / login ว่างหรือยาวเกิน / รหัสผ่าน decode เพี้ยน)
    * หรือ login_name ซ้ำ — ทั้งซ้ำกันเองในรอบเดียว (`duplicate_login`) และซ้ำกับแถวที่
@@ -209,16 +209,17 @@ const MAX_LOGIN_NAME_LEN = 64;
 const REPLACEMENT_CHAR = '\uFFFD';
 
 /**
- * \u0E15\u0E49\u0E2D\u0E07 "\u0E2B\u0E32\u0E22\u0E08\u0E32\u0E01\u0E1C\u0E25 ERP" \u0E15\u0E48\u0E2D\u0E40\u0E19\u0E37\u0E48\u0E2D\u0E07\u0E19\u0E32\u0E19\u0E40\u0E17\u0E48\u0E32\u0E19\u0E35\u0E49\u0E01\u0E48\u0E2D\u0E19\u0E16\u0E39\u0E01\u0E1B\u0E34\u0E14\u0E25\u0E47\u0E2D\u0E01\u0E2D\u0E34\u0E19 (cron \u0E23\u0E32\u0E22\u0E0A\u0E31\u0E48\u0E27\u0E42\u0E21\u0E07 \u2248 24 \u0E23\u0E2D\u0E1A\u0E15\u0E34\u0E14)
+ * ⚠️ หน้าต่าง grace ย้ายไปเป็นคอนฟิก `ERP_USER_ABSENCE_GRACE_HOURS` แล้ว (5 ก.ย. 2569)
+ *    ค่าเดิม 24 ชม. ฝังตายตรงนี้ · ค่าเริ่มต้นใหม่คือ 2 ชม. (เหตุผลเต็มอยู่ที่คีย์นั้นใน env.config.ts)
  *
- * \u0E40\u0E1B\u0E47\u0E19\u0E01\u0E32\u0E23\u0E4C\u0E14\u0E04\u0E19\u0E25\u0E30\u0E0A\u0E31\u0E49\u0E19\u0E01\u0E31\u0E1A\u0E40\u0E1E\u0E14\u0E32\u0E19 % \u0E41\u0E25\u0E30\u0E40\u0E1E\u0E14\u0E32\u0E19\u0E41\u0E16\u0E27\u0E02\u0E31\u0E49\u0E19\u0E15\u0E48\u0E33: \u0E2A\u0E2D\u0E07\u0E15\u0E31\u0E27\u0E19\u0E31\u0E49\u0E19\u0E04\u0E38\u0E21 "\u0E23\u0E2D\u0E1A\u0E19\u0E35\u0E49\u0E25\u0E1A\u0E40\u0E22\u0E2D\u0E30\u0E44\u0E1B\u0E44\u0E2B\u0E21"
- * \u0E2A\u0E48\u0E27\u0E19\u0E15\u0E31\u0E27\u0E19\u0E35\u0E49\u0E04\u0E38\u0E21 "\u0E25\u0E1A\u0E08\u0E32\u0E01\u0E2B\u0E25\u0E31\u0E01\u0E10\u0E32\u0E19\u0E23\u0E2D\u0E1A\u0E40\u0E14\u0E35\u0E22\u0E27\u0E44\u0E2B\u0E21" \u2014 ERP \u0E15\u0E2D\u0E1A\u0E40\u0E1E\u0E35\u0E49\u0E22\u0E19\u0E2B\u0E19\u0E36\u0E48\u0E07\u0E23\u0E2D\u0E1A (query \u0E16\u0E39\u0E01\u0E15\u0E31\u0E14\u0E17\u0E2D\u0E19 /
- * \u0E15\u0E32\u0E23\u0E32\u0E07\u0E16\u0E39\u0E01\u0E25\u0E47\u0E2D\u0E01 / deploy \u0E01\u0E25\u0E32\u0E07\u0E04\u0E31\u0E19) \u0E15\u0E49\u0E2D\u0E07\u0E44\u0E21\u0E48\u0E17\u0E33\u0E43\u0E2B\u0E49\u0E43\u0E04\u0E23\u0E25\u0E47\u0E2D\u0E01\u0E2D\u0E34\u0E19\u0E44\u0E21\u0E48\u0E44\u0E14\u0E49 \u0E19\u0E32\u0E2C\u0E34\u0E01\u0E32\u0E16\u0E39\u0E01\u0E25\u0E49\u0E32\u0E07\u0E17\u0E31\u0E19\u0E17\u0E35\u0E17\u0E35\u0E48\u0E01\u0E25\u0E31\u0E1A\u0E21\u0E32\u0E1E\u0E1A
+ * เป็นการ์ดคนละชั้นกับเพดาน % และเพดานแถวขั้นต่ำ: สองตัวนั้นคุม "รอบนี้ลบเยอะไปไหม"
+ * ส่วนตัวนี้คุม "ลบจากหลักฐานรอบเดียวไหม" — ERP ตอบเพี้ยนหนึ่งรอบ (query ถูกตัดทอน /
+ * ตารางถูกล็อก / deploy กลางคัน) ต้องไม่ทำให้ใครล็อกอินไม่ได้ นาฬิกาถูกล้างทันทีที่กลับมาพบ
+ *
+ * 🚫 ห้ามแตกเป็นค่าคงที่ของโมดูลอีก — `sweepAbsentCredentials()`, `doomedAdminEmpIds()` และ
+ *    เส้นทางที่ตกเพดานแถวขั้นต่ำ ต้องเห็น interval **ก้อนเดียวกันของ instance เดียวกัน**
+ *    (`this.absenceGraceInterval`) แยกกันอ่านเมื่อไรก็เกิด "นับด้วยเกณฑ์หนึ่ง ลบด้วยอีกเกณฑ์"
  */
-const ABSENCE_GRACE_HOURS = 24;
-
-/** ค่าเดียวกันในรูป interval ของ Postgres — ทั้ง sweep และด่าน last-admin ต่อแถวต้องใช้ตัวนี้ตัวเดียว */
-const ABSENCE_GRACE_INTERVAL = `${ABSENCE_GRACE_HOURS} hours`;
 
 /** โค้ดของ Postgres ตอน unique/PK ชน — ดูจาก `code` เท่านั้น ข้อความเปลี่ยนตาม locale ได้ */
 const PG_UNIQUE_VIOLATION = '23505';
@@ -400,7 +401,8 @@ class AdminCredentialFloorError extends Error {
   ) {
     super(
       `ยกเลิกการปิดล็อกอิน ${doomedAdmins} บัญชี: จะไม่เหลือ admin ที่ล็อกอินได้เลย ` +
-        `(admin ที่มี credential ทั้งหมด ${adminCredentials} คน) — ตรวจ ERP_USER_LEVEL_ROLE_MAP ก่อน`,
+        `(admin ที่มี credential ทั้งหมด ${adminCredentials} คน) — ` +
+        'ตรวจว่ายังมีบัญชี break-glass (npm run create-admin) อยู่ไหมก่อน',
     );
     this.name = 'AdminCredentialFloorError';
   }
@@ -429,6 +431,10 @@ export class SyncService implements OnModuleInit {
   private readonly logger = new Logger(SyncService.name);
   private readonly driver: 'sql' | 'rest' | 'mock';
   private readonly warehouseCode: string;
+  /** หน้าต่าง grace ของ `absent_since` — อ่านครั้งเดียวตอนสร้าง service (ดูคอมเมนต์ด้านบน) */
+  private readonly absenceGraceHours: number;
+  /** ค่าเดียวกันในรูป interval ของ Postgres — ทุกเส้นทางของรอบผู้ใช้ต้องใช้ตัวนี้ตัวเดียว */
+  private readonly absenceGraceInterval: string;
 
   constructor(
     private readonly db: PostgresService,
@@ -441,6 +447,8 @@ export class SyncService implements OnModuleInit {
   ) {
     this.driver = cfg.get('ERP_DRIVER', { infer: true });
     this.warehouseCode = cfg.get('WAREHOUSE_CODE', { infer: true });
+    this.absenceGraceHours = cfg.get('ERP_USER_ABSENCE_GRACE_HOURS', { infer: true });
+    this.absenceGraceInterval = `${this.absenceGraceHours} hours`;
   }
 
   // ── 1. scheduler ────────────────────────────────────────────────────────
@@ -450,7 +458,7 @@ export class SyncService implements OnModuleInit {
   //    (ScheduleModule.forRoot() ถูกลงทะเบียนแบบ global ที่ app.module.ts แล้ว
   //     Nest จะหยุด job ที่อยู่ใน registry ให้ตอน shutdown)
 
-  onModuleInit(): void {
+  async onModuleInit(): Promise<void> {
     const timeZone = this.cfg.get('TZ', { infer: true });
 
     this.registerJob('kk:sync:items', this.cfg.get('ERP_SYNC_CRON', { infer: true }), timeZone, () =>
@@ -460,12 +468,18 @@ export class SyncService implements OnModuleInit {
     // ⚠️ ต่างจาก items ที่ลงทะเบียนเสมอ — รอบผู้ใช้ลงทะเบียน **เฉพาะเมื่อเปิดสวิตช์คัตโอเวอร์**
     //    (ERP_USER_SYNC_ENABLED ไม่มี default เป็น true — ต้องมีคนกดเปิดเองเท่านั้น)
     if (this.cfg.get('ERP_USER_SYNC_ENABLED', { infer: true })) {
-      this.registerJob(
-        'kk:sync:users',
-        this.cfg.get('ERP_USER_SYNC_CRON', { infer: true }),
-        timeZone,
-        () => this.tick('users'),
-      );
+      if (!(await this.breakGlassAdminMissing())) {
+        this.registerJob(
+          'kk:sync:users',
+          this.cfg.get('ERP_USER_SYNC_CRON', { infer: true }),
+          timeZone,
+          () => this.tick('users'),
+        );
+        this.logger.log(
+          `รอบผู้ใช้: ทุกคนจาก ERP ได้ role '${this.fixedRole()}' เท่ากันหมด ` +
+            `(ERP_USER_FIXED_ROLE) · ปิดล็อกอินเมื่อหายจาก ERP ครบ ${this.absenceGraceHours} ชม.`,
+        );
+      }
     } else {
       this.logger.log('ERP_USER_SYNC_ENABLED=false — ไม่ตั้งรอบ sync ผู้ใช้ (ล็อกอินใช้ข้อมูลเดิม)');
     }
@@ -473,6 +487,44 @@ export class SyncService implements OnModuleInit {
     if (this.driver === 'mock') {
       this.logger.warn('ERP_DRIVER=mock — scheduler ทำงานกับข้อมูล fixture ไม่ใช่ ERP จริง');
     }
+  }
+
+  /**
+   * ด่าน "ห้ามเหลือศูนย์ admin" ฝั่ง boot — เดิมเป็นกฎใน `.env` ที่พิสูจน์อะไรไม่ได้จริง
+   *
+   * ตั้งแต่เลิกใช้ `ERP_USER_LEVEL_ROLE_MAP` (5 ก.ย. 2569) ทุกคนจาก ERP ได้ role เดียวกันหมด
+   * และค่าเริ่มต้นคือ `staff` → **ERP ไม่มีทางสร้าง admin ให้ใครได้อีกเลย** ทางเข้าระบบระดับ
+   * admin จึงเหลือทางเดียวคือ credential break-glass `source='local'` ที่ `create-admin` สร้าง
+   * และรอบ sync ห้ามแตะ ด่านนี้จึงย้ายมาตรวจ "ความจริงใน DB" แทนที่จะตรวจรูปแบบของ map
+   *
+   * ⚠️ ไม่ล้ม boot ทั้งเซิร์ฟเวอร์โดยตั้งใจ — API ที่ดับทั้งตัวคือการล็อกคนทั้งคลังออก ซึ่งเป็น
+   *    ความเสียหายที่หนักกว่าเรื่องที่กำลังกันอยู่ ที่นี่จึง "ไม่ติดตั้ง cron รอบผู้ใช้" แล้ว log
+   *    ระดับ error แทน ส่วนการรันด้วยมือ (`POST /sync/users`) ยังชนด่าน 0 ของ `runUsers()`
+   *    ซึ่งปฏิเสธทั้ง run โดยไม่เขียน DB แม้แถวเดียว — สองด่านนี้ต้องอยู่ครบเสมอ
+   *
+   * DB ยังไม่พร้อมตอน boot = ตอบไม่ได้ ไม่ใช่ตอบว่า "ไม่มี" → ปล่อยให้ตั้ง cron ตามปกติ
+   * แล้วให้ด่าน 0 ของแต่ละรอบเป็นคนตัดสิน (fail-safe ทั้งสองทิศ)
+   */
+  private async breakGlassAdminMissing(): Promise<boolean> {
+    try {
+      const found = await this.db.query(
+        `SELECT 1 FROM user_credentials c JOIN users u ON u.emp_id = c.emp_id
+          WHERE c.source = 'local' AND u.role = 'admin' LIMIT 1`,
+      );
+      if (found.rows.length > 0) return false;
+    } catch (err) {
+      this.logger.warn(
+        `ตรวจบัญชี break-glass ตอน boot ไม่สำเร็จ: ${errorMessage(err)} — ` +
+          'ตั้งรอบ sync ผู้ใช้ต่อ (ด่าน 0 ของแต่ละรอบจะตรวจซ้ำอยู่แล้ว)',
+      );
+      return false;
+    }
+    this.logger.error(
+      'ERP_USER_SYNC_ENABLED=true แต่ไม่มีบัญชี break-glass (credential source=local ที่เป็น admin) — ' +
+        'ไม่ตั้งรอบ sync ผู้ใช้ เพราะ ERP ให้ role เดียวกันทุกคนตาม ERP_USER_FIXED_ROLE ' +
+        'จึงไม่มีทางสร้าง admin คนใหม่ได้เอง · รัน npm run create-admin ก่อนแล้ว start ใหม่',
+    );
+    return true;
   }
 
   private registerJob(
@@ -603,21 +655,23 @@ export class SyncService implements OnModuleInit {
    * 🚫 plaintext ของ ERP: `.expose()` ถูกเรียกแล้วส่งเข้า argon2 **ในบรรทัดเดียวกัน** ทุกจุด
    *    ไม่มีการ assign ผลลัพธ์เก็บไว้เป็นตัวแปร ไม่มี anomaly/audit/log บรรทัดไหนรับค่านี้
    *
-   * ⚠️ "level ไม่ได้ map" กับ "หายไปจาก ERP" คือคนละเรื่อง และห้ามเดินเส้นทางเดียวกัน:
-   *    level ที่ไม่ได้ map = **ปัญหา config ของเราเอง** (ตกไปค่าหนึ่ง / ERP เปลี่ยน level ให้คน)
-   *    → คนนั้นไม่ได้บัญชีใหม่ แต่ credential เดิม **ห้ามถูกแตะแม้แถวเดียว**
-   *    มีแต่ "ไม่ปรากฏในผล ERP เลย" เท่านั้นที่ป้อนเข้า deactivation sweep ได้
+   * ⚠️ "แถวใช้ไม่ได้" กับ "หายไปจาก ERP" คือคนละเรื่อง และห้ามเดินเส้นทางเดียวกัน:
+   *    แถวที่ตกด่านรูปแบบ (ตัวตนผิดรูป · login ซ้ำ · รหัสผ่าน decode เพี้ยน) = **ปัญหาข้อมูล**
+   *    → คนนั้นไม่ได้บัญชีใหม่รอบนี้ แต่ credential เดิม **ห้ามถูกแตะแม้แถวเดียว** เพราะเขา
+   *    ยังปรากฏใน ERP อยู่ · มีแต่ "ไม่ปรากฏในผล ERP เลย" เท่านั้นที่ป้อนเข้า sweep ได้
    *
    * ด่านที่ต้องมีครบ (ถอดออกข้อใดข้อหนึ่ง = ล็อกคนทั้งคลังออกได้ในรอบเดียว):
    *  0. ต้องมี break-glass admin (`source='local'`) อยู่ก่อน มิฉะนั้นปฏิเสธทั้ง run —
    *     และบัญชี `source='local'` ต้องรอดจากรอบนี้ทั้ง **credential และ `users.role`**
-   *  1. allowlist ล้วน — `user_level` ที่ไม่ได้ map = ไม่ได้บัญชีเลย (ไม่ fallback viewer)
+   *     ⚠️ ตั้งแต่เลิกใช้ role map ด่านนี้คือ **ด่านเดียว** ที่กันระบบไม่ให้เหลือศูนย์ admin
+   *        (ERP ให้ role เดียวกันทุกคน จึงไม่มีทางผลิต admin คนใหม่ได้เองอีกแล้ว)
+   *  1. ด่านรูปแบบชุดเดียว (`screenUserRows`) — แถวที่เขียนลง DB ไม่ได้ถูกปฏิเสธเป็นรายแถว
    *  2. last-admin floor ต่อแถว ด้วย `SELECT ... FOR UPDATE` แบบเดียวกับ MembersService.changeRole
    *     นับเฉพาะ admin ที่ **ยังมีแถวใน `user_credentials`** (role อย่างเดียว = ผี ล็อกอินไม่ได้)
    *  3. deactivation sweep ผ่านครบทั้งสี่ชั้น: เพดานแถวขั้นต่ำ · grace หลายรอบ · เพดาน % ·
    *     last-admin floor ของทั้ง sweep (ไม่ผ่านชั้นสุดท้าย = rollback ทั้งก้อน + รอบล้มเหลว)
    *  4. เพดาน % ของการ **เลื่อน** สิทธิ์ทั้งรอบ (`ERP_USER_ELEVATE_MAX_PCT`) — คู่ตรงข้าม
-   *     ของข้อ 3 ซึ่งกันแต่การถอนสิทธิ์ ส่วนข้อนี้กัน role map ที่พิมพ์ผิดค่าเดียวไม่ให้
+   *     ของข้อ 3 ซึ่งกันแต่การถอนสิทธิ์ ส่วนข้อนี้กัน `ERP_USER_FIXED_ROLE=admin` ไม่ให้
    *     แจก admin ทั้งคลังในรอบเดียว (ตัดสินก่อนเข้าลูปเพราะแต่ละแถว commit แยกกัน)
    */
   private async runUsers(triggeredBy: string): Promise<SyncRunResult> {
@@ -625,8 +679,6 @@ export class SyncService implements OnModuleInit {
     const anomalies: unknown[] = [];
     const metrics: UserSyncMetrics = {
       mapped: 0,
-      unmapped: 0,
-      unmappedKeptCredential: 0,
       rejected: 0,
       absent: 0,
       graceElapsed: 0,
@@ -641,7 +693,12 @@ export class SyncService implements OnModuleInit {
     try {
       // ── ด่าน 0: ต้องมี break-glass admin อยู่แล้วก่อนแตะอะไรเลย ──────────────
       // create-admin เขียน source='local' ซึ่ง sync ห้ามแตะ → ถ้าไม่มีเลยแปลว่าไม่มี
-      // ทางกลับเข้าระบบถ้ารอบนี้ตีความ role ผิด จึงไม่ยอมเขียนอะไรทั้งสิ้น
+      // ทางกลับเข้าระบบถ้ารอบนี้ตัดสินผิด จึงไม่ยอมเขียนอะไรทั้งสิ้น
+      //
+      // ⚠️ ตั้งแต่ 5 ก.ย. 2569 ด่านนี้ไม่ใช่แค่ "กันไว้ก่อน" อีกแล้ว แต่เป็น **ตาข่ายผืนเดียว**
+      //    ที่เหลืออยู่: เมื่อทุกคนจาก ERP ได้ `ERP_USER_FIXED_ROLE` เท่ากันหมด (ค่าเริ่มต้น
+      //    `staff`) ระบบไม่มีทางได้ admin คนใหม่จาก ERP อีกเลย — ลบด่านนี้ = ยอมให้รอบ sync
+      //    เดินต่อในระบบที่ไม่เหลือใครล็อกอินเข้ามาซ่อมได้ (ดู `breakGlassAdminMissing()` ฝั่ง boot)
       const localAdmin = await this.db.query(
         `SELECT 1 FROM user_credentials c JOIN users u ON u.emp_id = c.emp_id
           WHERE c.source = 'local' AND u.role = 'admin' LIMIT 1`,
@@ -658,7 +715,9 @@ export class SyncService implements OnModuleInit {
         });
       }
 
-      const roleMap = this.userLevelRoleMap();
+      // role เดียวของทุกคนในรอบนี้ — อ่านครั้งเดียวก่อนแตะแถวไหน เพื่อให้ทั้งด่านเพดานการเลื่อน
+      // สิทธิ์และลูปที่เขียนจริงตัดสินด้วยค่าเดียวกันเป๊ะ (ห้ามอ่านซ้ำกลางรอบ)
+      const fixedRole = this.fixedRole();
       const rows = await this.erp.fetchUsers();
       rowsRead = rows.length;
       const minExpected = this.cfg.get('ERP_USER_MIN_EXPECTED_ROWS', { infer: true });
@@ -668,9 +727,9 @@ export class SyncService implements OnModuleInit {
       const rowCountOk = minExpected !== undefined && rows.length >= minExpected;
 
       // ⚠️ ชุดนี้คือ "ยังอยู่ใน ERP" ไม่ใช่ "ได้บัญชีรอบนี้" — เก็บทุกแถวที่ ERP ส่งมาและ
-      //    USERID อ่านออก ไม่ว่าจะ map ไม่ได้ หรือ login ซ้ำ ก็ตาม เพราะ sweep
-      //    ตอบคำถามเดียวคือ "คนนี้หายไปจาก ERP แล้วหรือยัง" ปนคำถามอื่นเข้าไปเมื่อไร
-      //    ค่า map ที่ตกไปค่าเดียวจะกลายเป็นการล้าง credential ทั้งคลังทันที
+      //    USERID อ่านออก แม้แถวนั้นจะถูกด่านรูปแบบปฏิเสธ (login ซ้ำ · รหัสผ่าน decode เพี้ยน)
+      //    เพราะ sweep ตอบคำถามเดียวคือ "คนนี้หายไปจาก ERP แล้วหรือยัง" ปนคำถามอื่นเข้าไป
+      //    เมื่อไร ข้อมูล ERP ที่เพี้ยนชั่วคราวจะกลายเป็นการล้าง credential ทันที
       //
       //    ประกอบให้ครบ **ก่อน** เข้าลูป (ไม่ใช่เติมทีละแถวระหว่างลูปแบบเดิม) เพราะด่าน
       //    last-admin ต่อแถวต้องรู้ตั้งแต่แถวแรกว่า admin คนไหนกำลังจะถูก sweep ลบท้ายรอบ
@@ -694,10 +753,8 @@ export class SyncService implements OnModuleInit {
       // ── เพดานการ "ให้" สิทธิ์ — คู่ตรงข้ามของ ERP_USER_DEACTIVATE_MAX_PCT ──────────
       // ต้องรู้ผลรวมทั้งรอบ **ก่อน** แถวแรกจะ commit เพราะแต่ละแถวอยู่คนละทรานแซกชัน
       // (รู้ตัวตอนแถวที่ 300 = 299 คนแรกเลื่อนสิทธิ์ไปแล้วและเรียกคืนไม่ได้)
-      const elevation = await this.planElevations(screened, roleMap, anomalies);
+      const elevation = await this.planElevations(screened, fixedRole, anomalies);
 
-      const unmappedLevelsSeen = new Set<string>();
-      const unmappedEmpIds = new Set<string>(); // ใช้ตรวจว่ามีคนถือ credential ค้างอยู่กี่คน
       let upserted = 0;
 
       for (const entry of screened) {
@@ -716,27 +773,12 @@ export class SyncService implements OnModuleInit {
         //    ก่อนด่านอื่นทุกด่านโดยตั้งใจ (ตกด่านไหนหลังจากนี้ก็ยังไม่ใช่คนที่หายจาก ERP)
         const { row, empCode, login, nameThai, nameFallback } = entry;
 
-        const mappedRole = roleMap.get(row.userLevel);
-        if (mappedRole === undefined) {
-          // ── allowlist ล้วน — level ที่ไม่ได้ map ไว้ "ไม่ได้บัญชีใหม่" ─────────
-          // แต่ **ห้ามลบของเดิม**: นี่คือปัญหา config ไม่ใช่หลักฐานว่าคนนี้ออกจาก ERP
-          // audit หนึ่งรายการต่อค่า level ที่ต่างกัน (ไม่ใช่ต่อแถว) ไม่งั้นบัญชีทั้ง ERP
-          // ที่ไม่เกี่ยวกับคลังจะท่วม audit_log ซึ่งเป็น append-only ลบไม่ได้
-          metrics.unmapped += 1;
-          unmappedEmpIds.add(empCode);
-          if (!unmappedLevelsSeen.has(row.userLevel)) {
-            unmappedLevelsSeen.add(row.userLevel);
-            await this.audit('scheduler', 'users.erp_level_unmapped', {
-              userLevel: row.userLevel,
-            });
-            pushAnomaly(anomalies, { type: 'erp_level_unmapped', userLevel: row.userLevel });
-          }
-          continue;
-        }
+        // ⚠️ ไม่มีการอ่าน `row.userLevel` เพื่อตัดสินสิทธิ์อีกแล้ว — ทุกคนได้ `fixedRole` เท่ากัน
+        //    ค่านั้นยังถูกเขียนลง `user_credentials.erp_user_level` ตามเดิม (ตอบ U1 จากข้อมูลจริง
+        //    ได้ทุกเมื่อ และ CHECK `user_credentials_erp_fields` บังคับให้ต้องมีค่าเมื่อ source='erp')
+        const mappedRole = fixedRole;
 
         // ── ชื่อบนจอสมาชิกของคนนี้เป็นค่าแทน ไม่ใช่ชื่อจริงจาก ERP ──────────────────
-        // บันทึกหลังด่าน role map เพราะบัญชีทั้ง ERP ที่ไม่เกี่ยวกับคลัง (level ไม่ถูก map)
-        // ไม่มีวันได้ `users.name` อยู่แล้ว ชื่อว่างของเขาจึงไม่ใช่เรื่องที่ผู้ดูแลต้องเห็น
         if (nameFallback) pushAnomaly(anomalies, { type: 'blank_name_thai', empCode });
 
         // ผลของแถวนี้ที่ต้องนับ — ขยับตัวนับจริง **หลัง** ทรานแซกชันผ่านแล้วเท่านั้น
@@ -930,28 +972,6 @@ export class SyncService implements OnModuleInit {
         if (rowOutcome.elevationRefused) metrics.elevationsRefused += 1;
       }
 
-      // ── คนที่ level ไม่ได้ map แต่ยังถือ credential อยู่ = สัญญาณว่า map ตกค่าไหนไป ────
-      // ไม่ทำอะไรกับแถวเขาเลยโดยตั้งใจ — แค่ทำให้ผู้ดูแลเห็นตัวเลขนี้จาก sync_runs ตรง ๆ
-      if (unmappedEmpIds.size > 0) {
-        const kept = await this.db.one<{ n: number }>(
-          `SELECT count(*)::int AS n FROM user_credentials WHERE emp_id = ANY($1::text[])`,
-          [[...unmappedEmpIds]],
-        );
-        metrics.unmappedKeptCredential = kept?.n ?? 0;
-        if (metrics.unmappedKeptCredential > 0) {
-          pushAnomaly(anomalies, {
-            type: 'erp_level_unmapped_kept_credential',
-            credentials: metrics.unmappedKeptCredential,
-            levels: [...unmappedLevelsSeen],
-          });
-          this.logger.warn(
-            `ผู้ใช้ ${metrics.unmappedKeptCredential} คนมี user_level ที่ไม่อยู่ใน ` +
-              `ERP_USER_LEVEL_ROLE_MAP (${[...unmappedLevelsSeen].join(', ')}) — ` +
-              'คงบัญชีเดิมไว้ทุกแถว (ปัญหา config ไม่ใช่การลาออก)',
-          );
-        }
-      }
-
       // ── นาฬิกา grace ของคนที่ "กลับมาพบใน ERP แล้ว" ต้องถูกล้างทุกรอบ ──────────────
       // เดิมคำสั่งนี้อยู่ข้างใน sweep ซึ่งไม่ได้ทำงานเลยเมื่อ ERP ส่งแถวมาน้อยผิดปกติ →
       // นาฬิกาของคนที่ยังอยู่จริงเดินต่อทั้งที่เขาปรากฏในผลรอบนี้ พอรอบหน้าดึงมาครบ
@@ -977,7 +997,7 @@ export class SyncService implements OnModuleInit {
                   count(*) FILTER (WHERE absent_since <= now() - $2::interval)::int AS grace_elapsed
              FROM user_credentials
             WHERE source IN ('erp', 'legacy_pin') AND emp_id <> ALL($1::text[])`,
-          [[...presentEmpIds], ABSENCE_GRACE_INTERVAL],
+          [[...presentEmpIds], this.absenceGraceInterval],
         );
         metrics.absent = absent?.n ?? 0;
         metrics.graceElapsed = absent?.grace_elapsed ?? 0;
@@ -1040,7 +1060,7 @@ export class SyncService implements OnModuleInit {
    * แถวที่ถูกปฏิเสธด้วยเหตุอื่น) — คนที่ยังอยู่ใน ERP ห้ามเข้ามาถึงบรรทัดนี้เด็ดขาด
    *
    * การ์ดสามชั้นในเมธอดนี้ (ชั้นที่สี่คือเพดานแถวขั้นต่ำ ผู้เรียกตรวจให้แล้ว):
-   *  1. **grace** — ต้องหายต่อเนื่องเกิน ABSENCE_GRACE_HOURS ชม. ไม่ใช่เห็นหายรอบเดียวแล้วลบ
+   *  1. **grace** — ต้องหายต่อเนื่องเกิน `ERP_USER_ABSENCE_GRACE_HOURS` ชม. ไม่ใช่เห็นหายรอบเดียวแล้วลบ
    *  2. **เพดาน %** — `ERP_USER_DEACTIVATE_MAX_PCT` ของ credential ที่ยังมีชีวิต
    *  3. **last-admin floor ของทั้ง sweep** — ลบแล้วต้องเหลือ admin ที่ล็อกอินได้อย่างน้อย 1 คน
    *     ไม่ผ่าน = โยนออกจากทรานแซกชัน → ไม่มีการลบไหน commit และรอบถูกบันทึกเป็น 'failed'
@@ -1052,7 +1072,7 @@ export class SyncService implements OnModuleInit {
     anomalies: unknown[],
   ): Promise<SweepCounts> {
     const present = [...presentEmpIds];
-    const grace = ABSENCE_GRACE_INTERVAL;
+    const grace = this.absenceGraceInterval;
     const maxPct = this.cfg.get('ERP_USER_DEACTIVATE_MAX_PCT', { infer: true });
 
     return this.db.transaction(async (client) => {
@@ -1219,7 +1239,7 @@ export class SyncService implements OnModuleInit {
         ]);
       }
       this.logger.log(
-        `ปิดล็อกอิน ${doomedRows.length} บัญชีที่หายจาก ERP เกิน ${ABSENCE_GRACE_HOURS} ชม. ` +
+        `ปิดล็อกอิน ${doomedRows.length} บัญชีที่หายจาก ERP เกิน ${this.absenceGraceHours} ชม. ` +
           `(ยังมีอีก ${absent - graceElapsed} บัญชีที่นับเวลา grace อยู่)`,
       );
       return {
@@ -1250,7 +1270,7 @@ export class SyncService implements OnModuleInit {
           AND c.source IN ('erp', 'legacy_pin')
           AND c.emp_id <> ALL($1::text[])
           AND c.absent_since <= now() - $2::interval`,
-      [[...presentEmpIds], ABSENCE_GRACE_INTERVAL],
+      [[...presentEmpIds], this.absenceGraceInterval],
     );
     return new Set(result.rows.map((r) => r.emp_id));
   }
@@ -1275,32 +1295,28 @@ export class SyncService implements OnModuleInit {
    * ใครบ้างที่รอบนี้จะได้ **เลื่อนสิทธิ์ขึ้น** และเลื่อนได้จริงไหม
    *
    * คู่ตรงข้ามของ `ERP_USER_DEACTIVATE_MAX_PCT` ซึ่งกันแต่การ "ถอน" สิทธิ์ทีละมาก ๆ —
-   * ส่วนการ "ให้" สิทธิ์เดิมไม่มีการ์ดเลยแม้แต่ชั้นเดียว ทั้งที่ `ERP_USER_LEVEL_ROLE_MAP`
-   * ที่พิมพ์ผิดค่าเดียว (`5=admin`) เลื่อนคนทั้งคลังเป็น admin ได้ในรอบเดียว และรอบนั้น
-   * จะรายงาน 'success' เงียบ ๆ ด้วยซ้ำ (ด่าน boot ตรวจแค่ว่า "มี level ไหน map เป็น admin")
+   * ส่วนการ "ให้" สิทธิ์ไม่มีการ์ดเลยแม้แต่ชั้นเดียว ทั้งที่ตอนนี้การเปลี่ยน `ERP_USER_FIXED_ROLE`
+   * เป็น `admin` เพียงบรรทัดเดียวเลื่อนคนทั้งคลังเป็น admin ได้ในรอบเดียว และรอบนั้นจะรายงาน
+   * 'success' เงียบ ๆ ด้วยซ้ำ (ด่าน boot เห็นแค่ค่าคอนฟิก ไม่เห็นว่ากระทบกี่คน)
    *
    * ⚠️ นับเฉพาะคนที่ **มีแถว `users` อยู่แล้ว** และ rank ใหม่สูงกว่าเดิมเท่านั้น →
    *    รอบแรกของระบบ (ทุกคนเป็นคนใหม่ ไม่มีสิทธิ์เดิมให้เทียบ) ไม่มีใครเข้าเงื่อนไขนี้เลย
    *    จำนวนที่จะเลื่อนจึงเป็น 0 และออกจากฟังก์ชันตั้งแต่ก่อนคิดเปอร์เซ็นต์ด้วยซ้ำ
    *    รอบแรกจึงไม่มีทางถูกบล็อกด้วยด่านนี้
-   *    (คนใหม่ที่ ERP บอกว่าเป็น admin ยังต้องผ่าน allowlist ของ `ERP_USER_LEVEL_ROLE_MAP`
-   *     ซึ่งเป็นการ์ดของ "ใครได้บัญชีบ้าง" คนละชั้นกับการ์ดของ "ใครได้สิทธิ์เพิ่มบ้าง")
    */
   private async planElevations(
     screened: readonly ScreenedRow[],
-    roleMap: ReadonlyMap<string, Role>,
+    fixedRole: Role,
     anomalies: unknown[],
   ): Promise<{ empIds: ReadonlySet<string>; blocked: boolean }> {
     // นับเฉพาะแถวที่ผ่านด่านรูปแบบเดียวกับลูปหลัก (`screenUserRows`) — แถวที่ลูปจะปฏิเสธ
     // อยู่แล้วไม่มีทางกลายเป็นการเลื่อนสิทธิ์จริง จึงห้ามเข้ามาถ่วงทั้งตัวตั้งและตัวหาร
-    const intended = new Map<string, Role>();
+    const governed = new Set<string>();
     for (const entry of screened) {
-      if (!entry.ok) continue;
-      const mapped = roleMap.get(entry.row.userLevel);
-      if (mapped !== undefined) intended.set(entry.empCode, mapped);
+      if (entry.ok) governed.add(entry.empCode);
     }
     const empIds = new Set<string>();
-    if (intended.size === 0) return { empIds, blocked: false };
+    if (governed.size === 0) return { empIds, blocked: false };
 
     // source='local' ไม่ถูกแตะ role อยู่แล้ว (break-glass) จึงไม่มีทางเป็นการเลื่อนสิทธิ์
     const current = await this.db.query<{ emp_id: string; role: Role }>(
@@ -1309,11 +1325,10 @@ export class SyncService implements OnModuleInit {
          LEFT JOIN user_credentials c ON c.emp_id = u.emp_id
         WHERE u.emp_id = ANY($1::text[])
           AND (c.source IS NULL OR c.source <> 'local')`,
-      [[...intended.keys()]],
+      [[...governed]],
     );
     for (const row of current.rows) {
-      const next = intended.get(row.emp_id);
-      if (next !== undefined && ROLE_RANK[next] > ROLE_RANK[row.role]) empIds.add(row.emp_id);
+      if (ROLE_RANK[fixedRole] > ROLE_RANK[row.role]) empIds.add(row.emp_id);
     }
     if (empIds.size <= ELEVATE_ALWAYS_ALLOWED) return { empIds, blocked: false };
 
@@ -1322,15 +1337,15 @@ export class SyncService implements OnModuleInit {
     // ก่อน cutover ตาราง `user_credentials` ยังเต็มไปด้วยแถว legacy_pin ที่ schema.sql
     // backfill ให้ใหม่ทุก deploy (ปิดถาวรหลังรอบ users สำเร็จรอบแรกเท่านั้น) → ตัวหารพองตาม
     // จำนวนคนที่ ERP **ยังไม่ได้คุมเลย** เปอร์เซ็นต์จึงต่ำเกินจริงและเพดานหลวมที่สุดพอดี
-    // ในช่วงที่เสี่ยงที่สุด คือรอบแรก ๆ ที่ ERP_USER_LEVEL_ROLE_MAP ยังไม่เคยถูกพิสูจน์
+    // ในช่วงที่เสี่ยงที่สุด คือรอบแรก ๆ ที่ค่า `ERP_USER_FIXED_ROLE` ยังไม่เคยถูกพิสูจน์
     // พอ cutover เสร็จแถวพวกนั้นกลายเป็น source='erp' ตัวหารเดิมก็เปลี่ยนความหมายอีกครั้ง
     // ทั้งที่โค้ดไม่ได้ขยับ = การ์ดตัวเดียวกันเข้มไม่เท่ากันตามช่วงเวลา ซึ่งอ่านจากโค้ดไม่ออก
     //
-    // `intended.size` = แถวที่ผ่านด่านรูปแบบและ map เป็น role ได้ในรอบนี้ ตอบคำถามเดียวกัน
-    // เป๊ะทั้งก่อนและหลัง cutover: "ในคนที่ ERP คุม รอบนี้เลื่อนสิทธิ์ไปกี่ %" และหลัง cutover
-    // ค่านี้กับ count(*) ก็ลู่เข้าหากันเองเพราะเป็นคนกลุ่มเดียวกัน ไม่ต้องแก้อะไรอีก
+    // `governed.size` = แถวที่ผ่านด่านรูปแบบในรอบนี้ ตอบคำถามเดียวกันเป๊ะทั้งก่อนและหลัง
+    // cutover: "ในคนที่ ERP คุม รอบนี้เลื่อนสิทธิ์ไปกี่ %" และหลัง cutover ค่านี้กับ count(*)
+    // ก็ลู่เข้าหากันเองเพราะเป็นคนกลุ่มเดียวกัน ไม่ต้องแก้อะไรอีก
     // (ผลรอบที่ ERP ส่งมาไม่ครบ ตัวหารจะเล็กลง = การ์ดเข้มขึ้น ซึ่งเป็นทิศทาง fail-safe)
-    const governedTotal = intended.size; // > 0 แน่นอน (ออกไปตั้งแต่ intended.size === 0)
+    const governedTotal = governed.size; // > 0 แน่นอน (ออกไปตั้งแต่ governed.size === 0)
     const maxPct = this.cfg.get('ERP_USER_ELEVATE_MAX_PCT', { infer: true });
     const ratio = empIds.size / governedTotal;
     if (ratio <= maxPct / 100) return { empIds, blocked: false };
@@ -1346,25 +1361,25 @@ export class SyncService implements OnModuleInit {
     });
     this.logger.warn(
       `ข้ามการเลื่อนสิทธิ์ผู้ใช้: จะเลื่อน ${empIds.size} จาก ${governedTotal} คนที่ ERP คุมรอบนี้ ` +
-        `(${Math.round(ratio * 100)}% เกินเพดาน ${maxPct}%) — ตรวจ ERP_USER_LEVEL_ROLE_MAP ก่อน ` +
+        `(${Math.round(ratio * 100)}% เกินเพดาน ${maxPct}%) — ตรวจ ERP_USER_FIXED_ROLE ก่อน ` +
         'ถ้าตั้งใจให้เลื่อนจริงทั้งชุดค่อยขยับ ERP_USER_ELEVATE_MAX_PCT',
     );
     return { empIds, blocked: true };
   }
 
   /**
-   * allowlist จาก `ERP_USER_LEVEL_ROLE_MAP` — ตัวเดียวกับที่ด่าน boot ตรวจไว้แล้ว
-   * ถ้าถึงตรงนี้แล้วยังพังแปลว่ามีคนแก้ค่าโดยข้ามการ validate → ปฏิเสธทั้ง run (ไม่เดา)
+   * role เดียวของทุกคนจาก ERP (`ERP_USER_FIXED_ROLE`) — ค่าเดียวกับที่ด่าน boot ตรวจไว้แล้ว
+   * ถ้าถึงตรงนี้แล้วยังพังแปลว่ามีคนแก้ค่าโดยข้ามการ validate → ปฏิเสธทั้ง run (ไม่เดา
+   * ไม่ fallback เป็น viewer เพราะการเดาค่าสิทธิ์เองคือสิ่งที่ทั้งไฟล์นี้พยายามกันอยู่)
    */
-  private userLevelRoleMap(): Map<string, Role> {
-    const raw = this.cfg.get('ERP_USER_LEVEL_ROLE_MAP', { infer: true }) ?? '';
-    const parsed = parseUserLevelRoleMap(raw);
-    if (parsed.errors.length > 0 || parsed.map.size === 0) {
+  private fixedRole(): Role {
+    const parsed = RoleSchema.safeParse(this.cfg.get('ERP_USER_FIXED_ROLE', { infer: true }));
+    if (!parsed.success) {
       throw new Error(
-        `ERP_USER_LEVEL_ROLE_MAP ใช้ไม่ได้: ${parsed.errors.join(' · ') || 'ไม่มีรายการ level=role'}`,
+        `ERP_USER_FIXED_ROLE ใช้ไม่ได้: ต้องเป็น ${RoleSchema.options.join(' | ')} เท่านั้น`,
       );
     }
-    return parsed.map;
+    return parsed.data;
   }
 
   // ── 3. syncCountSessions ────────────────────────────────────────────────
@@ -1549,22 +1564,12 @@ export class SyncService implements OnModuleInit {
     return result;
   }
 
-  /**
-   * บันทึก audit นอกทรานแซกชัน (ในทรานแซกชันใช้ `client.query(AUDIT_SQL, ...)` ตรง ๆ)
-   *
-   * 🚫 payload ต้องมีแต่ตัวระบุ — `audit_log` เป็น append-only ที่ระดับ engine
-   *    (`deny_mutation()` trigger) ถ้าเผลอเขียนรหัสผ่านลงไปแล้ว **ลบคืนไม่ได้เลย**
-   * audit ล้มเหลวห้ามทำให้รอบ sync ล้ม (เหมือน AuthService.audit)
+  /*
+   * ⚠️ เคยมี `audit()` (เขียน audit_log นอกทรานแซกชัน) อยู่ตรงนี้ — ผู้ใช้รายเดียวของมันคือ
+   *    เส้นทาง `users.erp_level_unmapped` ซึ่งตายไปพร้อม `ERP_USER_LEVEL_ROLE_MAP` (5 ก.ย. 2569)
+   *    ทุก audit ที่เหลือของรอบผู้ใช้อยู่ **ในทรานแซกชัน** ของแถวนั้น ๆ อยู่แล้ว
+   *    (`client.query(AUDIT_SQL, ...)`) ซึ่งถูกต้องกว่า: บันทึกกับผลลัพธ์ commit/rollback พร้อมกัน
    */
-  private async audit(
-    actor: string,
-    action: string,
-    payload: Record<string, unknown>,
-  ): Promise<void> {
-    await this.db.query(AUDIT_SQL, [actor, action, JSON.stringify(payload)]).catch((err: unknown) => {
-      this.logger.warn(`เขียน audit_log ไม่สำเร็จ: ${errorMessage(err)}`);
-    });
-  }
 
   /** รอบที่ถูกข้ามก็ต้องเห็นใน sync_runs ไม่งั้นผู้ดูแลจะไม่รู้ว่ารอบก่อนยังค้าง */
   private async recordSkipped(kind: SyncKind, triggeredBy: string): Promise<SyncRunResult> {

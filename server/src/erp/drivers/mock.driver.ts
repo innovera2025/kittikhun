@@ -216,7 +216,8 @@ const USER_SEEDS: readonly {
     empCode: '52104',
   },
   {
-    // ฝ่ายบัญชี — ไม่ควรมีบัญชีในแอปคลัง (level นี้ห้ามอยู่ใน ERP_USER_LEVEL_ROLE_MAP)
+    // ฝ่ายบัญชี — ไม่ควรมีบัญชีในแอปคลัง แต่ตั้งแต่ 5 ก.ย. 2569 **ก็ได้บัญชีเหมือนกัน**
+    // (ไม่มี allowlist ของ user_level แล้ว ทุกแถวได้ ERP_USER_FIXED_ROLE เท่ากันหมด)
     loginName: 'account.one',
     password: 'mock-accounting-secret',
     userLevel: '3',

@@ -2,7 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { z } from 'zod';
 
-import { RoleSchema, type Role } from '../auth/auth.types';
+import { RoleSchema } from '../auth/auth.types';
 
 /**
  * คอนฟิกกลางของระบบ — zod schema ตรวจ `.env` ตอน boot (fail fast)
@@ -286,14 +286,37 @@ const commonShape = {
     // offset จาก ERP_SYNC_CRON (*/30) โดยตั้งใจ — สองรอบชนกันจะแย่ง ERP_SQL_POOL_MAX (ค่าเริ่มต้น 3)
   }).default('17 * * * *'),
   /**
-   * allowlist ล้วน: `"9=admin,5=staff,1=viewer"`
-   * ⚠️ `user_level` ที่ **ไม่ได้ระบุไว้ = ไม่ได้บัญชีเลย** ไม่ fallback เป็น viewer —
-   *    `menuuser` คือตารางบัญชีของ ERP ทั้งระบบ (บัญชี · ขาย · จัดซื้อ · superuser)
-   *    การ fallback เท่ากับเปิดให้ทุกบัญชีของบริษัทล็อกอินอ่านสต็อกคลังนี้ได้
+   * role **เดียว** ที่ผู้ใช้ทุกคนที่ sync มาจาก ERP ได้เหมือนกันหมด — ไม่แม็ปตาม `user_level` แล้ว
+   * (คำสั่งลูกค้า 5 ก.ย. 2569: "ไม่ต้องสนใจ Role ทำทั้งหมดให้อยู่ใน Role เดียวกัน")
+   *
+   * ค่าเริ่มต้น `staff` = สิทธิ์ที่นับสต็อกและส่งผลนับได้ ซึ่งคืองานจริงของแอปนี้ โดยไม่แจกสิทธิ์
+   * admin ให้ทุกบัญชีของ ERP · จะเปลี่ยนเป็น `admin` หรือ `viewer` ก็แก้ .env บรรทัดเดียว
+   *
+   * 🚨 **ด่านที่หายไปพร้อมกับ allowlist — ต้องรู้ก่อนใช้คีย์นี้**
+   *    `ERP_USER_LEVEL_ROLE_MAP` เดิมทำสองหน้าที่พร้อมกัน: ตัดสิน role **และ** เป็นประตูเดียว
+   *    ที่กันบัญชี ERP ซึ่งไม่เกี่ยวกับคลัง (บัญชี · ขาย · จัดซื้อ · superuser) ไม่ให้ล็อกอินเข้าแอปนี้
+   *    เพราะ `menuuser` คือตารางบัญชีของทั้งบริษัทและ query ไม่มี WHERE กรองแผนกเลย
+   *    ตอนนี้ประตูนั้น **ถูกถอดออกตามคำสั่งลูกค้า**: ทุกแถวที่ ERP ส่งมาและอ่านตัวตนออก
+   *    จะได้บัญชีในแอปคลังนี้ทันที ด้วย role นี้เหมือนกันทุกคน
+   *    ถ้าต้องการประตูนั้นคืน ต้องไปกรองที่ฝั่ง ERP (ใส่ WHERE ใน `ERP_SQL_USERS_SQL_FILE`)
+   *    ไม่ใช่ที่คีย์นี้ — คีย์นี้ตอบแค่ "ได้สิทธิ์อะไร" ไม่ได้ตอบ "ใครได้บัญชีบ้าง" อีกต่อไป
    */
-  ERP_USER_LEVEL_ROLE_MAP: envStr('แม็ป user_level→role เช่น 9=admin,5=staff,1=viewer', {
-    max: 512,
-  }).optional(),
+  ERP_USER_FIXED_ROLE: envEnum(
+    RoleSchema.options,
+    'role เดียวที่ผู้ใช้จาก ERP ได้ทุกคน (ไม่แม็ปตาม user_level แล้ว)',
+  ).default('staff'),
+  /**
+   * 🗑️ ยกเลิกแล้ว 5 ก.ย. 2569 — ประกาศทิ้งไว้เพื่อ **ปฏิเสธการ boot** ถ้ายังตั้งค้างใน `.env`
+   *
+   * ปล่อยให้เป็นคีย์ที่ไม่มีใครอ่านไม่ได้: ผู้ดูแลที่ยังเห็น `9=admin` อยู่ในไฟล์จะเชื่อว่าคนระดับ 9
+   * ยังได้ admin อยู่ ทั้งที่ทุกคนได้ `ERP_USER_FIXED_ROLE` เท่ากันหมดไปแล้ว
+   */
+  ERP_USER_LEVEL_ROLE_MAP: z
+    .never({
+      invalid_type_error:
+        'คีย์นี้ถูกยกเลิกแล้ว (ไม่มีการแม็ป user_level→role อีกต่อไป) — ลบบรรทัดนี้ออกจาก .env แล้วตั้ง ERP_USER_FIXED_ROLE แทน',
+    })
+    .optional(),
   ERP_USER_DEACTIVATE_MAX_PCT: envInt({
     min: 1,
     max: 100,
@@ -303,16 +326,35 @@ const commonShape = {
   /**
    * คู่ตรงข้ามของตัวข้างบน — ตัวนั้นกันการ **ถอน** สิทธิ์ทีละมาก ๆ ตัวนี้กันการ **ให้**
    *
-   * ⚠️ พิมพ์ `ERP_USER_LEVEL_ROLE_MAP` ผิดค่าเดียว (เช่น `5=admin`) = คนทั้งคลังกลายเป็น
-   *    admin ในรอบเดียว โดยไม่มีมนุษย์คนไหนกด และรอบนั้นรายงาน 'success' ตามปกติ
-   *    (ด่าน boot ตรวจได้แค่ว่า "มี level ไหนสัก level map เป็น admin" ไม่ใช่ว่ากี่คน)
+   * ⚠️ ตั้ง `ERP_USER_FIXED_ROLE=admin` = คนทั้งคลังกลายเป็น admin ในรอบเดียว โดยไม่มีมนุษย์
+   *    คนไหนกดเป็นรายคน และรอบนั้นรายงาน 'success' ตามปกติ — เพดานนี้คือด่านเดียวที่เห็น
+   *    "จำนวนคน" ที่จะถูกเลื่อนจริง (ด่าน boot เห็นแค่ค่าใน .env ไม่เห็นว่ากระทบกี่คน)
    *    เกินเพดาน = คงสิทธิ์เดิมของทุกคนไว้ทั้งรอบ + anomaly + ตัวนับใน sync_runs
+   *    ตั้งใจให้เป็นแบบนี้แม้หลังเลิกใช้ role map: การขยับ role กลางทีเดียวทั้งคลังต้องมีคนยืนยัน
    */
   ERP_USER_ELEVATE_MAX_PCT: envInt({
     min: 1,
     max: 100,
     default: 10,
     hint: 'เพดาน % ของผู้ใช้เดิมที่ถูกเลื่อนสิทธิ์ขึ้นได้ต่อรอบ sync',
+  }),
+  /**
+   * ต้อง "หายจากผล ERP" ต่อเนื่องนานเท่านี้ก่อน จึงจะปิดล็อกอินได้ (นาฬิกา `absent_since`)
+   *
+   * ค่าเริ่มต้น 2 ชม. (เดิม 24 ชม. ฝังตายในโค้ด) — ลูกค้าสั่งว่า "กลับมาถ้าหาไม่เจอก็เข้าไม่ได้"
+   * จึงบีบหน้าต่างลงให้ใกล้ทันทีที่สุดเท่าที่ยัง **ไม่ทิ้งการป้องกัน**: cron ผู้ใช้เดินชั่วโมงละครั้ง
+   * (`ERP_USER_SYNC_CRON` = `17 * * * *`) 2 ชม. จึงแปลว่า "ต้องมีรอบอ่าน ERP อิสระอย่างน้อย
+   * สองรอบที่เห็นตรงกันว่าคนนี้หายไปแล้ว" ไม่ใช่เชื่อการอ่านครั้งเดียว
+   *
+   * ⚠️ `min: 1` โดยตั้งใจ — ตั้ง 0 ไม่ได้ เพราะ 0 = ยอมให้ผลอ่าน ERP ที่ขาดหายรอบเดียว
+   *    ปิดล็อกอินคนทั้งคลังได้ทันที ซึ่งเสียหายหนักกว่าคนที่ลาออกแล้วยังเข้าได้อีกหนึ่งหน้าต่างมาก
+   *    (เพดานแถวขั้นต่ำและเพดาน % ยังเป็นด่านหลักของเรื่องนี้ ตัวนี้เป็นด่านซ้อนอีกชั้น)
+   */
+  ERP_USER_ABSENCE_GRACE_HOURS: envInt({
+    min: 1,
+    max: 720,
+    default: 2,
+    hint: 'ต้องหายจาก ERP ต่อเนื่องกี่ชั่วโมงก่อนปิดล็อกอิน (ตั้ง 0 ไม่ได้ — ดูคอมเมนต์)',
   }),
   /** ไม่มี default โดยตั้งใจ — บังคับตั้งเมื่อ ERP_USER_SYNC_ENABLED=true (ดูกฎข้ามตัวแปร) */
   ERP_USER_MIN_EXPECTED_ROWS: envIntBase({
@@ -574,55 +616,6 @@ function normalizeEnv(raw: unknown): Record<string, string> {
   return normalized;
 }
 
-/**
- * แปลง `ERP_USER_LEVEL_ROLE_MAP` (`"9=admin,5=staff,1=viewer"`) เป็น Map
- *
- * pure + export ไว้ให้ **ทั้งด่าน boot และ SyncService ใช้ตัวเดียวกัน** — ถ้าแยกกันเขียน
- * สองที่ จะเกิดกรณี "boot ผ่านแต่ sync ตีความคนละแบบ" ซึ่งคือความผิดพลาดที่ทำให้ทุกคน
- * ถูกลดสิทธิ์พร้อมกันได้ (allowlist ที่ตีความต่างกัน = allowlist ที่พึ่งไม่ได้)
- *
- * ⚠️ key คือค่าดิบของ `menuuser.user_level` (trim แล้ว) — ไม่ lower ไม่แปลงชนิด
- *    เพราะ U1 ยังไม่ยืนยันว่า level เป็นตัวเลขหรือรหัสสั้น
- */
-export function parseUserLevelRoleMap(raw: string): {
-  map: Map<string, Role>;
-  errors: readonly string[];
-} {
-  const map = new Map<string, Role>();
-  const errors: string[] = [];
-  const entries = raw
-    .split(',')
-    .map((part) => part.trim())
-    .filter((part) => part.length > 0);
-
-  if (entries.length === 0) {
-    errors.push('ไม่มีรายการ level=role เลย (ว่าง = ไม่มีใครได้บัญชี — sync จะไม่สร้างผู้ใช้เลย)');
-    return { map, errors };
-  }
-
-  for (const entry of entries) {
-    const eq = entry.indexOf('=');
-    if (eq <= 0 || eq === entry.length - 1) {
-      errors.push(`รายการ "${entry}" ต้องอยู่ในรูป level=role`);
-      continue;
-    }
-    const level = entry.slice(0, eq).trim();
-    const roleRaw = entry.slice(eq + 1).trim();
-    const role = RoleSchema.safeParse(roleRaw);
-    if (!role.success) {
-      errors.push(`รายการ "${entry}" ใช้ role ที่ไม่มีจริง (รับได้: ${listOf(RoleSchema.options)})`);
-      continue;
-    }
-    if (map.has(level)) {
-      errors.push(`level "${level}" ถูกระบุซ้ำ — เลือก role เดียวต่อ level`);
-      continue;
-    }
-    map.set(level, role.data);
-  }
-
-  return { map, errors };
-}
-
 /** กฎข้ามตัวแปร — ทำงานหลัง union ผ่านแล้ว จึง narrow ตาม ERP_DRIVER ได้ */
 function crossFieldRules(config: AppConfig, ctx: z.RefinementCtx): void {
   const addIssue = (variable: string, message: string): void => {
@@ -691,25 +684,22 @@ function crossFieldRules(config: AppConfig, ctx: z.RefinementCtx): void {
 
   // ── sync ผู้ใช้จาก ERP: ด่านที่แข็งกว่า runtime check ──────────────────────
   // ตั้งไม่ครบ = **เซิร์ฟเวอร์บูตไม่ขึ้นเลย** ไม่ใช่ sync ข้ามรอบเงียบ ๆ ให้ค้นหาสาเหตุทีหลัง
+  //
+  // ⚠️ **ด่าน "ต้องมี admin เหลืออยู่" ไม่ได้หายไป แต่ย้ายที่แล้ว — อย่าเติมกลับมาตรงนี้**
+  //    เดิมกฎคือ "ต้องมีอย่างน้อย 1 level ที่ map เป็น admin" ซึ่งพิสูจน์อะไรไม่ได้จริงเลย
+  //    (map ที่เขียน `9=admin` บน ERP ที่ไม่มีใคร level 9 ก็ผ่านด่านนี้ทั้งที่ไม่มี admin สักคน)
+  //    และตอนนี้ทุกคนได้ `ERP_USER_FIXED_ROLE` ค่าเดียวกันหมด กฎเดิมจึงบล็อก boot ตลอดกาล
+  //    ทุกครั้งที่ค่านั้นไม่ใช่ 'admin' ซึ่งเป็นค่าเริ่มต้นที่ถูกต้อง
+  //
+  //    ความจริงที่ต้องบังคับคือ **"มี credential break-glass `source='local'` ที่เป็น admin อยู่"**
+  //    ซึ่งเป็นข้อเท็จจริงใน DB ไม่ใช่ค่าใน `.env` — `loadConfig()` เป็นฟังก์ชัน pure ที่ไม่มี
+  //    (และต้องไม่มี) การต่อ DB จึงตรวจที่นี่ไม่ได้ ด่านจริงจึงอยู่สองจุดใน `sync.module.ts`:
+  //      1. `SyncService.onModuleInit()` — ไม่มี break-glass admin = **ไม่ติดตั้ง cron รอบผู้ใช้**
+  //         พร้อม log ระดับ error ที่บอกให้รัน `npm run create-admin` (เห็นตั้งแต่ตอน boot)
+  //      2. ด่าน 0 ของ `runUsers()` — ทุกรอบ (รวม `POST /sync/users` ที่ยิงด้วยมือ) ปฏิเสธ
+  //         ทั้ง run ถ้าไม่มี ไม่เขียนอะไรลง DB แม้แถวเดียว
+  //    ทั้งสองจุดคือสิ่งที่กัน "ระบบเหลือศูนย์ admin ที่ล็อกอินได้" ตัวจริง — ห้ามถอด
   if (config.ERP_USER_SYNC_ENABLED) {
-    const rawMap = config.ERP_USER_LEVEL_ROLE_MAP?.trim() ?? '';
-    if (rawMap.length === 0) {
-      addIssue(
-        'ERP_USER_LEVEL_ROLE_MAP',
-        'ต้องตั้งเมื่อ ERP_USER_SYNC_ENABLED=true (ว่าง = sync ปฏิเสธการรันเสมอ — ตั้งใจให้ fail-safe)',
-      );
-    } else {
-      const parsed = parseUserLevelRoleMap(rawMap);
-      for (const error of parsed.errors) addIssue('ERP_USER_LEVEL_ROLE_MAP', error);
-      // ไม่มี level ไหน map เป็น admin เลย = รอบ sync แรกจะพยายามลดสิทธิ์ admin ทุกคนพร้อมกัน
-      // (ด่าน last-admin ต่อแถวรับไว้ได้ก็จริง แต่ผิดตั้งแต่ตอนตั้งค่าแล้ว — หยุดที่ boot ดีกว่า)
-      if (parsed.errors.length === 0 && ![...parsed.map.values()].includes('admin')) {
-        addIssue(
-          'ERP_USER_LEVEL_ROLE_MAP',
-          'ต้องมีอย่างน้อย 1 level ที่ map เป็น admin — ดูค่า user_level จริงจาก npm run verify:erp-users',
-        );
-      }
-    }
     if (config.ERP_USER_MIN_EXPECTED_ROWS === undefined) {
       addIssue(
         'ERP_USER_MIN_EXPECTED_ROWS',
