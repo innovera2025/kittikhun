@@ -253,6 +253,52 @@ function iso(value: Date | null): string | null {
   return value === null ? null : value.toISOString();
 }
 
+/**
+ * แถวจาก ERP หลังผ่าน "ด่านรูปแบบ" ของรอบผู้ใช้
+ *
+ * `ok: false` = แถวที่ลูปหลักจะปฏิเสธแน่นอน และ `reason` ตรงกับชนิด anomaly ที่บันทึกลง
+ * `sync_runs.anomalies` แบบหนึ่งต่อหนึ่ง
+ */
+type ScreenedRow = { row: ErpUserRow; empCode: string; login: string } & (
+  | { ok: true; nameThai: string }
+  | { ok: false; reason: 'rejected_row' | 'duplicate_login' }
+);
+
+/**
+ * ด่านรูปแบบ **ชุดเดียว** ของรอบผู้ใช้ — ลูปที่เขียนจริงกับ `planElevations()` ที่นับ
+ * ล่วงหน้าเทียบเพดาน ต้องเห็นแถวชุดเดียวกันเป๊ะ
+ *
+ * ⚠️ เคยแยกกันมาก่อนแล้วเพี้ยน: `planElevations()` กรองแค่ emp_id + map เป็น role ได้
+ *    ส่วนลูปหลักปฏิเสธ login ซ้ำกันเองในรอบเดียว / รหัสผ่าน decode เพี้ยน / ชื่อกับ login
+ *    ว่างเพิ่มอีกชั้น → จำนวนที่เอาไปเทียบเพดานสูงกว่าจำนวนที่จะเลื่อนสิทธิ์ได้จริง
+ *    การ์ดจึงบล็อกการเลื่อนสิทธิ์ที่ถูกต้องด้วยตัวเลขที่ไม่มีวันเกิดขึ้น
+ *
+ * 🚫 `password.expose()` ใช้เพื่อตรวจ U+FFFD ตรงนี้เท่านั้น ห้ามเก็บ/log/คืนค่าออกไป
+ */
+function screenUserRows(rows: readonly ErpUserRow[]): ScreenedRow[] {
+  const seenLoginNames = new Set<string>(); // กันชนกันเองภายในรอบเดียว
+  return rows.map((row): ScreenedRow => {
+    const empCode = row.empCode.trim();
+    const login = row.loginName.trim().toLowerCase();
+    const nameThai = row.nameThai.trim();
+    // emp_id อ่านไม่ออก = จับคู่กับแถวใน user_credentials ไม่ได้อยู่แล้ว (CHECK เดียวกัน)
+    if (
+      !EMP_CODE_RE.test(empCode) ||
+      login.length === 0 ||
+      login.length > MAX_LOGIN_NAME_LEN ||
+      nameThai.length === 0 ||
+      row.password.expose().includes(REPLACEMENT_CHAR)
+    ) {
+      return { ok: false, row, empCode, login, reason: 'rejected_row' };
+    }
+    if (seenLoginNames.has(login)) {
+      return { ok: false, row, empCode, login, reason: 'duplicate_login' };
+    }
+    seenLoginNames.add(login);
+    return { ok: true, row, empCode, login, nameThai };
+  });
+}
+
 // ---------------------------------------------------------------------------
 
 interface SyncRunRow {
@@ -619,46 +665,33 @@ export class SyncService implements OnModuleInit {
         ? await this.doomedAdminEmpIds(presentEmpIds)
         : new Set<string>();
 
+      // ด่านรูปแบบเดินครั้งเดียวตรงนี้ แล้วส่งผลชุดเดียวกันให้ทั้งด่านเพดานและลูปที่เขียนจริง
+      const screened = screenUserRows(rows);
+
       // ── เพดานการ "ให้" สิทธิ์ — คู่ตรงข้ามของ ERP_USER_DEACTIVATE_MAX_PCT ──────────
       // ต้องรู้ผลรวมทั้งรอบ **ก่อน** แถวแรกจะ commit เพราะแต่ละแถวอยู่คนละทรานแซกชัน
       // (รู้ตัวตอนแถวที่ 300 = 299 คนแรกเลื่อนสิทธิ์ไปแล้วและเรียกคืนไม่ได้)
-      const elevation = await this.planElevations(rows, roleMap, anomalies);
+      const elevation = await this.planElevations(screened, roleMap, anomalies);
 
-      const seenLoginNames = new Set<string>(); // กันชนกันเองภายในรอบเดียว
       const unmappedLevelsSeen = new Set<string>();
       const unmappedEmpIds = new Set<string>(); // ใช้ตรวจว่ามีคนถือ credential ค้างอยู่กี่คน
       let upserted = 0;
 
-      for (const row of rows) {
-        const login = row.loginName.trim().toLowerCase();
-        const empCode = row.empCode.trim();
-        const nameThai = row.nameThai.trim();
-        if (!EMP_CODE_RE.test(empCode)) {
-          // emp_id อ่านไม่ออก = จับคู่กับแถวใน user_credentials ไม่ได้อยู่แล้ว (CHECK เดียวกัน)
+      for (const entry of screened) {
+        if (!entry.ok) {
           // 🚫 anomaly เก็บได้แค่ตัวระบุ — ห้ามมี password/hash ใด ๆ (sync_runs.anomalies อ่านได้ทีหลัง)
-          pushAnomaly(anomalies, { type: 'rejected_row', empCode, login });
+          pushAnomaly(
+            anomalies,
+            entry.reason === 'duplicate_login'
+              ? { type: 'duplicate_login', login: entry.login }
+              : { type: 'rejected_row', empCode: entry.empCode, login: entry.login },
+          );
           metrics.rejected += 1;
           continue;
         }
         // ⚠️ แถวนี้ถูก "นับว่ายังอยู่ใน ERP" ไปแล้วตั้งแต่ตอนประกอบ presentEmpIds ข้างบน —
         //    ก่อนด่านอื่นทุกด่านโดยตั้งใจ (ตกด่านไหนหลังจากนี้ก็ยังไม่ใช่คนที่หายจาก ERP)
-
-        if (
-          login.length === 0 ||
-          login.length > MAX_LOGIN_NAME_LEN ||
-          nameThai.length === 0 ||
-          row.password.expose().includes(REPLACEMENT_CHAR)
-        ) {
-          pushAnomaly(anomalies, { type: 'rejected_row', empCode, login });
-          metrics.rejected += 1;
-          continue;
-        }
-        if (seenLoginNames.has(login)) {
-          pushAnomaly(anomalies, { type: 'duplicate_login', login });
-          metrics.rejected += 1;
-          continue;
-        }
-        seenLoginNames.add(login);
+        const { row, empCode, login, nameThai } = entry;
 
         const mappedRole = roleMap.get(row.userLevel);
         if (mappedRole === undefined) {
@@ -726,7 +759,13 @@ export class SyncService implements OnModuleInit {
               `SELECT source, secret_hash FROM user_credentials WHERE emp_id = $1 FOR UPDATE`,
               [empCode],
             );
-            const existing: CredentialRow | undefined = cred.rows[0];
+            // ⚠️ `.at(0)` ไม่ใช่ `[0]`: โปรเจคนี้ไม่ได้เปิด `noUncheckedIndexedAccess` →
+            //    `rows[0]` มีชนิดเป็น `CredentialRow` เฉย ๆ ทั้งที่ผลลัพธ์ว่างได้จริง
+            //    (คนที่ยังไม่มี credential) แล้ว TS ก็ narrow ตัวแปรตามชนิดของค่าที่ assign
+            //    จน `existing?.source` กับ `existing === undefined` ข้างล่างกลายเป็นเงื่อนไข
+            //    ที่ lint บอกว่า "ตายแล้ว" ทั้งที่ทั้งสองอันจำเป็นจริงตอนรัน — `.at()` คืน
+            //    `CredentialRow | undefined` ตามความจริง ชนิดกับโค้ดจึงตรงกันโดยไม่ต้อง disable
+            const existing = cred.rows.at(0);
 
             if (existing?.source === 'local') {
               // ERP สั่งเป็น role อื่น = ต้องเห็นใน audit ว่าเราจงใจไม่ทำตาม (ไม่ใช่เงียบหาย)
@@ -1214,21 +1253,23 @@ export class SyncService implements OnModuleInit {
    *
    * ⚠️ นับเฉพาะคนที่ **มีแถว `users` อยู่แล้ว** และ rank ใหม่สูงกว่าเดิมเท่านั้น →
    *    รอบแรกของระบบ (ทุกคนเป็นคนใหม่ ไม่มีสิทธิ์เดิมให้เทียบ) ไม่มีใครเข้าเงื่อนไขนี้เลย
-   *    ซ้ำยังไม่มี credential ของ ERP สักแถวให้เป็นตัวหาร → ratio = 0 เหมือนเพดาน
-   *    deactivate ที่ปล่อยผ่านเมื่อ liveTotal = 0 รอบแรกจึงไม่มีทางถูกบล็อกด้วยด่านนี้
+   *    จำนวนที่จะเลื่อนจึงเป็น 0 และออกจากฟังก์ชันตั้งแต่ก่อนคิดเปอร์เซ็นต์ด้วยซ้ำ
+   *    รอบแรกจึงไม่มีทางถูกบล็อกด้วยด่านนี้
    *    (คนใหม่ที่ ERP บอกว่าเป็น admin ยังต้องผ่าน allowlist ของ `ERP_USER_LEVEL_ROLE_MAP`
    *     ซึ่งเป็นการ์ดของ "ใครได้บัญชีบ้าง" คนละชั้นกับการ์ดของ "ใครได้สิทธิ์เพิ่มบ้าง")
    */
   private async planElevations(
-    rows: readonly ErpUserRow[],
+    screened: readonly ScreenedRow[],
     roleMap: ReadonlyMap<string, Role>,
     anomalies: unknown[],
   ): Promise<{ empIds: ReadonlySet<string>; blocked: boolean }> {
+    // นับเฉพาะแถวที่ผ่านด่านรูปแบบเดียวกับลูปหลัก (`screenUserRows`) — แถวที่ลูปจะปฏิเสธ
+    // อยู่แล้วไม่มีทางกลายเป็นการเลื่อนสิทธิ์จริง จึงห้ามเข้ามาถ่วงทั้งตัวตั้งและตัวหาร
     const intended = new Map<string, Role>();
-    for (const row of rows) {
-      const empCode = row.empCode.trim();
-      const mapped = roleMap.get(row.userLevel);
-      if (mapped !== undefined && EMP_CODE_RE.test(empCode)) intended.set(empCode, mapped);
+    for (const entry of screened) {
+      if (!entry.ok) continue;
+      const mapped = roleMap.get(entry.row.userLevel);
+      if (mapped !== undefined) intended.set(entry.empCode, mapped);
     }
     const empIds = new Set<string>();
     if (intended.size === 0) return { empIds, blocked: false };
@@ -1248,25 +1289,35 @@ export class SyncService implements OnModuleInit {
     }
     if (empIds.size <= ELEVATE_ALWAYS_ALLOWED) return { empIds, blocked: false };
 
-    // ตัวหารเดียวกับเพดาน deactivate: credential ที่ ERP คุมอยู่จริงในตอนนี้
-    const live = await this.db.one<{ n: number }>(
-      `SELECT count(*)::int AS n FROM user_credentials WHERE source IN ('erp', 'legacy_pin')`,
-    );
-    const liveTotal = live?.n ?? 0;
+    // ── ตัวหาร = "คนที่ ERP คุมอยู่จริงในรอบนี้" ไม่ใช่จำนวนแถว credential ที่มีอยู่ ──────
+    // ห้ามใช้ `count(*) WHERE source IN ('erp','legacy_pin')` แบบเพดาน deactivate:
+    // ก่อน cutover ตาราง `user_credentials` ยังเต็มไปด้วยแถว legacy_pin ที่ schema.sql
+    // backfill ให้ใหม่ทุก deploy (ปิดถาวรหลังรอบ users สำเร็จรอบแรกเท่านั้น) → ตัวหารพองตาม
+    // จำนวนคนที่ ERP **ยังไม่ได้คุมเลย** เปอร์เซ็นต์จึงต่ำเกินจริงและเพดานหลวมที่สุดพอดี
+    // ในช่วงที่เสี่ยงที่สุด คือรอบแรก ๆ ที่ ERP_USER_LEVEL_ROLE_MAP ยังไม่เคยถูกพิสูจน์
+    // พอ cutover เสร็จแถวพวกนั้นกลายเป็น source='erp' ตัวหารเดิมก็เปลี่ยนความหมายอีกครั้ง
+    // ทั้งที่โค้ดไม่ได้ขยับ = การ์ดตัวเดียวกันเข้มไม่เท่ากันตามช่วงเวลา ซึ่งอ่านจากโค้ดไม่ออก
+    //
+    // `intended.size` = แถวที่ผ่านด่านรูปแบบและ map เป็น role ได้ในรอบนี้ ตอบคำถามเดียวกัน
+    // เป๊ะทั้งก่อนและหลัง cutover: "ในคนที่ ERP คุม รอบนี้เลื่อนสิทธิ์ไปกี่ %" และหลัง cutover
+    // ค่านี้กับ count(*) ก็ลู่เข้าหากันเองเพราะเป็นคนกลุ่มเดียวกัน ไม่ต้องแก้อะไรอีก
+    // (ผลรอบที่ ERP ส่งมาไม่ครบ ตัวหารจะเล็กลง = การ์ดเข้มขึ้น ซึ่งเป็นทิศทาง fail-safe)
+    const governedTotal = intended.size; // > 0 แน่นอน (ออกไปตั้งแต่ intended.size === 0)
     const maxPct = this.cfg.get('ERP_USER_ELEVATE_MAX_PCT', { infer: true });
-    const ratio = liveTotal > 0 ? empIds.size / liveTotal : 0;
+    const ratio = empIds.size / governedTotal;
     if (ratio <= maxPct / 100) return { empIds, blocked: false };
 
     pushAnomaly(anomalies, {
       type: 'elevate_guardrail_blocked',
       elevations: empIds.size,
-      live: liveTotal,
+      // ชื่อฟิลด์ต่างจาก `live` ของ deactivate โดยตั้งใจ — คนละความหมาย ห้ามเอาไปเทียบกันตรง ๆ
+      governed: governedTotal,
       ratio,
       // 🚫 ตัวระบุอย่างเดียว และตัดให้สั้น — รอบที่เลื่อนทั้งคลังจะทำให้ jsonb บวมจนอ่านไม่ได้
       empIds: [...empIds].sort().slice(0, MAX_ANOMALY_IDS),
     });
     this.logger.warn(
-      `ข้ามการเลื่อนสิทธิ์ผู้ใช้: จะเลื่อน ${empIds.size} จาก ${liveTotal} แถว ` +
+      `ข้ามการเลื่อนสิทธิ์ผู้ใช้: จะเลื่อน ${empIds.size} จาก ${governedTotal} คนที่ ERP คุมรอบนี้ ` +
         `(${Math.round(ratio * 100)}% เกินเพดาน ${maxPct}%) — ตรวจ ERP_USER_LEVEL_ROLE_MAP ก่อน ` +
         'ถ้าตั้งใจให้เลื่อนจริงทั้งชุดค่อยขยับ ERP_USER_ELEVATE_MAX_PCT',
     );

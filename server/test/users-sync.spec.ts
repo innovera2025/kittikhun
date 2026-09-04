@@ -1005,7 +1005,8 @@ describeWithDb('sync ผู้ใช้จาก ERP — วงจรจริ�
       expect(res.metrics).toMatchObject({ mapped: 6, elevated: 0, elevationsRefused: 6 });
       expect(await anomalyOf(res.runId, 'elevate_guardrail_blocked')).toMatchObject({
         elevations: 6,
-        live: 6,
+        // ตัวหาร = คนที่ ERP คุมรอบนี้ (ไม่ใช่จำนวนแถวใน user_credentials — ดูสองเคสถัดไป)
+        governed: 6,
       });
       // ไม่ได้แตะแถว users เลย → role_version ไม่ขยับ และไม่มี audit ว่า role เปลี่ยน
       expect((await userOf('P01'))?.role_version).toBe(before?.role_version);
@@ -1049,6 +1050,98 @@ describeWithDb('sync ผู้ใช้จาก ERP — วงจรจริ�
       expect(await anomalyTypes(res.runId)).not.toContain('elevate_guardrail_blocked');
       // เลื่อนสิทธิ์ = ไม่ตัด token (คนละเรื่องกับการลดสิทธิ์)
       expect(await auditActions()).toContain('users.erp_role_changed');
+    });
+
+    it('⭐ ก่อน cutover — แถว legacy_pin ที่ backfill ไว้ ห้ามทำให้ตัวหารพองจนเพดานหลวม', async () => {
+      // schema.sql เติมแถว legacy_pin ให้ใหม่ทุก deploy จนกว่ารอบ users จะสำเร็จรอบแรก →
+      // ถ้าตัวหารคือ `count(*) WHERE source IN ('erp','legacy_pin')` เพดานจะหลวมที่สุดพอดี
+      // ในรอบแรก ๆ ที่ ERP_USER_LEVEL_ROLE_MAP ยังไม่เคยถูกพิสูจน์ ซึ่งคือช่วงที่เสี่ยงที่สุด
+      //
+      // เคสนี้: คนที่ ERP คุมจริงมี 6 คนและถูกเลื่อนเป็น admin ทั้งหมด = 100% ต้องถูกบล็อก
+      // แต่ถ้านับแถว legacy_pin อีก 18 แถวที่ ERP ไม่เคยพูดถึงเข้าไปด้วยจะเหลือ 6/24 = 25%
+      // พอดีเพดาน = ผ่านฉลุยทั้งที่เป็นเคสเดียวกับ role map พิมพ์ผิดเป๊ะ ๆ
+      await seedLocalAdmin();
+      for (const empId of SIX) await seedUser({ empId, role: 'staff', source: 'legacy_pin' });
+      for (let i = 1; i <= 18; i++) {
+        // คนที่ยังใช้ PIN เดิมอยู่และ ERP ไม่ได้ส่งมาในรอบนี้ (ยังไม่ถึงคิว cutover)
+        await seedUser({
+          empId: `L${String(i).padStart(2, '0')}`,
+          role: 'staff',
+          source: 'legacy_pin',
+        });
+      }
+      erp.users = SIX.map((e) => erpUser(e, { userLevel: LEVEL_ADMIN, password: SEED_SECRET }));
+
+      const res = await makeSync({
+        ERP_USER_MIN_EXPECTED_ROWS: 6,
+        ERP_USER_ELEVATE_MAX_PCT: 25,
+      }).syncUsers('test');
+
+      expect(res.status).toBe('success');
+      expect(res.metrics).toMatchObject({ mapped: 6, elevated: 0, elevationsRefused: 6 });
+      for (const empId of SIX) expect((await userOf(empId))?.role).toBe('staff');
+      expect(await anomalyOf(res.runId, 'elevate_guardrail_blocked')).toMatchObject({
+        elevations: 6,
+        governed: 6, // ไม่ใช่ 24 — แถว legacy_pin ที่ ERP ยังไม่ได้คุมไม่นับเป็นตัวหาร
+      });
+    });
+
+    it('⭐ หลัง cutover — ตัวหารต้องตัดสินเหมือนเดิม (การ์ดห้ามเข้มขึ้นเงียบ ๆ)', async () => {
+      // หลัง cutover ทุกแถวเป็น source='erp' และอยู่ในผล ERP รอบนี้ครบ → "คนที่ ERP คุม"
+      // กับ "แถว credential ที่มีอยู่" เป็นคนกลุ่มเดียวกัน ตัวหารจึงได้ 24 เท่ากันทั้งสองนิยาม
+      // เลื่อน 6 คน = 25% พอดีเพดาน ต้องยังผ่านเหมือนเดิม ถ้าเคสนี้กลายเป็นบล็อกเมื่อไร
+      // แปลว่าตัวหารใหม่ไม่ได้แปลว่า "คนที่ ERP คุม" อย่างที่อ้าง
+      const cutover = Array.from({ length: 24 }, (_, i) => `C${String(i + 1).padStart(2, '0')}`);
+      await seedLocalAdmin();
+      for (const empId of cutover) await seedUser({ empId, role: 'staff', source: 'erp' });
+      erp.users = cutover.map((e, i) =>
+        erpUser(e, { userLevel: i < 6 ? LEVEL_ADMIN : LEVEL_STAFF, password: SEED_SECRET }),
+      );
+
+      const res = await makeSync({
+        ERP_USER_MIN_EXPECTED_ROWS: 24,
+        ERP_USER_ELEVATE_MAX_PCT: 25,
+      }).syncUsers('test');
+
+      expect(res.status).toBe('success');
+      expect(res.metrics).toMatchObject({ mapped: 24, elevated: 6, elevationsRefused: 0 });
+      for (const empId of cutover.slice(0, 6)) expect((await userOf(empId))?.role).toBe('admin');
+      for (const empId of cutover.slice(6)) expect((await userOf(empId))?.role).toBe('staff');
+      expect(await anomalyTypes(res.runId)).not.toContain('elevate_guardrail_blocked');
+    });
+
+    it('⭐ นับเฉพาะแถวที่ลูปหลักจะรับจริง — แถวที่ถูกปฏิเสธห้ามดันจำนวนจนชนเพดาน', async () => {
+      // ด่านเพดานเคยกรองแค่ "emp_id อ่านออก + map เป็น role ได้" ส่วนลูปหลักปฏิเสธ login ซ้ำ
+      // กันเองในรอบเดียว / รหัสผ่าน decode เพี้ยน / ชื่อว่างเพิ่มอีกชั้น → นับได้ 6 ทั้งที่จะ
+      // เลื่อนสิทธิ์จริงแค่ 3 แล้วการ์ดก็โยนการเลื่อนสิทธิ์ที่ถูกต้องทิ้งด้วยตัวเลขที่ไม่มีวันเกิดขึ้น
+      await seedLocalAdmin();
+      await seedSix();
+      erp.users = [
+        ...SIX.slice(0, 3).map((e) =>
+          erpUser(e, { userLevel: LEVEL_ADMIN, password: SEED_SECRET }),
+        ),
+        erpUser('P04', { userLevel: LEVEL_ADMIN, nameThai: '' }),
+        erpUser('P05', { userLevel: LEVEL_ADMIN, password: `พัง${REPLACEMENT_CHAR}` }),
+        erpUser('P06', { userLevel: LEVEL_ADMIN, loginName: 'p01' }), // ซ้ำ P01 ในรอบเดียวกัน
+      ];
+
+      const res = await makeSync({ ERP_USER_MIN_EXPECTED_ROWS: 6 }).syncUsers('test');
+
+      expect(res.status).toBe('success');
+      // 3 คนที่แถวใช้ได้จริง ไม่เกิน ELEVATE_ALWAYS_ALLOWED → ต้องเลื่อนสิทธิ์ได้ตามปกติ
+      expect(res.metrics).toMatchObject({
+        mapped: 3,
+        rejected: 3,
+        elevated: 3,
+        elevationsRefused: 0,
+      });
+      for (const empId of SIX.slice(0, 3)) expect((await userOf(empId))?.role).toBe('admin');
+      for (const empId of SIX.slice(3)) expect((await userOf(empId))?.role).toBe('staff');
+      const types = await anomalyTypes(res.runId);
+      expect(types).not.toContain('elevate_guardrail_blocked');
+      // ด่านรูปแบบชุดเดียวกันต้องยังแยกชนิด anomaly ได้เหมือนเดิม
+      expect(types.filter((t) => t === 'rejected_row')).toHaveLength(2);
+      expect(types.filter((t) => t === 'duplicate_login')).toHaveLength(1);
     });
   });
 
