@@ -297,6 +297,25 @@ function pickItemFields(row: Record<string, unknown>): Record<string, unknown> {
   };
 }
 
+/**
+ * 1 แถวดิบจาก `menuuser` → `ErpUserRow` (pure — ไม่แตะ connection ของ ERP)
+ *
+ * 🚫 บรรทัด `ErpSecret.of(...)` ข้างล่างคือ **จุดเดียวในระบบ** ที่ plaintext ของ ERP ข้ามเข้ามา
+ *    ถ้ามีใครถอดการห่อออก (หรือเผลอเปลี่ยนเป็น string ดิบ) จะไม่มีอะไรฟ้องเลยจนกว่ามันจะไป
+ *    โผล่ใน log/anomaly/audit_log ของจริง ซึ่ง `audit_log` เป็น append-only ลบคืนไม่ได้
+ *    → แยกออกมาเป็นฟังก์ชันบริสุทธิ์เพื่อให้เทสต์จับตรงนี้ได้โดยไม่ต้องมี SQL Server จริง
+ */
+export function toErpUserRow(row: Record<string, unknown>): ErpUserRow {
+  return {
+    loginName: asScalarString(row['login_name']),
+    // ⚠️ ห้าม trim ค่านี้ — ERP เทียบ a_Password แบบ string เป๊ะ ช่องว่างท้ายมีความหมาย
+    password: ErpSecret.of(asScalarString(row['password'])),
+    userLevel: asScalarString(row['user_level']),
+    nameThai: asScalarString(row['name_thai']),
+    empCode: asScalarString(row['emp_code']),
+  };
+}
+
 function firstIssue(error: z.ZodError): string {
   const issue = error.issues[0];
   return issue ? `${issue.path.join('.') || '(root)'}: ${issue.message}` : 'ไม่ผ่าน validation';
@@ -459,7 +478,7 @@ OFFSET @offset ROWS FETCH NEXT @batch ROWS ONLY`;
  *    role map (`ERP_USER_LEVEL_ROLE_MAP`) ไม่ใช่ด้วย SQL filter เพราะ U4/U7 ยังไม่มี
  *    คอลัมน์ให้กรอง — level ที่ไม่ได้ map ไว้ = ไม่ได้บัญชีเลย
  */
-const DEFAULT_USERS_SQL = `SELECT user_name  AS login_name,
+export const DEFAULT_USERS_SQL = `SELECT user_name  AS login_name,
        a_Password AS password,
        user_level AS user_level,
        name_thai  AS name_thai,
@@ -850,14 +869,7 @@ export class MssqlDriver extends BaseErpDriver {
     logger.log(`ดึงผู้ใช้จาก ERP สำเร็จ: ${rows.length} แถว`);
     // ⚠️ ไม่เรียก normalizeRow ซ้ำ — runQuery() decode ผ่าน decodeThai ให้ทุกคอลัมน์แล้ว
     //    การ decode ซ้ำรอบสองอาจแปลงรหัสผ่านที่ decode ถูกแล้วให้เพี้ยนแบบเงียบ ๆ
-    return rows.map((row) => ({
-      loginName: asScalarString(row['login_name']),
-      // ⚠️ ห้าม trim ค่านี้ — ERP เทียบ a_Password แบบ string เป๊ะ ช่องว่างท้ายมีความหมาย
-      password: ErpSecret.of(asScalarString(row['password'])),
-      userLevel: asScalarString(row['user_level']),
-      nameThai: asScalarString(row['name_thai']),
-      empCode: asScalarString(row['emp_code']),
-    }));
+    return rows.map(toErpUserRow);
   }
 
   // -------------------------------------------------------------------------

@@ -34,6 +34,14 @@ interface MemberRow {
 interface LockedUserRow {
   emp_id: string;
   role: Role;
+  /**
+   * ยังมีแถวใน `user_credentials` ไหม — `role='admin'` เพียว ๆ **ไม่ได้แปลว่าล็อกอินได้**
+   *
+   * รอบ sync ปิดบัญชีคนที่ออกจาก ERP ด้วยการลบเฉพาะแถว credential (แถว `users` ห้ามลบ
+   * เพราะ FK 9 ตารางชี้มา) คนที่ออกไปแล้วจึงค้างเป็น admin ใน `users` ตลอดกาล
+   * นับ "admin ผี" พวกนี้เป็นตาข่าย = ยอมลดสิทธิ์ admin ตัวจริงคนสุดท้ายจนไม่มีใครเข้าระบบได้
+   */
+  has_credential: boolean;
 }
 
 /** แหล่งที่มาของ credential — `'erp' | 'local' | 'legacy_pin'` (ไม่มีแถว = ล็อกอินไม่ได้อยู่แล้ว) */
@@ -117,11 +125,18 @@ export class MembersService {
     const to = role.data;
 
     return this.db.transaction(async (client) => {
+      // LEFT JOIN user_credentials = ความสัมพันธ์เดียวกับด่าน last-admin ของรอบ sync
+      // (`user_credentials c JOIN users u ON u.emp_id = c.emp_id`) ต่างกันแค่ต้องเก็บแถว
+      // เป้าหมายไว้ด้วยแม้เขาไม่มี credential จึงเป็น LEFT
+      // ⚠️ `FOR UPDATE OF u` — ล็อกเฉพาะแถว `users` เหมือนเดิม (ลำดับล็อก users →
+      //    user_credentials ห้ามสลับ ไม่งั้น deadlock กับ SyncService.runUsers)
       const locked = await client.query<LockedUserRow>(
-        `SELECT emp_id, role FROM users
-          WHERE emp_id = $1 OR role = 'admin'
-          ORDER BY emp_id
-          FOR UPDATE`,
+        `SELECT u.emp_id, u.role, c.emp_id IS NOT NULL AS has_credential
+           FROM users u
+           LEFT JOIN user_credentials c ON c.emp_id = u.emp_id
+          WHERE u.emp_id = $1 OR u.role = 'admin'
+          ORDER BY u.emp_id
+          FOR UPDATE OF u`,
         [id],
       );
       const lockedRows: LockedUserRow[] = locked.rows;
@@ -150,8 +165,13 @@ export class MembersService {
       // ไม่มีอะไรเปลี่ยน → ไม่ bump role_version (ไม่ทำให้ token ทุกเครื่องเสียเปล่า ๆ)
       if (from === to) return { empId: id, role: from };
 
-      const adminCount = lockedRows.filter((r) => r.role === 'admin').length;
-      if (from === 'admin' && to !== 'admin' && adminCount <= 1) {
+      // ⚠️ นับเฉพาะ admin **คนอื่น** ที่ยังมี credential = ยังล็อกอินได้จริง
+      //    (เดิมนับจาก `users.role` ล้วน ๆ → admin ผีที่ถูกปิดล็อกอินไปแล้วถูกนับเป็นตาข่าย
+      //     และด่านนี้จะยอมให้ลดสิทธิ์ admin ตัวจริงคนสุดท้ายจนไม่มีใครเข้าระบบได้อีก)
+      const otherUsableAdmins = lockedRows.filter(
+        (r) => r.role === 'admin' && r.has_credential && r.emp_id !== id,
+      ).length;
+      if (from === 'admin' && to !== 'admin' && otherUsableAdmins === 0) {
         throw new BadRequestException({
           code: 'LAST_ADMIN',
           message: 'ต้องมีผู้ดูแลอย่างน้อย 1 คน',
@@ -186,9 +206,17 @@ export class MembersService {
 
   // ── 3. helper ────────────────────────────────────────────────────────
 
+  /**
+   * จำนวน admin ที่ **ล็อกอินได้จริง** — ต้องมีแถวใน `user_credentials` ด้วยเสมอ
+   * (รูปเดียวกับด่าน last-admin ของรอบ sync: นับจาก `users.role` ล้วน ๆ จะได้ admin ผี
+   *  ที่ถูกปิดล็อกอินไปแล้วติดมาด้วย ซึ่งเป็นตาข่ายที่รับใครไม่ได้)
+   */
   async countAdmins(): Promise<number> {
     const row = await this.db.one<{ n: number }>(
-      `SELECT count(*)::int AS n FROM users WHERE role = 'admin'`,
+      `SELECT count(*)::int AS n
+         FROM user_credentials c
+         JOIN users u ON u.emp_id = c.emp_id
+        WHERE u.role = 'admin'`,
     );
     return row?.n ?? 0;
   }

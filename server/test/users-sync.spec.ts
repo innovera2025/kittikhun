@@ -192,6 +192,7 @@ describeWithDb('sync ผู้ใช้จาก ERP — วงจรจริ�
     ERP_SYNC_OVERLAP_S: 60,
     ERP_USER_LEVEL_ROLE_MAP: ROLE_MAP,
     ERP_USER_DEACTIVATE_MAX_PCT: 10,
+    ERP_USER_ELEVATE_MAX_PCT: 10,
     ERP_USER_MIN_EXPECTED_ROWS: 3,
   };
 
@@ -512,11 +513,13 @@ describeWithDb('sync ผู้ใช้จาก ERP — วงจรจริ�
       expect(await liveTokens('E779')).toBe(1);
     });
 
-    it('ด่าน last-admin ต่อแถว: ERP สั่งลด admin คนสุดท้าย → ไม่ลด + audit ไว้', async () => {
+    it('⭐ ERP สั่งลดสิทธิ์บัญชี break-glass → ไม่ลด + audit ไว้ + ไม่แตะ credential', async () => {
       // admin คนเดียวที่เหลือคือ break-glass เอง (source=local) — sync ไม่แตะ credential ของเขา
-      // แต่ **แตะ users.role ได้** ถ้าไม่มีด่านนี้ ระบบจะไม่เหลือ admin เลยตั้งแต่รอบแรก
+      // และ **ห้ามแตะ users.role ของเขาด้วย** ถ้าไม่มีด่านนี้ ระบบจะไม่เหลือ admin เลยตั้งแต่
+      // รอบแรก และการลดสิทธิ์นั้น commit ไปแล้วคนละทรานแซกชัน = ไม่มีทางกลับเข้าระบบ
       await seedLocalAdmin();
       const before = await credentialOf(LOCAL_ADMIN);
+      const userBefore = await userOf(LOCAL_ADMIN);
       erp.users = [
         erpUser(LOCAL_ADMIN, { loginName: 'somchai.k', userLevel: LEVEL_STAFF }),
       ];
@@ -525,7 +528,11 @@ describeWithDb('sync ผู้ใช้จาก ERP — วงจรจริ�
 
       expect(res.status).toBe('success');
       expect((await userOf(LOCAL_ADMIN))?.role).toBe('admin');
-      expect(await auditActions()).toContain('users.erp_last_admin_floor_blocked');
+      // ไม่ทำตาม ERP = ต้องเห็นใน audit ไม่ใช่เงียบหาย
+      expect(await auditActions()).toContain('users.erp_local_role_ignored');
+      expect(await auditActions()).not.toContain('users.erp_role_changed');
+      // ไม่แตะแถว users เลย → role_version ต้องไม่ขยับ (token ทุกเครื่องไม่เสียเปล่า)
+      expect((await userOf(LOCAL_ADMIN))?.role_version).toBe(userBefore?.role_version);
       // credential ของ break-glass ต้องไม่ถูกแก้แม้แต่คอลัมน์เดียว
       const after = await credentialOf(LOCAL_ADMIN);
       expect(after?.source).toBe('local');
@@ -688,12 +695,71 @@ describeWithDb('sync ผู้ใช้จาก ERP — วงจรจริ�
 
       expect(res.status).toBe('partial');
       expect(res.rowsTombstoned).toBe(0);
-      expect(res.metrics).toMatchObject({ absent: 3, deactivated: 0, refused: 3 });
+      // `refused` = "พ้น grace แล้วแต่ไม่ได้ถูกลบ" เหมือนรอบปกติเป๊ะ ๆ — สามคนนี้นาฬิกา
+      // ยังไม่เคยเริ่มเดินด้วยซ้ำ จึงยังไม่ใช่คนที่ถูกปฏิเสธ (รอบปกติก็ยังไม่ลบเขาอยู่ดี)
+      expect(res.metrics).toMatchObject({ absent: 3, graceElapsed: 0, deactivated: 0, refused: 0 });
       expect(await anomalyTypes(res.runId)).toContain('row_count_below_floor');
       // นาฬิกาไม่ถูกตั้ง = รอบถัดไปที่ดึงมาครบยังต้องเริ่มนับ grace ใหม่ตั้งแต่ศูนย์
       for (const empId of five.slice(2)) {
         expect((await credentialOf(empId))?.absent_since).toBeNull();
       }
+    });
+
+    it('⭐ รอบที่ตกเพดานแถวขั้นต่ำ — refused นับเฉพาะคนที่พ้น grace แล้ว ไม่ใช่ absent ทั้งหมด', async () => {
+      // เส้นทางนี้เคยใส่ "absent ทั้งหมด" ลงช่อง refused แล้วปล่อย graceElapsed เป็น 0 →
+      // เลขเดียวกันในสองรอบหมายถึงคนละเรื่อง ผู้ดูแลเทียบรอบต่อรอบไม่ได้เลย
+      const six = ALL.slice(0, 6);
+      await seedLocalAdmin();
+      await seedStaff(six);
+      const sync = makeSync({ ERP_USER_MIN_EXPECTED_ROWS: 5 });
+
+      // รอบ 1 (ผ่านเพดานแถว): E06 หายไปคนเดียว → นาฬิกาเริ่มเดินให้เขาคนเดียว
+      erp.users = six.slice(0, 5).map((e) => erpUser(e, { password: SEED_SECRET }));
+      await sync.syncUsers('test');
+      expect(await expireGrace()).toBe(1);
+
+      // รอบ 2 (ตกเพดานแถว): ตอนนี้ absent = E04, E05, E06 แต่มีแค่ E06 ที่พ้น grace แล้ว
+      erp.users = six.slice(0, 3).map((e) => erpUser(e, { password: SEED_SECRET }));
+      const res = await sync.syncUsers('test');
+
+      expect(res.status).toBe('partial');
+      expect(res.metrics).toMatchObject({ absent: 3, graceElapsed: 1, deactivated: 0, refused: 1 });
+      expect(await anomalyOf(res.runId, 'row_count_below_floor')).toMatchObject({
+        absent: 3,
+        graceElapsed: 1,
+      });
+      // ปฏิเสธ = ไม่ลบจริง ๆ (คนที่พ้น grace แล้วต้องยังล็อกอินได้อยู่)
+      expect(await credentialOf('E06')).not.toBeNull();
+    });
+
+    it('⭐ รอบที่ตกเพดานแถวขั้นต่ำ ต้องล้างนาฬิกาของคนที่กลับมาพบใน ERP แล้ว', async () => {
+      // คำสั่งล้างเคยอยู่ใน sweep ซึ่งรอบนี้ไม่ได้ทำงาน → นาฬิกาของคนที่ ERP ส่งชื่อมาแล้ว
+      // เดินต่อไปเรื่อย ๆ พอถึงรอบที่เขาหายไปจริงครั้งแรก เขาจะถูกลบทันทีโดยไม่มี grace เลย
+      const six = ALL.slice(0, 6);
+      await seedLocalAdmin();
+      await seedStaff(six);
+      const sync = makeSync({ ERP_USER_MIN_EXPECTED_ROWS: 5 });
+
+      // รอบ 1 (ผ่านเพดานแถว): E06 หาย → นาฬิกาเริ่มเดิน
+      erp.users = six.slice(0, 5).map((e) => erpUser(e, { password: SEED_SECRET }));
+      await sync.syncUsers('test');
+      expect((await credentialOf('E06'))?.absent_since).not.toBeNull();
+
+      // รอบ 2 (ตกเพดานแถว): E06 กลับมาแล้ว — ต้องหยุดนาฬิกาให้เขาแม้ sweep ไม่ได้ทำงาน
+      erp.users = [erpUser('E06', { password: SEED_SECRET }), erpUser('E01', { password: SEED_SECRET })];
+      const second = await sync.syncUsers('test');
+
+      expect(second.status).toBe('partial');
+      expect((await credentialOf('E06'))?.absent_since).toBeNull();
+      // ไม่มีนาฬิกาเรือนไหนเดินค้างอยู่เลย (รอบนี้ห้ามเริ่มจับเวลาให้ใครใหม่ด้วย)
+      expect(await expireGrace()).toBe(0);
+
+      // รอบ 3 (ผ่านเพดานแถว): E06 หายอีกครั้ง → ต้องได้ grace เต็มใหม่ ไม่ใช่ถูกลบทันที
+      erp.users = six.slice(0, 5).map((e) => erpUser(e, { password: SEED_SECRET }));
+      const third = await sync.syncUsers('test');
+
+      expect(third.metrics).toMatchObject({ absent: 1, graceElapsed: 0, deactivated: 0 });
+      expect(await credentialOf('E06')).not.toBeNull();
     });
 
     it('ไม่ได้ตั้ง ERP_USER_MIN_EXPECTED_ROWS → ถือว่าไม่ผ่านเพดานเสมอ ห้าม deactivate ใคร', async () => {
@@ -707,21 +773,20 @@ describeWithDb('sync ผู้ใช้จาก ERP — วงจรจริ�
       const res = await makeSync({ ERP_USER_MIN_EXPECTED_ROWS: undefined }).syncUsers('test');
 
       expect(res.status).toBe('partial');
-      expect(res.metrics).toMatchObject({ absent: 1, deactivated: 0, refused: 1 });
+      // นาฬิกาของ E05 ยังไม่เคยเริ่มเดิน → absent 1 แต่ยังไม่มีใครพ้น grace ให้ปฏิเสธ
+      expect(res.metrics).toMatchObject({ absent: 1, graceElapsed: 0, deactivated: 0, refused: 0 });
       expect(await credentialOf('E05')).not.toBeNull();
     });
 
-    it('⭐ ถ้า sweep จะทำให้ไม่เหลือ admin ที่ล็อกอินได้ → rollback ทั้งก้อน + รอบล้มเหลว', async () => {
-      // สถานการณ์จริงที่ด่านต้นรอบจับไม่ได้: ลูปของรอบนี้เอง "ลดสิทธิ์" break-glass admin
-      // ตามที่ ERP สั่ง (sync ไม่แตะ credential ของ source=local แต่แตะ users.role ได้)
-      // → พอถึง sweep ก็เหลือ admin ที่ล็อกอินได้แค่คนที่กำลังจะถูกลบ
+    it('⭐ "admin ผี" ที่ไม่มี credential แล้ว ห้ามถูกนับเป็นตาข่ายของด่าน last-admin', async () => {
+      // เคสที่เคยล็อกทั้งคลังออกได้จริง: E902 เป็น admin ที่ **ไม่มี credential แล้ว**
+      // (ถูกปิดล็อกอินไปในรอบก่อน ๆ แต่แถว users ยังอยู่ตามกติกา "ห้ามลบแถว users")
+      // ถ้าด่าน last-admin นับจาก `users.role` ล้วน ๆ เขาจะถูกนับเป็น "ยังมี admin อีกคน"
+      // แล้วลูปจะยอมลดสิทธิ์ break-glass ตามที่ ERP สั่ง — และการลดสิทธิ์นั้น commit ไปแล้ว
+      // คนละทรานแซกชัน กู้ไม่ได้แม้ sweep จะจับได้ทีหลังแล้ว rollback ตัวเอง
       await seedLocalAdmin();
       await seedUser({ empId: 'E900', role: 'admin', source: 'erp' });
       await seedUser({ empId: 'E901', role: 'staff', source: 'erp' });
-      // admin ที่ **ไม่มี credential แล้ว** (ถูกปิดล็อกอินไปในรอบก่อน ๆ แต่แถว users ยังอยู่
-      // ตามกติกา "ห้ามลบแถว users") — ด่านต่อแถวนับจาก `users.role` จึงยังเห็นเขาเป็นตาข่าย
-      // และยอมลดสิทธิ์ break-glass ตามที่ ERP สั่ง ส่วน sweep นับจาก credential จึงเห็นว่า
-      // ไม่เหลือใครล็อกอินได้จริง ช่องว่างนี้คือเหตุผลที่ชั้นที่สองยังจำเป็นเสมอ
       await db.query(
         `INSERT INTO users (emp_id, name, role, shift, warehouse_code, must_change_pin)
          VALUES ('E902', 'ผู้ดูแลที่ถูกปิดล็อกอินไปแล้ว', 'admin', 'กะเช้า · A', 'WH01', false)`,
@@ -735,29 +800,33 @@ describeWithDb('sync ผู้ใช้จาก ERP — วงจรจริ�
       ];
       await sync.syncUsers('test');
       expect(await expireGrace()).toBe(1);
+      // break-glass ต้องยังทำงานต่อได้ตลอด → ล็อกอินค้างไว้ 1 เครื่องเพื่อดูว่า token ถูกตัดไหม
+      await auth.login({ empId: LOCAL_ADMIN_LOGIN, pin: SEED_SECRET, deviceId: DEVICE });
+      expect(await liveTokens(LOCAL_ADMIN)).toBe(1);
 
-      // รอบที่ 2: ERP ลด break-glass เป็น staff แล้ว sweep จะลบ admin คนสุดท้ายที่เหลือ
+      // รอบที่ 2: ERP สั่งลด break-glass เป็น staff พร้อมกับที่ E900 พ้น grace พอดี
       erp.users = [
         erpUser(LOCAL_ADMIN, { loginName: LOCAL_ADMIN_LOGIN, userLevel: LEVEL_STAFF }),
         erpUser('E901', { password: SEED_SECRET }),
       ];
       const res = await sync.syncUsers('test');
 
-      expect(res.status).toBe('failed');
-      expect(res.error).toContain('ไม่เหลือ admin');
-      expect(res.rowsTombstoned).toBe(0);
-      // ไม่มีการลบไหน commit เลย — ทั้งคนที่จะโดนลบและ break-glass ยังล็อกอินได้
-      expect(await credentialOf('E900')).not.toBeNull();
+      // ⭐ หัวใจของเคสนี้: ทางกลับเข้าระบบต้องอยู่ครบทั้ง role และ session
+      expect((await userOf(LOCAL_ADMIN))?.role).toBe('admin');
+      expect(await liveTokens(LOCAL_ADMIN)).toBe(1);
       expect(await credentialOf(LOCAL_ADMIN)).not.toBeNull();
-      expect(await auditActions()).not.toContain('users.erp_deactivated');
+      expect(await auditActions()).not.toContain('users.erp_role_changed');
+      expect(await auditActions()).toContain('users.erp_local_role_ignored');
+      // ไม่มีอะไรถูกลดสิทธิ์ → sweep เหลือ admin ที่ล็อกอินได้จริง (break-glass) จึงเดินต่อได้
+      // ตามปกติ ไม่ต้อง rollback ทั้งก้อนเหมือนที่เคยจบแบบล้มทั้งรอบ
       const row = await runRow(res.runId);
-      expect(row?.status).toBe('failed');
-      expect(await anomalyTypes(res.runId)).toContain('admin_credential_floor_blocked');
-      // ตัวนับที่เดินมาได้ก่อนล้มต้องยังเห็นใน sync_runs (ไม่ใช่ศูนย์รวด)
+      expect(res.status).toBe('success');
+      expect(res.metrics).toMatchObject({ mapped: 2, deactivated: 1, adminsDeactivated: 1 });
       expect(row?.metrics.mapped).toBe(2);
-      // ⚠️ พฤติกรรมจริงที่ต้องรู้: ลูปเขียนทีละแถวคนละทรานแซกชัน การลดสิทธิ์จึง commit ไปแล้ว
-      //    → นี่คือเหตุผลที่ sweep ต้องนับ admin ใหม่ในทรานแซกชันของตัวเอง ไม่ใช่เชื่อด่านต้นรอบ
-      expect((await userOf(LOCAL_ADMIN))?.role).toBe('staff');
+      expect(await anomalyTypes(res.runId)).not.toContain('admin_credential_floor_blocked');
+      // E900 หายจาก ERP เกิน grace จริง → ปิดล็อกอินได้ถูกต้องแล้ว
+      expect(await credentialOf('E900')).toBeNull();
+      expect(await auditActions()).toContain('users.erp_deactivated');
     });
 
     it('⭐ ลบ credential ของ admin → anomaly เฉพาะทาง + ตัวนับใน sync_runs (ห้ามเงียบ)', async () => {
@@ -797,11 +866,11 @@ describeWithDb('sync ผู้ใช้จาก ERP — วงจรจริ�
       });
     });
 
-    it('⭐ ด่านต่อแถวห้ามนับ admin ที่ credential กำลังจะถูกลบในรอบเดียวกันเป็นตาข่าย', async () => {
+    it('⭐ break-glass ถูกลดสิทธิ์ไม่ได้ แม้ในรอบเดียวกับที่ admin อีกคนถูกลบพอดี', async () => {
       // E920 เป็น admin ที่หายจาก ERP และพ้น grace แล้ว = ถูกลบท้ายรอบนี้แน่นอน
-      // ถ้าด่านต่อแถวยังนับเขาเป็น "ยังมี admin อีกคน" ลูปจะยอมลดสิทธิ์ break-glass ตามที่
-      // ERP สั่ง แล้วรอบนั้นก็ไปจบที่ sweep ซึ่งต้อง rollback ทั้งก้อน — เสียทั้งสิทธิ์
-      // (การลดสิทธิ์ commit ไปแล้วคนละทรานแซกชัน) และเสียรอบ sync ไปพร้อมกัน
+      // ถ้าลูปยอมลดสิทธิ์ break-glass ตามที่ ERP สั่งในรอบเดียวกันนี้ รอบนั้นจะไปจบที่ sweep
+      // ซึ่งต้อง rollback ทั้งก้อน — เสียทั้งสิทธิ์ (การลดสิทธิ์ commit ไปแล้วคนละทรานแซกชัน)
+      // และเสียรอบ sync ไปพร้อมกัน
       await seedLocalAdmin();
       await seedUser({ empId: 'E920', role: 'admin', source: 'erp' });
       await seedUser({ empId: 'E921', role: 'staff', source: 'erp' });
@@ -823,13 +892,56 @@ describeWithDb('sync ผู้ใช้จาก ERP — วงจรจริ�
       const res = await sync.syncUsers('test');
 
       expect((await userOf(LOCAL_ADMIN))?.role).toBe('admin');
-      expect(await auditActions()).toContain('users.erp_last_admin_floor_blocked');
-      // ด่านต่อแถวกันไว้ถูกตั้งแต่ต้น → sweep เดินต่อได้ตามปกติ ไม่ต้องล้มทั้งรอบ
+      expect(await auditActions()).toContain('users.erp_local_role_ignored');
+      // ด่านกันไว้ถูกตั้งแต่ต้น → sweep เดินต่อได้ตามปกติ ไม่ต้องล้มทั้งรอบ
       expect(res.status).toBe('success');
       expect(res.metrics).toMatchObject({ deactivated: 1, adminsDeactivated: 1 });
       expect(await credentialOf('E920')).toBeNull();
       expect(await credentialOf(LOCAL_ADMIN)).not.toBeNull();
       expect(await anomalyTypes(res.runId)).not.toContain('admin_credential_floor_blocked');
+    });
+
+    it('⭐ sweep ชนด่าน last-admin → rollback ทั้งก้อน แต่ตัวนับของรอบต้องไม่หายไปเป็นศูนย์', async () => {
+      // รอบที่ผู้ดูแลต้องอ่านมากที่สุดในชีวิตระบบ = รอบที่ระบบเกือบไม่เหลือ admin
+      // ถ้า metrics เป็น 0 ทั้งแถวเพราะการ throw ข้ามบรรทัดที่ copy ค่าลง metrics ไป
+      // รอบนี้จะดูเหมือน "รอบที่ไม่ได้ทำอะไรเลย" ทั้งที่มันคือรอบที่เกือบล็อกทุกคนออก
+      //
+      // ⚠️ สภาพนี้เกิดจาก ERP อย่างเดียวไม่ได้ (ด่าน 0 + ภูมิคุ้มกันของ source='local'
+      //    การันตีว่ามี admin ที่ล็อกอินได้เสมอ) — จำลอง "มีคนลดสิทธิ์ break-glass นอกรอบ
+      //    sync" (MembersService หรือแก้ SQL ด้วยมือ) ให้เกิด **หลังด่าน 0 ผ่านไปแล้ว**
+      //    ซึ่งเป็นเหตุผลเดียวที่ด่านนี้ยังต้องมีอยู่
+      await seedLocalAdmin();
+      await seedUser({ empId: 'E930', role: 'admin', source: 'erp' });
+      await seedUser({ empId: 'E931', role: 'staff', source: 'erp' });
+      const sync = makeSync({ ERP_USER_MIN_EXPECTED_ROWS: 1, ERP_USER_DEACTIVATE_MAX_PCT: 100 });
+
+      erp.users = [erpUser('E931', { password: SEED_SECRET })];
+      await sync.syncUsers('test'); // รอบ 1: E930 (admin) หายจาก ERP → เริ่มจับเวลา
+      expect(await expireGrace()).toBe(1);
+
+      // ด่าน 0 อ่านค่าไปแล้วตอนต้นรอบ · fetchUsers ถูกเรียกหลังจากนั้น = ช่องที่ของจริงเปลี่ยนได้
+      const fetchUsers = erp.fetchUsers.bind(erp);
+      erp.fetchUsers = async () => {
+        await db.query(`UPDATE users SET role = 'staff' WHERE emp_id = $1`, [LOCAL_ADMIN]);
+        return fetchUsers();
+      };
+      const res = await sync.syncUsers('test');
+
+      // ลบแล้วจะไม่เหลือ admin ที่ล็อกอินได้เลย → ไม่ลบสักแถว และรอบถูกบันทึกว่าล้มเหลว
+      expect(res.status).toBe('failed');
+      expect(await credentialOf('E930')).not.toBeNull();
+      expect(await auditActions()).not.toContain('users.erp_deactivated');
+      expect(await anomalyTypes(res.runId)).toContain('admin_credential_floor_blocked');
+      // ⭐ หัวใจของเคสนี้: ตัวนับของ sweep ต้องเดินทางออกมากับ error มาถึง sync_runs
+      const row = await runRow(res.runId);
+      expect(row?.metrics).toMatchObject({
+        absent: 1,
+        graceElapsed: 1,
+        deactivated: 0,
+        adminsDeactivated: 0,
+        refused: 1,
+      });
+      expect(res.metrics).toMatchObject({ absent: 1, graceElapsed: 1, refused: 1 });
     });
 
     it('credential source=local ไม่เข้า sweep แม้ไม่ปรากฏใน ERP เลย', async () => {
@@ -867,6 +979,80 @@ describeWithDb('sync ผู้ใช้จาก ERP — วงจรจริ�
   });
 
   // ─────────────────────────────────────────────────────────────────────
+  // เพดานการ "ให้" สิทธิ์ — คู่ตรงข้ามของเพดานการถอนสิทธิ์
+  // ─────────────────────────────────────────────────────────────────────
+
+  describe('เพดานการเลื่อนสิทธิ์ (ERP_USER_ELEVATE_MAX_PCT)', () => {
+    const SIX = ['P01', 'P02', 'P03', 'P04', 'P05', 'P06'];
+
+    const seedSix = async (): Promise<void> => {
+      for (const empId of SIX) await seedUser({ empId, role: 'staff', source: 'erp' });
+    };
+
+    it('⭐ role map พิมพ์ผิดจนคนทั้งคลังได้เป็น admin → คงสิทธิ์เดิมไว้ทุกคน + anomaly', async () => {
+      // `ERP_USER_DEACTIVATE_MAX_PCT` กันการ "ถอน" สิทธิ์ทีละมาก ๆ ไว้แล้ว แต่การ "ให้"
+      // สิทธิ์ไม่เคยมีการ์ดเลย — พิมพ์ `5=admin` ผิดค่าเดียวคือคนทั้งคลังเป็น admin ในรอบเดียว
+      // โดยไม่มีมนุษย์คนไหนกด และรอบนั้นรายงาน 'success' เงียบ ๆ
+      await seedLocalAdmin();
+      await seedSix();
+      const before = await userOf('P01');
+      erp.users = SIX.map((e) => erpUser(e, { userLevel: LEVEL_ADMIN, password: SEED_SECRET }));
+
+      const res = await makeSync({ ERP_USER_MIN_EXPECTED_ROWS: 6 }).syncUsers('test');
+
+      expect(res.status).toBe('success');
+      for (const empId of SIX) expect((await userOf(empId))?.role).toBe('staff');
+      expect(res.metrics).toMatchObject({ mapped: 6, elevated: 0, elevationsRefused: 6 });
+      expect(await anomalyOf(res.runId, 'elevate_guardrail_blocked')).toMatchObject({
+        elevations: 6,
+        live: 6,
+      });
+      // ไม่ได้แตะแถว users เลย → role_version ไม่ขยับ และไม่มี audit ว่า role เปลี่ยน
+      expect((await userOf('P01'))?.role_version).toBe(before?.role_version);
+      expect(await auditActions()).not.toContain('users.erp_role_changed');
+      // การ์ดนี้กันแค่ "สิทธิ์" — ส่วนที่เหลือของรอบต้องเดินตามปกติ (ไม่ใช่ล้มทั้งรอบ)
+      expect((await credentialOf('P01'))?.source).toBe('erp');
+      expect((await credentialOf('P01'))?.absent_since).toBeNull();
+    });
+
+    it('⭐ รอบแรกของระบบ (ทุกคนเป็นคนใหม่) ต้องไม่ถูกเพดานนี้บล็อก', async () => {
+      // คนใหม่ไม่มี "สิทธิ์เดิม" ให้เทียบ → ไม่ใช่การเลื่อนสิทธิ์ ด่านของคนใหม่คือ allowlist
+      // ของ ERP_USER_LEVEL_ROLE_MAP ต่างหาก ถ้าเผลอนับคนใหม่เป็นการเลื่อนสิทธิ์ด้วย
+      // การเปิดใช้ระบบครั้งแรกจะไม่มีทางสร้าง admin จาก ERP ได้เลยสักคน
+      const eight = Array.from({ length: 8 }, (_, i) => `N${String(i + 1).padStart(2, '0')}`);
+      await seedLocalAdmin();
+      erp.users = eight.map((e) => erpUser(e, { userLevel: LEVEL_ADMIN }));
+
+      const res = await makeSync({ ERP_USER_MIN_EXPECTED_ROWS: 8 }).syncUsers('test');
+
+      expect(res.status).toBe('success');
+      for (const empId of eight) expect((await userOf(empId))?.role).toBe('admin');
+      expect(res.metrics).toMatchObject({ mapped: 8, elevated: 0, elevationsRefused: 0 });
+      expect(await anomalyTypes(res.runId)).not.toContain('elevate_guardrail_blocked');
+    });
+
+    it('เลื่อนสิทธิ์ทีละไม่กี่คน → ผ่านตามปกติ (เพดาน % ล้วนจะบล็อกคลังเล็กไปตลอด)', async () => {
+      // 3 จาก 6 คน = 50% เกินเพดาน 10% แต่เป็นจำนวนที่ผู้ดูแลตั้งใจให้เกิดได้จริง —
+      // ถ้าการ์ดบล็อกเคสนี้ คลังเล็กจะเลื่อนสิทธิ์ใครไม่ได้เลยตลอดกาลโดยไม่มีอะไรฟ้อง
+      await seedLocalAdmin();
+      await seedSix();
+      erp.users = SIX.map((e, i) =>
+        erpUser(e, { userLevel: i < 3 ? LEVEL_ADMIN : LEVEL_STAFF, password: SEED_SECRET }),
+      );
+
+      const res = await makeSync({ ERP_USER_MIN_EXPECTED_ROWS: 6 }).syncUsers('test');
+
+      expect(res.status).toBe('success');
+      expect(res.metrics).toMatchObject({ mapped: 6, elevated: 3, elevationsRefused: 0 });
+      for (const empId of SIX.slice(0, 3)) expect((await userOf(empId))?.role).toBe('admin');
+      for (const empId of SIX.slice(3)) expect((await userOf(empId))?.role).toBe('staff');
+      expect(await anomalyTypes(res.runId)).not.toContain('elevate_guardrail_blocked');
+      // เลื่อนสิทธิ์ = ไม่ตัด token (คนละเรื่องกับการลดสิทธิ์)
+      expect(await auditActions()).toContain('users.erp_role_changed');
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────────────────
   // แถวที่ใช้ไม่ได้ + บันทึกของรอบ
   // ─────────────────────────────────────────────────────────────────────
 
@@ -893,6 +1079,47 @@ describeWithDb('sync ผู้ใช้จาก ERP — วงจรจริ�
       expect(await credentialOf('E505')).toBeNull();
       expect(await userOf('E503')).toBeNull();
     });
+
+    it('⭐ login_name ชนกับแถวเดิมของ emp_id อื่น → ข้ามแค่แถวนั้น รอบยังเดินจนถึง sweep', async () => {
+      // `seenLoginNames` เห็นการชนกันเองภายในรอบเดียวเท่านั้น — คนใหม่ที่ชื่อล็อกอินไปตรงกับ
+      // แถวเก่าของคนอื่นจะชน PK ที่ INSERT ตรง ๆ ถ้าปล่อยให้ 23505 หลุดไปถึง catch ของทั้งรอบ:
+      // แถวที่เหลือถูกข้ามทั้งหมด **และ sweep ไม่ได้ทำงานเลย** แล้วรอบถัด ๆ ไปก็ล้มซ้ำแบบเดิม
+      // ตลอดไป (ข้อมูล ERP ไม่ซ่อมตัวเอง) = เปิดบัญชีใหม่ก็ไม่ได้ ปิดบัญชีคนลาออกก็ไม่ได้
+      await seedLocalAdmin();
+      await seedUser({ empId: 'E10', role: 'staff', source: 'erp', loginName: 'dup01' });
+      const sync = makeSync({ ERP_USER_MIN_EXPECTED_ROWS: 3, ERP_USER_DEACTIVATE_MAX_PCT: 50 });
+      // E30 ถือ login_name เดียวกับ E10 ที่ persist ไว้แล้ว และ E10 ไม่ได้อยู่ในผลรอบนี้
+      // (เขาคือคนที่กำลังจะถูก sweep ลบพอดี) — ในรอบเดียวจึงไม่มีอะไรเห็นการชนนี้ล่วงหน้าเลย
+      erp.users = [erpUser('E30', { loginName: 'dup01' }), erpUser('E31'), erpUser('E32')];
+
+      const first = await sync.syncUsers('test');
+
+      // แถวที่ชนถูกข้ามเป็นรายแถว — คนที่อยู่ถัดจากมันในผล ERP ต้องยังได้บัญชีครบ
+      expect(first.status).toBe('success');
+      expect(first.metrics).toMatchObject({ mapped: 2, rejected: 1 });
+      expect(await anomalyOf(first.runId, 'login_name_conflict')).toMatchObject({
+        empCode: 'E30',
+        login: 'dup01',
+      });
+      // 🚫 anomaly เก็บได้แค่ตัวระบุ — รหัสผ่านของแถวที่ชนห้ามติดไปด้วย
+      expect(JSON.stringify(await runRow(first.runId))).not.toContain('pw-E30');
+      expect(await credentialOf('E31')).not.toBeNull();
+      expect(await credentialOf('E32')).not.toBeNull();
+      // ทรานแซกชันของแถวที่ชน rollback ทั้งก้อน — ห้ามเหลือแถว users ค้างไว้ครึ่ง ๆ กลาง ๆ
+      expect(await userOf('E30')).toBeNull();
+      // เจ้าของ login_name เดิมต้องไม่ถูกแย่งชื่อไป
+      expect((await credentialOf('E10'))?.login_name).toBe('dup01');
+
+      // ⭐ ของจริงที่ต้องพิสูจน์: sweep ยังได้ทำงานในรอบที่มีแถวชน (ทั้งการตั้งนาฬิกา
+      //    grace รอบแรก และการลบจริงในรอบถัดมา)
+      expect(await expireGrace()).toBe(1); // E10 เริ่มนับ grace ตั้งแต่รอบแรก
+      const second = await sync.syncUsers('test');
+
+      expect(second.status).toBe('success');
+      expect(second.rowsTombstoned).toBe(1);
+      expect(second.metrics).toMatchObject({ mapped: 2, rejected: 1, deactivated: 1 });
+      expect(await credentialOf('E10')).toBeNull();
+    });
   });
 
   describe('บันทึกของรอบใน sync_runs', () => {
@@ -910,6 +1137,8 @@ describeWithDb('sync ผู้ใช้จาก ERP — วงจรจริ�
         'absent',
         'adminsDeactivated',
         'deactivated',
+        'elevated',
+        'elevationsRefused',
         'graceElapsed',
         'mapped',
         'refused',

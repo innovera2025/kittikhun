@@ -27,6 +27,7 @@ import { PostgresService } from '../db/postgres.service';
 import {
   ERP_ADAPTER,
   type ErpAdapter,
+  type ErpUserRow,
 } from '../erp/erp-adapter';
 
 /**
@@ -74,7 +75,11 @@ interface UserSyncMetrics extends Record<string, number> {
   unmapped: number;
   /** ในจำนวน unmapped มีกี่คนที่ยังถือ credential อยู่ (ตัวเลขที่ฟ้องว่า map ตกค่าไหนไป) */
   unmappedKeptCredential: number;
-  /** แถวที่รูปแบบใช้ไม่ได้ (emp_id/login/ชื่อ/รหัสผ่าน decode เพี้ยน) หรือ login ซ้ำในรอบเดียว */
+  /**
+   * แถวที่รูปแบบใช้ไม่ได้ (emp_id/login/ชื่อ/รหัสผ่าน decode เพี้ยน) หรือ login_name ซ้ำ —
+   * ทั้งซ้ำกันเองในรอบเดียว (`duplicate_login`) และซ้ำกับแถวที่ persist ไว้แล้วของ emp_id
+   * อื่น (`login_name_conflict`) ทั้งสองแบบข้ามเป็นรายแถว ห้ามล้มทั้งรอบ
+   */
   rejected: number;
   /** credential (erp/legacy_pin) ที่ไม่ปรากฏในผล ERP รอบนี้ — กำลังนับเวลา grace */
   absent: number;
@@ -91,8 +96,21 @@ interface UserSyncMetrics extends Record<string, number> {
    *    คือสิ่งเดียวที่ทำให้ผู้ดูแลรู้ตัว
    */
   adminsDeactivated: number;
-  /** พ้น grace แล้วแต่การ์ดปฏิเสธ (เพดาน %, เพดานแถวขั้นต่ำ, last-admin floor) */
+  /**
+   * **พ้น grace แล้ว** แต่การ์ดปฏิเสธ (เพดาน %, เพดานแถวขั้นต่ำ, last-admin floor)
+   *
+   * ⚠️ ทุกเส้นทางต้องแปลตัวเลขนี้เหมือนกันเป๊ะ = `graceElapsed - deactivated` เสมอ
+   *    เคยมีเส้นทางเดียว (เพดานแถวขั้นต่ำ) ที่ใส่ "จำนวน absent ทั้งหมด" ลงช่องนี้แล้วปล่อย
+   *    `graceElapsed` เป็น 0 → เลขเดียวกันสองรอบหมายถึงคนละเรื่อง อ่านเทียบกันไม่ได้
+   */
   refused: number;
+  /**
+   * เลื่อนสิทธิ์ขึ้นจริงในรอบนี้ (rank สูงกว่าเดิม) — คนที่เพิ่งได้บัญชีรอบนี้ไม่นับ
+   * เพราะไม่มีสิทธิ์เดิมให้เทียบ
+   */
+  elevated: number;
+  /** ตั้งใจเลื่อนสิทธิ์แต่เกินเพดาน `ERP_USER_ELEVATE_MAX_PCT` → คงสิทธิ์เดิมไว้ทุกคน */
+  elevationsRefused: number;
 }
 
 /** ตรงกับ enum `sync_kind` ใน Postgres */
@@ -154,6 +172,12 @@ const MAX_ANOMALIES = 200;
 const MAX_ERROR_LEN = 1000;
 
 /**
+ * จำนวน emp_id สูงสุดที่ยอมให้ติดไปใน anomaly ก้อนเดียว
+ * (การ์ดที่ปฏิเสธ "ทั้งคลัง" ได้ ต้องบอกว่าใครบ้างพอให้ตามต่อ แต่ห้ามยัดทั้งคลังลง jsonb)
+ */
+const MAX_ANOMALY_IDS = 20;
+
+/**
  * ⚠️ สำเนาของ statement เดียวกับ `MembersService` โดยตั้งใจ — ทั้งสองไฟล์เขียน `users`/
  * `refresh_tokens` ด้วยกติกาเดียวกันเป๊ะ (ลดสิทธิ์ = ตัด refresh token ทุกเครื่อง)
  * ไม่ import ข้ามโมดูลเพราะ MembersModule ไม่ได้ export ค่าเหล่านี้ และ SyncModule
@@ -188,9 +212,32 @@ const ABSENCE_GRACE_HOURS = 24;
 /** ค่าเดียวกันในรูป interval ของ Postgres — ทั้ง sweep และด่าน last-admin ต่อแถวต้องใช้ตัวนี้ตัวเดียว */
 const ABSENCE_GRACE_INTERVAL = `${ABSENCE_GRACE_HOURS} hours`;
 
+/** โค้ดของ Postgres ตอน unique/PK ชน — ดูจาก `code` เท่านั้น ข้อความเปลี่ยนตาม locale ได้ */
+const PG_UNIQUE_VIOLATION = '23505';
+
+/**
+ * จำนวนการเลื่อนสิทธิ์ที่ยอมให้ผ่านเสมอ ไม่ว่าจะคิดเป็นกี่ % ของคนทั้งคลัง
+ *
+ * เพดาน % ล้วน ๆ ใช้กับคลังเล็กไม่ได้: คลังที่มีบัญชีจาก ERP อยู่ 2 คน การเลื่อนสิทธิ์ที่ถูกต้อง
+ * ของคนเดียว = 50% ซึ่งเกินเพดานทุกค่าที่ตั้งจริงได้ → การ์ดจะปฏิเสธการเลื่อนสิทธิ์ **ทุกครั้ง
+ * ตลอดไป** แบบเงียบ ๆ ซึ่งเป็นความเสียหายคนละแบบแต่ถาวรพอกัน
+ * การ์ดนี้มีไว้กัน "role map พิมพ์ผิดแล้วคนทั้งคลังกลายเป็น admin ในรอบเดียว"
+ * ไม่ได้มีไว้กันการเลื่อนสิทธิ์ทีละคนที่ผู้ดูแลตั้งใจให้เกิด
+ */
+const ELEVATE_ALWAYS_ALLOWED = 3;
+
 function errorMessage(err: unknown): string {
   const raw = err instanceof Error ? err.message : String(err);
   return raw.length > MAX_ERROR_LEN ? `${raw.slice(0, MAX_ERROR_LEN)}…` : raw;
+}
+
+/** `login_name` ที่คนอื่นถือไว้อยู่แล้ว = แถวเสียรายตัว ไม่ใช่เหตุให้ล้มทั้งรอบ */
+function isUniqueViolation(err: unknown): boolean {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    (err as { code?: unknown }).code === PG_UNIQUE_VIOLATION
+  );
 }
 
 function toCount(value: number): number {
@@ -230,6 +277,15 @@ interface SyncRunRow {
 interface LockedUserRow {
   emp_id: string;
   role: Role;
+  /**
+   * ยังมีแถวใน `user_credentials` อยู่ไหม — **`users.role = 'admin'` ไม่ได้แปลว่าล็อกอินได้**
+   *
+   * sweep ลบเฉพาะแถว credential และไม่แตะแถว `users` เลยโดยตั้งใจ (FK 9 ตาราง +
+   * count_submissions เป็น ON DELETE RESTRICT) คนที่ออกจาก ERP ไปแล้วจึงค้างเป็น
+   * admin ใน `users` ตลอดกาลทั้งที่ล็อกอินไม่ได้ นับ "admin ผี" พวกนี้เป็นตาข่ายเมื่อไร
+   * ด่าน last-admin จะยอมลดสิทธิ์ admin ตัวจริงคนสุดท้ายทันที
+   */
+  has_credential: boolean;
 }
 
 /** ⚠️ `secret_hash` เป็น argon2id เท่านั้น ห้ามหลุดออกจากขอบเขตของ verify/hash */
@@ -245,6 +301,15 @@ interface DoomedCredentialRow {
   role: Role;
 }
 
+/** ตัวนับที่ deactivation sweep ผลิต — ต้องลง `sync_runs.metrics` ทุกทางออกของ sweep */
+interface SweepCounts {
+  absent: number;
+  graceElapsed: number;
+  deactivated: number;
+  adminsDeactivated: number;
+  refused: number;
+}
+
 /**
  * sweep รอบนี้จะทำให้ไม่เหลือ credential ของ admin เลย → ห้าม commit
  *
@@ -255,6 +320,14 @@ class AdminCredentialFloorError extends Error {
   constructor(
     readonly adminCredentials: number,
     readonly doomedAdmins: number,
+    /**
+     * ตัวนับ ณ วินาทีที่ปฏิเสธ — **เดินทางออกมากับ error เอง**
+     *
+     * บรรทัดที่ copy ผลของ sweep ลง `metrics` อยู่หลังจุดเรียก จึงไม่มีวันได้รันเมื่อ sweep โยน
+     * → รอบที่ผู้ดูแลต้องอ่านมากที่สุด (ระบบเกือบไม่เหลือ admin) กลับเป็นรอบเดียวที่ทุกตัวนับ
+     *   เป็น 0 ทั้งแถว ดูเหมือนรอบที่ไม่ได้ทำอะไรเลย
+     */
+    readonly counts: SweepCounts,
   ) {
     super(
       `ยกเลิกการปิดล็อกอิน ${doomedAdmins} บัญชี: จะไม่เหลือ admin ที่ล็อกอินได้เลย ` +
@@ -467,11 +540,16 @@ export class SyncService implements OnModuleInit {
    *    มีแต่ "ไม่ปรากฏในผล ERP เลย" เท่านั้นที่ป้อนเข้า deactivation sweep ได้
    *
    * ด่านที่ต้องมีครบ (ถอดออกข้อใดข้อหนึ่ง = ล็อกคนทั้งคลังออกได้ในรอบเดียว):
-   *  0. ต้องมี break-glass admin (`source='local'`) อยู่ก่อน มิฉะนั้นปฏิเสธทั้ง run
+   *  0. ต้องมี break-glass admin (`source='local'`) อยู่ก่อน มิฉะนั้นปฏิเสธทั้ง run —
+   *     และบัญชี `source='local'` ต้องรอดจากรอบนี้ทั้ง **credential และ `users.role`**
    *  1. allowlist ล้วน — `user_level` ที่ไม่ได้ map = ไม่ได้บัญชีเลย (ไม่ fallback viewer)
    *  2. last-admin floor ต่อแถว ด้วย `SELECT ... FOR UPDATE` แบบเดียวกับ MembersService.changeRole
+   *     นับเฉพาะ admin ที่ **ยังมีแถวใน `user_credentials`** (role อย่างเดียว = ผี ล็อกอินไม่ได้)
    *  3. deactivation sweep ผ่านครบทั้งสี่ชั้น: เพดานแถวขั้นต่ำ · grace หลายรอบ · เพดาน % ·
    *     last-admin floor ของทั้ง sweep (ไม่ผ่านชั้นสุดท้าย = rollback ทั้งก้อน + รอบล้มเหลว)
+   *  4. เพดาน % ของการ **เลื่อน** สิทธิ์ทั้งรอบ (`ERP_USER_ELEVATE_MAX_PCT`) — คู่ตรงข้าม
+   *     ของข้อ 3 ซึ่งกันแต่การถอนสิทธิ์ ส่วนข้อนี้กัน role map ที่พิมพ์ผิดค่าเดียวไม่ให้
+   *     แจก admin ทั้งคลังในรอบเดียว (ตัดสินก่อนเข้าลูปเพราะแต่ละแถว commit แยกกัน)
    */
   private async runUsers(triggeredBy: string): Promise<SyncRunResult> {
     const runId = await this.startRun('users', triggeredBy);
@@ -486,6 +564,8 @@ export class SyncService implements OnModuleInit {
       deactivated: 0,
       adminsDeactivated: 0,
       refused: 0,
+      elevated: 0,
+      elevationsRefused: 0,
     };
     let rowsRead = 0;
 
@@ -538,6 +618,12 @@ export class SyncService implements OnModuleInit {
       const doomedAdminEmpIds = rowCountOk
         ? await this.doomedAdminEmpIds(presentEmpIds)
         : new Set<string>();
+
+      // ── เพดานการ "ให้" สิทธิ์ — คู่ตรงข้ามของ ERP_USER_DEACTIVATE_MAX_PCT ──────────
+      // ต้องรู้ผลรวมทั้งรอบ **ก่อน** แถวแรกจะ commit เพราะแต่ละแถวอยู่คนละทรานแซกชัน
+      // (รู้ตัวตอนแถวที่ 300 = 299 คนแรกเลื่อนสิทธิ์ไปแล้วและเรียกคืนไม่ได้)
+      const elevation = await this.planElevations(rows, roleMap, anomalies);
+
       const seenLoginNames = new Set<string>(); // กันชนกันเองภายในรอบเดียว
       const unmappedLevelsSeen = new Set<string>();
       const unmappedEmpIds = new Set<string>(); // ใช้ตรวจว่ามีคนถือ credential ค้างอยู่กี่คน
@@ -592,129 +678,189 @@ export class SyncService implements OnModuleInit {
           continue;
         }
 
-        await this.db.transaction(async (client) => {
-          // ── ล็อกเป้าหมาย + admin ทุกคนพร้อมกัน เรียงตาม emp_id (ลำดับเดียวกันทุก tx =
-          //    ไม่มี deadlock) แล้ว **อ่าน role เก่าไว้ในโค้ดก่อน UPDATE**
-          //    ⚠️ ห้ามกลับไปใช้ `UPDATE ... RETURNING role` เพื่อเทียบ role เก่า/ใหม่:
-          //    RETURNING คืนค่า **ใหม่** เสมอ การเทียบกับตัวเองไม่มีทางเป็นจริง →
-          //    การเพิกถอน refresh token ตอนลดสิทธิ์จะไม่เคยทำงานแบบเงียบสนิท
-          const locked = await client.query<LockedUserRow>(
-            `SELECT emp_id, role FROM users WHERE emp_id = $1 OR role = 'admin'
-              ORDER BY emp_id FOR UPDATE`,
-            [empCode],
-          );
-          const lockedRows: LockedUserRow[] = locked.rows;
-          const current = lockedRows.find((r) => r.emp_id === empCode);
-          const fromRole = current?.role ?? null;
-          // ⚠️ ตัดคนที่ credential พ้น grace แล้วและ sweep จะลบท้ายรอบนี้ออกจากการนับ —
-          //    "ยังเป็น admin อยู่ ณ วินาทีนี้" ไม่ได้แปลว่าจะยังล็อกอินได้ตอนรอบจบ
-          const adminCountExcluding = lockedRows.filter(
-            (r) => r.role === 'admin' && r.emp_id !== empCode && !doomedAdminEmpIds.has(r.emp_id),
-          ).length;
+        // ผลของแถวนี้ที่ต้องนับ — ขยับตัวนับจริง **หลัง** ทรานแซกชันผ่านแล้วเท่านั้น
+        // (rollback = ไม่ได้เกิดขึ้นจริง ห้ามนับ) เก็บเป็นอ็อบเจ็กต์เดียวเพราะค่าถูกเขียน
+        // จากในคอลแบ็กซึ่งอยู่คนละขอบเขตฟังก์ชัน
+        const rowOutcome = { elevated: false, elevationRefused: false };
 
-          // ── ด่าน last-admin ต่อแถว: ห้ามลดสิทธิ์ admin คนสุดท้ายไม่ว่า ERP จะบอกว่าอะไร ──
-          let effectiveRole = mappedRole;
-          let blockedByFloor = false;
-          if (fromRole === 'admin' && mappedRole !== 'admin' && adminCountExcluding === 0) {
-            effectiveRole = 'admin';
-            blockedByFloor = true;
-          }
-
-          if (!current) {
-            // ⚠️ ไม่เขียน pin_hash เลย (คอลัมน์ผ่อนเป็น nullable แล้ว) — credential อยู่คนละตาราง
-            await client.query(
-              `INSERT INTO users (emp_id, name, role, shift, warehouse_code, must_change_pin)
-               VALUES ($1, $2, $3::user_role, $4, $5, false)`,
-              [empCode, nameThai, effectiveRole, DEFAULT_SHIFT, this.warehouseCode],
+        try {
+          await this.db.transaction(async (client) => {
+            // ── ล็อกเป้าหมาย + admin ทุกคนพร้อมกัน เรียงตาม emp_id (ลำดับเดียวกันทุก tx =
+            //    ไม่มี deadlock) แล้ว **อ่าน role เก่าไว้ในโค้ดก่อน UPDATE**
+            //    ⚠️ ห้ามกลับไปใช้ `UPDATE ... RETURNING role` เพื่อเทียบ role เก่า/ใหม่:
+            //    RETURNING คืนค่า **ใหม่** เสมอ การเทียบกับตัวเองไม่มีทางเป็นจริง →
+            //    การเพิกถอน refresh token ตอนลดสิทธิ์จะไม่เคยทำงานแบบเงียบสนิท
+            //
+            //    LEFT JOIN user_credentials = ความสัมพันธ์เดียวกับด่าน last-admin ของ sweep
+            //    (`user_credentials c JOIN users u ON u.emp_id = c.emp_id`) — ต่างกันแค่ต้อง
+            //    เก็บแถวเป้าหมายไว้ด้วยแม้เขายังไม่มี credential จึงเป็น LEFT
+            //    ⚠️ `FOR UPDATE OF u` — ล็อกเฉพาะแถว `users` เหมือนเดิมเป๊ะ (ลำดับล็อก
+            //    users → user_credentials ห้ามสลับ ไม่งั้น deadlock กับ MembersService.changeRole)
+            const locked = await client.query<LockedUserRow>(
+              `SELECT u.emp_id, u.role, c.emp_id IS NOT NULL AS has_credential
+                 FROM users u
+                 LEFT JOIN user_credentials c ON c.emp_id = u.emp_id
+                WHERE u.emp_id = $1 OR u.role = 'admin'
+                ORDER BY u.emp_id FOR UPDATE OF u`,
+              [empCode],
             );
-          } else {
-            // WHERE ... IS DISTINCT FROM: ไม่มีอะไรเปลี่ยน = ไม่แตะแถวเลย (updated_at ไม่ขยับ)
-            // role_version bump เฉพาะตอน role เปลี่ยนจริง (`role` ใน SET อ้างค่าเก่าเสมอ)
-            await client.query(
-              `UPDATE users SET name = $2, role = $3::user_role,
-                      role_version = role_version + CASE WHEN role <> $3::user_role THEN 1 ELSE 0 END,
-                      updated_at = now()
-                WHERE emp_id = $1
-                  AND (name IS DISTINCT FROM $2 OR role IS DISTINCT FROM $3::user_role)`,
-              [empCode, nameThai, effectiveRole],
-            );
-          }
+            const lockedRows: LockedUserRow[] = locked.rows;
+            const current = lockedRows.find((r) => r.emp_id === empCode);
+            const fromRole = current?.role ?? null;
+            // ⚠️ ตัดคนที่ credential พ้น grace แล้วและ sweep จะลบท้ายรอบนี้ออกจากการนับ —
+            //    "ยังเป็น admin อยู่ ณ วินาทีนี้" ไม่ได้แปลว่าจะยังล็อกอินได้ตอนรอบจบ
+            //    และตัด "admin ผี" (ไม่มี credential แล้ว) ออกด้วยเหตุผลเดียวกัน
+            const adminCountExcluding = lockedRows.filter(
+              (r) =>
+                r.role === 'admin' &&
+                r.has_credential &&
+                r.emp_id !== empCode &&
+                !doomedAdminEmpIds.has(r.emp_id),
+            ).length;
 
-          if (blockedByFloor) {
-            await client.query(AUDIT_SQL, [
-              'scheduler',
-              'users.erp_last_admin_floor_blocked',
-              JSON.stringify({ empId: empCode, attemptedRole: mappedRole }),
-            ]);
-          } else if (fromRole !== null && fromRole !== effectiveRole) {
-            if (ROLE_RANK[effectiveRole] < ROLE_RANK[fromRole]) {
-              // ลดสิทธิ์ → ตัด refresh token ทุกเครื่อง ไม่ให้ทำงานต่อด้วยสิทธิ์เก่า
-              await client.query(REVOKE_ALL_SQL, [empCode]);
+            // ── credential เดิม — ต้องอ่าน **ก่อน** ตัดสิน role ────────────────
+            // source='local' คือ break-glass: ห้าม ERP แตะทั้งแถว credential และ `users.role`
+            // (เดิมกันแค่แถว credential แล้วปล่อยให้ลูปลดสิทธิ์เขาได้ = ปิดทางกลับเข้าระบบ
+            //  ทางเดียวที่เหลือ และการลดสิทธิ์นั้น commit ไปแล้วคนละทรานแซกชัน กู้คืนไม่ได้)
+            const cred = await client.query<CredentialRow>(
+              `SELECT source, secret_hash FROM user_credentials WHERE emp_id = $1 FOR UPDATE`,
+              [empCode],
+            );
+            const existing: CredentialRow | undefined = cred.rows[0];
+
+            if (existing?.source === 'local') {
+              // ERP สั่งเป็น role อื่น = ต้องเห็นใน audit ว่าเราจงใจไม่ทำตาม (ไม่ใช่เงียบหาย)
+              if (fromRole !== null && mappedRole !== fromRole) {
+                await client.query(AUDIT_SQL, [
+                  'scheduler',
+                  'users.erp_local_role_ignored',
+                  JSON.stringify({ empId: empCode, attemptedRole: mappedRole, keptRole: fromRole }),
+                ]);
+              }
+              return;
             }
-            await client.query(AUDIT_SQL, [
-              'scheduler',
-              'users.erp_role_changed',
-              JSON.stringify({ empId: empCode, from: fromRole, to: effectiveRole }),
-            ]);
-          }
 
-          // ── credential upsert — source='local' ห้ามแตะเด็ดขาด ──────────────
-          const cred = await client.query<CredentialRow>(
-            `SELECT source, secret_hash FROM user_credentials WHERE emp_id = $1 FOR UPDATE`,
-            [empCode],
-          );
-          const existing: CredentialRow | undefined = cred.rows[0];
+            // ── ด่านเพดานการเลื่อนสิทธิ์: รอบนี้เลื่อนคนมากเกินเพดาน → คงสิทธิ์เดิมทุกคน ──
+            // fail-safe คือ "สิทธิ์เดิมซึ่งต่ำกว่า" เสมอ — คนที่ควรได้เลื่อนจริงจะช้าไปหนึ่งรอบ
+            // แต่ map ที่พิมพ์ผิดจะไม่แจก admin ทั้งคลังโดยไม่มีมนุษย์คนไหนกด
+            let effectiveRole = mappedRole;
+            let blockedByFloor = false;
+            if (fromRole !== null && elevation.blocked && elevation.empIds.has(empCode)) {
+              effectiveRole = fromRole;
+              rowOutcome.elevationRefused = true;
+            }
 
-          if (existing?.source === 'local') {
-            // no-op โดยตั้งใจ — break-glass เป็นทางกลับเข้าระบบ sync ห้ามเขียนทับ
-            return;
-          }
+            // ── ด่าน last-admin ต่อแถว: ห้ามลดสิทธิ์ admin คนสุดท้ายไม่ว่า ERP จะบอกว่าอะไร ──
+            if (fromRole === 'admin' && effectiveRole !== 'admin' && adminCountExcluding === 0) {
+              effectiveRole = 'admin';
+              blockedByFloor = true;
+            }
 
-          if (existing === undefined) {
-            await client.query(
-              `INSERT INTO user_credentials
-                 (login_name, emp_id, secret_hash, source, erp_user_level, erp_last_seen_at)
-               VALUES ($1, $2, $3, 'erp', $4, now())`,
-              [login, empCode, await this.auth.hashPin(row.password.expose()), row.userLevel],
-            );
-            await client.query(AUDIT_SQL, [
-              'scheduler',
-              'users.erp_created',
-              JSON.stringify({ empId: empCode, loginName: login, userLevel: row.userLevel }),
-            ]);
-            return;
-          }
+            // นับหลังผ่านด่านครบทุกด่านแล้ว = สิทธิ์ที่ "เขียนลงแถวจริง" ไม่ใช่สิ่งที่ ERP ขอมา
+            rowOutcome.elevated =
+              fromRole !== null && ROLE_RANK[effectiveRole] > ROLE_RANK[fromRole];
 
-          // argon2 hash มี salt → เทียบ hash ตรง ๆ ไม่ได้ `verify` คือวิธีเดียวที่บอกได้ว่า
-          // รหัสผ่านเปลี่ยนไหม และช่วยไม่ให้ revoke token ทุกเครื่องทุกชั่วโมงโดยไม่จำเป็น
-          if (await this.auth.verifyPin(existing.secret_hash, row.password.expose())) {
+            if (!current) {
+              // ⚠️ ไม่เขียน pin_hash เลย (คอลัมน์ผ่อนเป็น nullable แล้ว) — credential อยู่คนละตาราง
+              await client.query(
+                `INSERT INTO users (emp_id, name, role, shift, warehouse_code, must_change_pin)
+                 VALUES ($1, $2, $3::user_role, $4, $5, false)`,
+                [empCode, nameThai, effectiveRole, DEFAULT_SHIFT, this.warehouseCode],
+              );
+            } else {
+              // WHERE ... IS DISTINCT FROM: ไม่มีอะไรเปลี่ยน = ไม่แตะแถวเลย (updated_at ไม่ขยับ)
+              // role_version bump เฉพาะตอน role เปลี่ยนจริง (`role` ใน SET อ้างค่าเก่าเสมอ)
+              await client.query(
+                `UPDATE users SET name = $2, role = $3::user_role,
+                        role_version = role_version + CASE WHEN role <> $3::user_role THEN 1 ELSE 0 END,
+                        updated_at = now()
+                  WHERE emp_id = $1
+                    AND (name IS DISTINCT FROM $2 OR role IS DISTINCT FROM $3::user_role)`,
+                [empCode, nameThai, effectiveRole],
+              );
+            }
+
+            if (blockedByFloor) {
+              await client.query(AUDIT_SQL, [
+                'scheduler',
+                'users.erp_last_admin_floor_blocked',
+                JSON.stringify({ empId: empCode, attemptedRole: mappedRole }),
+              ]);
+            } else if (fromRole !== null && fromRole !== effectiveRole) {
+              if (ROLE_RANK[effectiveRole] < ROLE_RANK[fromRole]) {
+                // ลดสิทธิ์ → ตัด refresh token ทุกเครื่อง ไม่ให้ทำงานต่อด้วยสิทธิ์เก่า
+                await client.query(REVOKE_ALL_SQL, [empCode]);
+              }
+              await client.query(AUDIT_SQL, [
+                'scheduler',
+                'users.erp_role_changed',
+                JSON.stringify({ empId: empCode, from: fromRole, to: effectiveRole }),
+              ]);
+            }
+
+            // ── credential upsert — แถว source='local' ออกจากรอบไปตั้งแต่ต้นแล้ว ──────
+            if (existing === undefined) {
+              await client.query(
+                `INSERT INTO user_credentials
+                   (login_name, emp_id, secret_hash, source, erp_user_level, erp_last_seen_at)
+                 VALUES ($1, $2, $3, 'erp', $4, now())`,
+                [login, empCode, await this.auth.hashPin(row.password.expose()), row.userLevel],
+              );
+              await client.query(AUDIT_SQL, [
+                'scheduler',
+                'users.erp_created',
+                JSON.stringify({ empId: empCode, loginName: login, userLevel: row.userLevel }),
+              ]);
+              return;
+            }
+
+            // argon2 hash มี salt → เทียบ hash ตรง ๆ ไม่ได้ `verify` คือวิธีเดียวที่บอกได้ว่า
+            // รหัสผ่านเปลี่ยนไหม และช่วยไม่ให้ revoke token ทุกเครื่องทุกชั่วโมงโดยไม่จำเป็น
+            if (await this.auth.verifyPin(existing.secret_hash, row.password.expose())) {
+              await client.query(
+                `UPDATE user_credentials
+                    SET login_name = $1, erp_user_level = $2, erp_last_seen_at = now(),
+                        source = 'erp', updated_at = now()
+                  WHERE emp_id = $3`,
+                [login, row.userLevel, empCode],
+              );
+              return;
+            }
+
+            // รหัสผ่านเปลี่ยนที่ ERP (หรือแถวเดิมเป็น legacy_pin ที่กำลังถูกเปลี่ยนสัญชาติ)
             await client.query(
               `UPDATE user_credentials
-                  SET login_name = $1, erp_user_level = $2, erp_last_seen_at = now(),
-                      source = 'erp', updated_at = now()
-                WHERE emp_id = $3`,
-              [login, row.userLevel, empCode],
+                  SET login_name = $1, secret_hash = $2, secret_rotated_at = now(),
+                      erp_user_level = $3, erp_last_seen_at = now(), source = 'erp', updated_at = now()
+                WHERE emp_id = $4`,
+              [login, await this.auth.hashPin(row.password.expose()), row.userLevel, empCode],
             );
-            return;
-          }
-
-          // รหัสผ่านเปลี่ยนที่ ERP (หรือแถวเดิมเป็น legacy_pin ที่กำลังถูกเปลี่ยนสัญชาติ)
-          await client.query(
-            `UPDATE user_credentials
-                SET login_name = $1, secret_hash = $2, secret_rotated_at = now(),
-                    erp_user_level = $3, erp_last_seen_at = now(), source = 'erp', updated_at = now()
-              WHERE emp_id = $4`,
-            [login, await this.auth.hashPin(row.password.expose()), row.userLevel, empCode],
+            await client.query(REVOKE_ALL_SQL, [empCode]); // ตัดเซสชันเก่าทั้งหมด
+            await client.query(AUDIT_SQL, [
+              'scheduler',
+              'users.erp_secret_rotated',
+              JSON.stringify({ empId: empCode }),
+            ]);
+          });
+        } catch (err) {
+          // ── login_name ชนกับ emp_id อื่นที่ persist ไว้แล้ว ──────────────────
+          // `seenLoginNames` เห็นแค่ภายในรอบเดียว คนใหม่ที่ชื่อล็อกอินไปตรงกับแถวเก่า
+          // ของคนอื่นจึงชน PK ที่ INSERT ตรง ๆ ถ้าปล่อยให้หลุดออกไปถึง catch ของทั้งรอบ:
+          // แถวที่เหลือทั้งหมดถูกข้าม **และ sweep ไม่ได้ทำงานเลย** แล้วรอบถัด ๆ ไปก็ล้ม
+          // ซ้ำแบบเดิมตลอดไป (ข้อมูล ERP ไม่ซ่อมตัวเอง) = ทั้งการเปิดและการปิดบัญชีตายยาว
+          // 🚫 anomaly เก็บได้แค่ตัวระบุ — ห้ามมี password/hash (sync_runs อ่านได้ทีหลัง)
+          if (!isUniqueViolation(err)) throw err;
+          pushAnomaly(anomalies, { type: 'login_name_conflict', empCode, login });
+          metrics.rejected += 1;
+          this.logger.warn(
+            `ข้ามผู้ใช้ ${empCode}: login_name "${login}" เป็นของ emp_id อื่นอยู่แล้ว — แก้ที่ ERP`,
           );
-          await client.query(REVOKE_ALL_SQL, [empCode]); // ตัดเซสชันเก่าทั้งหมด
-          await client.query(AUDIT_SQL, [
-            'scheduler',
-            'users.erp_secret_rotated',
-            JSON.stringify({ empId: empCode }),
-          ]);
-        });
+          continue;
+        }
         upserted += 1;
         metrics.mapped += 1;
+        if (rowOutcome.elevated) metrics.elevated += 1;
+        if (rowOutcome.elevationRefused) metrics.elevationsRefused += 1;
       }
 
       // ── คนที่ level ไม่ได้ map แต่ยังถือ credential อยู่ = สัญญาณว่า map ตกค่าไหนไป ────
@@ -739,31 +885,42 @@ export class SyncService implements OnModuleInit {
         }
       }
 
+      // ── นาฬิกา grace ของคนที่ "กลับมาพบใน ERP แล้ว" ต้องถูกล้างทุกรอบ ──────────────
+      // เดิมคำสั่งนี้อยู่ข้างใน sweep ซึ่งไม่ได้ทำงานเลยเมื่อ ERP ส่งแถวมาน้อยผิดปกติ →
+      // นาฬิกาของคนที่ยังอยู่จริงเดินต่อทั้งที่เขาปรากฏในผลรอบนี้ พอรอบหน้าดึงมาครบ
+      // เขาก็ถูกลบทันทีทั้งที่ไม่เคยหายไปไหน (การล้าง = ให้ grace เต็มใหม่ ไม่ทำร้ายใครได้)
+      await this.clearAbsentMarks(presentEmpIds);
+
       // ── deactivation + legacy-pin retirement = sweep เดียวที่มีการ์ดครบสี่ชั้น ────
       let tombstoned = 0;
       if (rowCountOk) {
         const swept = await this.sweepAbsentCredentials(presentEmpIds, anomalies);
-        metrics.absent = swept.absent;
-        metrics.graceElapsed = swept.graceElapsed;
-        metrics.deactivated = swept.deactivated;
-        metrics.adminsDeactivated = swept.adminsDeactivated;
-        metrics.refused = swept.refused;
+        Object.assign(metrics, swept);
         tombstoned = swept.deactivated;
       } else {
-        // ดึงมาน้อยกว่าที่ควรเป็น = สงสัยว่า query/ERP ผิด → ห้ามแตะนาฬิกา grace และ
-        // ห้าม deactivate ใครทั้งสิ้น (นับไว้ให้เห็นว่าปฏิเสธไปกี่คน)
-        const absent = await this.db.one<{ n: number }>(
-          `SELECT count(*)::int AS n FROM user_credentials
+        // ดึงมาน้อยกว่าที่ควรเป็น = สงสัยว่า query/ERP ผิด → ห้ามเริ่มจับเวลา grace ให้ใคร
+        // และห้าม deactivate ใครทั้งสิ้น (นับไว้ให้เห็นว่าปฏิเสธไปกี่คน)
+        //
+        // ⚠️ ตัวนับต้องแปลเหมือนเส้นทาง sweep เป๊ะ ๆ: `absent` = ยังไม่พบใน ERP ·
+        //    `graceElapsed` = ในจำนวนนั้นพ้น grace แล้วกี่คน · `refused` = **พ้น grace แล้ว
+        //    แต่ไม่ได้ถูกลบ** ที่นี่คือทั้งหมดของ graceElapsed (การ์ดเพดานแถวขั้นต่ำปฏิเสธไว้)
+        //    คนที่นาฬิกายังไม่พ้น grace ไม่ใช่ "คนที่ถูกปฏิเสธ" — รอบปกติก็ยังไม่ลบเขาอยู่ดี
+        const absent = await this.db.one<{ n: number; grace_elapsed: number }>(
+          `SELECT count(*)::int AS n,
+                  count(*) FILTER (WHERE absent_since <= now() - $2::interval)::int AS grace_elapsed
+             FROM user_credentials
             WHERE source IN ('erp', 'legacy_pin') AND emp_id <> ALL($1::text[])`,
-          [[...presentEmpIds]],
+          [[...presentEmpIds], ABSENCE_GRACE_INTERVAL],
         );
         metrics.absent = absent?.n ?? 0;
-        metrics.refused = metrics.absent;
+        metrics.graceElapsed = absent?.grace_elapsed ?? 0;
+        metrics.refused = metrics.graceElapsed;
         pushAnomaly(anomalies, {
           type: 'row_count_below_floor',
           rowsRead: rows.length,
           minExpected: minExpected ?? null,
           absent: metrics.absent,
+          graceElapsed: metrics.graceElapsed,
         });
         this.logger.warn(
           `ERP ส่งผู้ใช้มา ${rows.length} แถว ไม่ถึง ERP_USER_MIN_EXPECTED_ROWS=` +
@@ -789,6 +946,10 @@ export class SyncService implements OnModuleInit {
       this.logger.error(`รอบผู้ใช้ล้มเหลว: ${error}`);
       // ตัวนับที่เดินมาได้ก่อนล้มยังต้องเห็นใน sync_runs — ไม่งั้นรอบที่ล้มกลางทาง
       // (เช่น last-admin floor ตัด sweep ทิ้ง) จะดูเหมือนรอบที่ไม่ได้ทำอะไรเลย
+      //
+      // ⚠️ ตัวนับของ sweep เดินทางมากับ error เอง: การ throw ข้ามบรรทัดที่ copy ผลลง
+      //    `metrics` ไปทั้งหมด → รอบที่ผู้ดูแลต้องอ่านมากที่สุดคือรอบเดียวที่เคยเป็น 0 ทั้งแถว
+      if (err instanceof AdminCredentialFloorError) Object.assign(metrics, err.counts);
       return this.finishRun(
         runId,
         {
@@ -822,24 +983,30 @@ export class SyncService implements OnModuleInit {
   private async sweepAbsentCredentials(
     presentEmpIds: ReadonlySet<string>,
     anomalies: unknown[],
-  ): Promise<{
-    absent: number;
-    graceElapsed: number;
-    deactivated: number;
-    adminsDeactivated: number;
-    refused: number;
-  }> {
+  ): Promise<SweepCounts> {
     const present = [...presentEmpIds];
     const grace = ABSENCE_GRACE_INTERVAL;
     const maxPct = this.cfg.get('ERP_USER_DEACTIVATE_MAX_PCT', { infer: true });
 
     return this.db.transaction(async (client) => {
-      // กลับมาพบใน ERP แล้ว → หยุดนาฬิกาทันที (คนที่กลับมาต้องได้ grace เต็มใหม่รอบหน้า)
+      // ── ล็อกแถว `users` ของ admin ทุกคน **ก่อนแตะ `user_credentials` แถวแรก** ───────
+      // ด่าน last-admin ของทั้ง sweep (ล่างสุด) เคยนับด้วย `SELECT count(*)` เปล่า ๆ →
+      // ระหว่าง "นับ" กับ "ลบ" ทรานแซกชันอื่น (MembersService.changeRole หรือรอบ sync
+      // อีกรอบ) ลดสิทธิ์ admin คนสุดท้ายลงได้ แล้ว sweep ก็ลบ credential ต่อโดยอ้างตัวเลข
+      // ที่ไม่จริงอีกแล้ว = ไม่เหลือใครล็อกอินเข้ามาซ่อม
+      //
+      // ⚠️ ต้องอยู่ **บนสุดของทรานแซกชัน** ไม่ใช่ตรงจุดที่ใช้ค่า: ลำดับล็อกของทั้งระบบคือ
+      //    `users` → `user_credentials` (เหมือนลูปต่อแถวใน `runUsers()` และ
+      //    `MembersService.changeRole` เป๊ะ) ส่วนคำสั่ง UPDATE absent_since ข้างล่างนี้
+      //    ล็อกแถว `user_credentials` ไปแล้ว — ย้ายบล็อกนี้ลงไปทีหลังเมื่อไรก็กลายเป็น
+      //    `user_credentials` → `users` ซึ่งวนเป็น deadlock กับสองเส้นทางนั้นได้ทันที
+      //    ภายในคำสั่งเดียวก็เรียง emp_id จากน้อยไปมากเหมือนกันทุกเส้นทาง
       await client.query(
-        `UPDATE user_credentials SET absent_since = NULL
-          WHERE absent_since IS NOT NULL AND emp_id = ANY($1::text[])`,
-        [present],
+        `SELECT emp_id FROM users WHERE role = 'admin' ORDER BY emp_id FOR UPDATE`,
       );
+
+      // ⚠️ การหยุดนาฬิกาของคนที่กลับมาพบใน ERP ย้ายออกไปอยู่ที่ `clearAbsentMarks()`
+      //    ของผู้เรียกแล้ว — มันต้องเกิดทุกรอบ ไม่ใช่เฉพาะรอบที่ sweep ได้ทำงาน
       // ไม่พบใน ERP → เริ่มจับเวลา **ครั้งแรกครั้งเดียว** (รอบถัด ๆ ไปห้ามรีเซ็ตให้นาฬิกาถอยหลัง)
       await client.query(
         `UPDATE user_credentials SET absent_since = now()
@@ -907,13 +1074,20 @@ export class SyncService implements OnModuleInit {
       // ด่าน 0 ตอนต้นรอบเช็คไว้ก่อนลูป แต่ลูปเองลด role ของคนได้ (รวมเจ้าของ credential
       // ที่เป็น source='local' ซึ่ง sync ไม่แตะแถว credential แต่แตะ users.role ได้)
       // จึงต้องนับใหม่ ณ ที่นี่ ไม่ใช่เชื่อผลตอนต้นรอบ
-      const admins = await client.query<{ n: number }>(
-        `SELECT count(*)::int AS n
+      //
+      // แถว `users` ของ admin ทุกคนถูกล็อกไว้ตั้งแต่ต้นทรานแซกชันแล้ว (ไม่มีใครขยับ role ได้
+      // ระหว่างนี้) เหลือแค่ต้องล็อกแถว `user_credentials` ของพวกเขาด้วย — ลำดับที่สองพอดี
+      // ⚠️ นับจากจำนวนแถวที่ได้มา ไม่ใช่ `count(*)`: Postgres ห้ามใช้ FOR UPDATE คู่กับ
+      //    aggregate ("FOR UPDATE is not allowed with aggregate functions")
+      const admins = await client.query<{ emp_id: string }>(
+        `SELECT c.emp_id
            FROM user_credentials c
            JOIN users u ON u.emp_id = c.emp_id
-          WHERE u.role = 'admin'`,
+          WHERE u.role = 'admin'
+          ORDER BY c.emp_id
+            FOR UPDATE OF c`,
       );
-      const adminCredentials = admins.rows[0]?.n ?? 0;
+      const adminCredentials = admins.rows.length;
       const doomedAdmins = doomedRows.filter((d) => d.role === 'admin').length;
       if (adminCredentials - doomedAdmins <= 0) {
         // anomaly ถูก push ไว้ในหน่วยความจำก่อนโยน — rollback ไม่ได้ลบมันทิ้ง
@@ -924,7 +1098,14 @@ export class SyncService implements OnModuleInit {
           doomedAdmins,
           doomed: doomedRows.length,
         });
-        throw new AdminCredentialFloorError(adminCredentials, doomedAdmins);
+        throw new AdminCredentialFloorError(adminCredentials, doomedAdmins, {
+          absent,
+          graceElapsed,
+          // ทั้งก้อน rollback → ไม่มีใครถูกลบจริง และทุกคนที่พ้น grace แล้วนับเป็น "ถูกปฏิเสธ"
+          deactivated: 0,
+          adminsDeactivated: 0,
+          refused: doomedRows.length,
+        });
       }
 
       // ── ผ่านเพดานแล้ว ≠ ไม่มีอะไรต้องบอก ────────────────────────────────
@@ -1005,6 +1186,91 @@ export class SyncService implements OnModuleInit {
       [[...presentEmpIds], ABSENCE_GRACE_INTERVAL],
     );
     return new Set(result.rows.map((r) => r.emp_id));
+  }
+
+  /**
+   * หยุดนาฬิกา grace ของทุกคนที่ปรากฏในผล ERP รอบนี้
+   *
+   * ต้องเรียก **ทุกรอบ** ไม่ว่ารอบนั้นจะผ่านเพดานแถวขั้นต่ำหรือไม่: คนที่กลับมาพบแล้ว
+   * ต้องได้ grace เต็มใหม่เสมอ ปล่อยให้นาฬิกาเดินต่อ = รอบหน้าที่ดึงมาครบจะลบเขาทันที
+   * ทั้งที่เขาอยู่ในผล ERP มาตลอด (นี่คือคนละเรื่องกับการ "เริ่ม" จับเวลา ซึ่งยังต้องกันไว้
+   * ให้รอบที่ข้อมูลน่าสงสัยทำไม่ได้)
+   */
+  private async clearAbsentMarks(presentEmpIds: ReadonlySet<string>): Promise<void> {
+    await this.db.query(
+      `UPDATE user_credentials SET absent_since = NULL
+        WHERE absent_since IS NOT NULL AND emp_id = ANY($1::text[])`,
+      [[...presentEmpIds]],
+    );
+  }
+
+  /**
+   * ใครบ้างที่รอบนี้จะได้ **เลื่อนสิทธิ์ขึ้น** และเลื่อนได้จริงไหม
+   *
+   * คู่ตรงข้ามของ `ERP_USER_DEACTIVATE_MAX_PCT` ซึ่งกันแต่การ "ถอน" สิทธิ์ทีละมาก ๆ —
+   * ส่วนการ "ให้" สิทธิ์เดิมไม่มีการ์ดเลยแม้แต่ชั้นเดียว ทั้งที่ `ERP_USER_LEVEL_ROLE_MAP`
+   * ที่พิมพ์ผิดค่าเดียว (`5=admin`) เลื่อนคนทั้งคลังเป็น admin ได้ในรอบเดียว และรอบนั้น
+   * จะรายงาน 'success' เงียบ ๆ ด้วยซ้ำ (ด่าน boot ตรวจแค่ว่า "มี level ไหน map เป็น admin")
+   *
+   * ⚠️ นับเฉพาะคนที่ **มีแถว `users` อยู่แล้ว** และ rank ใหม่สูงกว่าเดิมเท่านั้น →
+   *    รอบแรกของระบบ (ทุกคนเป็นคนใหม่ ไม่มีสิทธิ์เดิมให้เทียบ) ไม่มีใครเข้าเงื่อนไขนี้เลย
+   *    ซ้ำยังไม่มี credential ของ ERP สักแถวให้เป็นตัวหาร → ratio = 0 เหมือนเพดาน
+   *    deactivate ที่ปล่อยผ่านเมื่อ liveTotal = 0 รอบแรกจึงไม่มีทางถูกบล็อกด้วยด่านนี้
+   *    (คนใหม่ที่ ERP บอกว่าเป็น admin ยังต้องผ่าน allowlist ของ `ERP_USER_LEVEL_ROLE_MAP`
+   *     ซึ่งเป็นการ์ดของ "ใครได้บัญชีบ้าง" คนละชั้นกับการ์ดของ "ใครได้สิทธิ์เพิ่มบ้าง")
+   */
+  private async planElevations(
+    rows: readonly ErpUserRow[],
+    roleMap: ReadonlyMap<string, Role>,
+    anomalies: unknown[],
+  ): Promise<{ empIds: ReadonlySet<string>; blocked: boolean }> {
+    const intended = new Map<string, Role>();
+    for (const row of rows) {
+      const empCode = row.empCode.trim();
+      const mapped = roleMap.get(row.userLevel);
+      if (mapped !== undefined && EMP_CODE_RE.test(empCode)) intended.set(empCode, mapped);
+    }
+    const empIds = new Set<string>();
+    if (intended.size === 0) return { empIds, blocked: false };
+
+    // source='local' ไม่ถูกแตะ role อยู่แล้ว (break-glass) จึงไม่มีทางเป็นการเลื่อนสิทธิ์
+    const current = await this.db.query<{ emp_id: string; role: Role }>(
+      `SELECT u.emp_id, u.role
+         FROM users u
+         LEFT JOIN user_credentials c ON c.emp_id = u.emp_id
+        WHERE u.emp_id = ANY($1::text[])
+          AND (c.source IS NULL OR c.source <> 'local')`,
+      [[...intended.keys()]],
+    );
+    for (const row of current.rows) {
+      const next = intended.get(row.emp_id);
+      if (next !== undefined && ROLE_RANK[next] > ROLE_RANK[row.role]) empIds.add(row.emp_id);
+    }
+    if (empIds.size <= ELEVATE_ALWAYS_ALLOWED) return { empIds, blocked: false };
+
+    // ตัวหารเดียวกับเพดาน deactivate: credential ที่ ERP คุมอยู่จริงในตอนนี้
+    const live = await this.db.one<{ n: number }>(
+      `SELECT count(*)::int AS n FROM user_credentials WHERE source IN ('erp', 'legacy_pin')`,
+    );
+    const liveTotal = live?.n ?? 0;
+    const maxPct = this.cfg.get('ERP_USER_ELEVATE_MAX_PCT', { infer: true });
+    const ratio = liveTotal > 0 ? empIds.size / liveTotal : 0;
+    if (ratio <= maxPct / 100) return { empIds, blocked: false };
+
+    pushAnomaly(anomalies, {
+      type: 'elevate_guardrail_blocked',
+      elevations: empIds.size,
+      live: liveTotal,
+      ratio,
+      // 🚫 ตัวระบุอย่างเดียว และตัดให้สั้น — รอบที่เลื่อนทั้งคลังจะทำให้ jsonb บวมจนอ่านไม่ได้
+      empIds: [...empIds].sort().slice(0, MAX_ANOMALY_IDS),
+    });
+    this.logger.warn(
+      `ข้ามการเลื่อนสิทธิ์ผู้ใช้: จะเลื่อน ${empIds.size} จาก ${liveTotal} แถว ` +
+        `(${Math.round(ratio * 100)}% เกินเพดาน ${maxPct}%) — ตรวจ ERP_USER_LEVEL_ROLE_MAP ก่อน ` +
+        'ถ้าตั้งใจให้เลื่อนจริงทั้งชุดค่อยขยับ ERP_USER_ELEVATE_MAX_PCT',
+    );
+    return { empIds, blocked: true };
   }
 
   /**

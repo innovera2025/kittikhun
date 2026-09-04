@@ -600,7 +600,7 @@ COMMENT ON TABLE  sync_runs IS 'บันทึกทุกรอบดึงข
 COMMENT ON COLUMN sync_runs.stock_as_of IS 'เวลาที่ดึง ERP สำเร็จ — ป้าย "ข้อมูล ณ HH:MM" อ่านจากค่านี้ (ไม่ใช่ max ของ erp_updated_at ซึ่งจะโกหกเมื่อ ERP ไม่มีอะไรเปลี่ยน)';
 COMMENT ON COLUMN sync_runs.status IS 'partial = ดึงไม่ครบ → ห้ามขยับ cursor และห้าม tombstone';
 COMMENT ON COLUMN sync_runs.anomalies IS 'array ของความผิดปกติ: row-count drift, barcode ชนกัน, ItemCode ซ้ำ, decode ภาษาไทยพัง, คลังไม่ตรงที่คาด';
-COMMENT ON COLUMN sync_runs.metrics IS 'ตัวนับสรุปของรอบ (รอบผู้ใช้: mapped/unmapped/rejected/absent/graceElapsed/deactivated/adminsDeactivated/refused) — ตอบ "รอบนี้ทำอะไรไป" ได้จากแถวเดียว';
+COMMENT ON COLUMN sync_runs.metrics IS 'ตัวนับสรุปของรอบ (รอบผู้ใช้: mapped/unmapped/unmappedKeptCredential/rejected/absent/graceElapsed/deactivated/adminsDeactivated/refused/elevated/elevationsRefused) — ตอบ "รอบนี้ทำอะไรไป" ได้จากแถวเดียว';
 
 -- =============================================================================
 -- 4. Indexes (ตาม query จริงของ API surface)

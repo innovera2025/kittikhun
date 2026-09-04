@@ -300,6 +300,20 @@ const commonShape = {
     default: 10,
     hint: 'เพดาน % ของ credential (erp+legacy_pin) ที่ลบได้ต่อรอบ sync',
   }),
+  /**
+   * คู่ตรงข้ามของตัวข้างบน — ตัวนั้นกันการ **ถอน** สิทธิ์ทีละมาก ๆ ตัวนี้กันการ **ให้**
+   *
+   * ⚠️ พิมพ์ `ERP_USER_LEVEL_ROLE_MAP` ผิดค่าเดียว (เช่น `5=admin`) = คนทั้งคลังกลายเป็น
+   *    admin ในรอบเดียว โดยไม่มีมนุษย์คนไหนกด และรอบนั้นรายงาน 'success' ตามปกติ
+   *    (ด่าน boot ตรวจได้แค่ว่า "มี level ไหนสัก level map เป็น admin" ไม่ใช่ว่ากี่คน)
+   *    เกินเพดาน = คงสิทธิ์เดิมของทุกคนไว้ทั้งรอบ + anomaly + ตัวนับใน sync_runs
+   */
+  ERP_USER_ELEVATE_MAX_PCT: envInt({
+    min: 1,
+    max: 100,
+    default: 10,
+    hint: 'เพดาน % ของผู้ใช้เดิมที่ถูกเลื่อนสิทธิ์ขึ้นได้ต่อรอบ sync',
+  }),
   /** ไม่มี default โดยตั้งใจ — บังคับตั้งเมื่อ ERP_USER_SYNC_ENABLED=true (ดูกฎข้ามตัวแปร) */
   ERP_USER_MIN_EXPECTED_ROWS: envIntBase({
     min: 1,
