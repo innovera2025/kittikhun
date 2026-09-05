@@ -99,10 +99,12 @@ void main() {
       await tester.sendKeyUpEvent(LogicalKeyboardKey.enter);
       await tester.pump();
 
-      // อักขระตัวแรกพิสูจน์สายรัวไม่ได้ (ยังไม่มีตัวที่สองมาเทียบช่องไฟ) —
-      // ตั้งแต่ตัวที่สองเป็นต้นไปต้องถูกกลืนทุกตัว ไม่มีตัวไหนหลุด
-      expect(swallowed.first, isFalse);
-      expect(swallowed.skip(1), everyElement(isTrue));
+      // อักขระตัวแรก ๆ พิสูจน์สายรัวไม่ได้ (ช่องไฟช่องเดียวยังแยกจากนิ้วคนที่รีบ
+      // ไม่ออก — ต้องเห็นเร็วติดกันครบ `burstMinRun` ตัว) ตั้งแต่ตัวนั้นเป็นต้นไป
+      // ต้องถูกกลืนทุกตัว ไม่มีตัวไหนหลุด
+      const proof = HandheldScanBuffer.defaultBurstMinRun;
+      expect(swallowed.take(proof - 1), everyElement(isFalse));
+      expect(swallowed.skip(proof - 1), everyElement(isTrue));
 
       final s = container.read(appProvider);
       expect(s.pin, '', reason: 'กลืนแล้วต้องล้างทั้งช่อง ไม่ใช่กลืนเฉย ๆ');
@@ -222,5 +224,13 @@ void main() {
     expect(HandheldScanBuffer.defaultBurstGap, const Duration(milliseconds: 70));
     expect(machineGap, lessThan(HandheldScanBuffer.defaultBurstGap));
     expect(humanGap, greaterThan(HandheldScanBuffer.defaultBurstGap));
+    // ด่านที่สอง (ความยาวของสายที่เร็วติดกัน) ต้องเป็นค่าเดียวกันทั้งสองจอด้วย —
+    // ไม่งั้นช่องรหัสผ่านจะเชื่อเครื่องยิงเร็ว/ช้ากว่าจอสแกนโดยไม่มีใครรู้
+    expect(HandheldScanBuffer.defaultBurstMinRun, 4);
+    expect(
+      '8851234567890'.length,
+      greaterThan(HandheldScanBuffer.defaultBurstMinRun),
+      reason: 'บาร์โค้ดต้องยาวพอให้พิสูจน์สายรัวได้ ไม่งั้นด่านไม่มีวันติด',
+    );
   });
 }

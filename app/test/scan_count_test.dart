@@ -10,6 +10,7 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:tcl_stock/core/theme/tcl_tokens.dart';
 import 'package:tcl_stock/core/widgets/common.dart';
 import 'package:tcl_stock/data/models.dart';
+import 'package:tcl_stock/features/scan/handheld_scan_buffer.dart';
 import 'package:tcl_stock/features/scan/scan_screen.dart';
 import 'package:tcl_stock/features/shell/sync_status_bar.dart';
 import 'package:tcl_stock/local/local_db.dart';
@@ -296,9 +297,28 @@ void main() {
       expect(find.text('ดูอย่างเดียว · viewer'), findsOneWidget);
     });
 
-    testWidgets('โหมด handheld: onDetect ของกล้องต้องไม่ resolve แม้ callback ถูกยิงตรง',
+    testWidgets('โหมด handheld + มีรายการแล้ว → ไม่มี preview กล้องอยู่ในจอเลย',
         (tester) async {
-      final container = await pumpCard(tester, item: itemOf()); // camOn=false ตามค่าเริ่มต้น
+      // hero ของโหมดเครื่องยิงหดเป็นแถบแนวนอนเมื่อมีรายการ (design §2.3) —
+      // กรอบกล้องทั้งกรอบหายไปพร้อมกัน ไม่ใช่แค่ถูกซ่อน · โหมดนี้บังคับ camOn=false
+      // อยู่แล้ว จึงไม่มีสถานะกล้องที่ยังวิ่งอยู่ให้เสียไปตอน unmount
+      await pumpCard(tester, item: itemOf());
+
+      expect(find.byType(MobileScanner), findsNothing);
+      // ป้ายสถานะกับปุ่มค้นหาต้องยังเอื้อมถึงได้ (คำขอเจ้าของ)
+      expect(find.bySemanticsLabel('ค้นหา'), findsOneWidget);
+      expect(find.text('พบสินค้า · SKU-1'), findsOneWidget);
+    });
+
+    testWidgets('camOn=false: onDetect ของกล้องต้องไม่ resolve แม้ callback ถูกยิงตรง',
+        (tester) async {
+      final container = await pumpCard(tester, item: itemOf());
+      // ต้องอยู่โหมดกล้องถึงจะมี preview ให้ยิง callback ใส่ — และการเข้าโหมดนี้
+      // **ไม่เปิดกล้องเอง** (setScanMode → CamStatus.offInitial) camOn จึงยัง false
+      container.read(appProvider.notifier).setScanMode(ScanMode.camera);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(container.read(appProvider).camOn, isFalse);
       final before = container.read(appProvider).scans.length;
 
       final onDetect =
@@ -379,6 +399,17 @@ void main() {
       const human = Duration(milliseconds: 150); // นิ้วแตะคีย์บอร์ดจอ
       const gun = Duration(milliseconds: 10); // เครื่องยิง HID
 
+      /// อักขระตัวที่ [position] (นับจาก 1) ของการยิงหนึ่งชุด **ควรถูกกลืนหรือยัง**
+      ///
+      /// สายรัวพิสูจน์ตัวเองเมื่อเห็นอักขระเร็วระดับเครื่องติดกันครบ
+      /// `burstMinRun` ตัว — ตัวก่อนหน้านั้นยังแยกไม่ออกจากนิ้วคน จึงต้องรั่วลง
+      /// ช่องแล้วให้ตาข่าย snapshot/restore ถอนคืน (ดู `HandheldScanBuffer`)
+      ///
+      /// เขียนเป็นฟังก์ชันของ token ไม่ใช่ดัชนีตายตัว — ปรับ `burstMinRun` แล้ว
+      /// เทสต์ต้องขยับตามเอง ไม่ใช่เขียวค้างอยู่กับเกณฑ์เก่า
+      bool swallowedAt(int position) =>
+          position >= HandheldScanBuffer.defaultBurstMinRun;
+
       testWidgets('⭐ ลำดับคีย์ชุดเดียวกัน: นิ้วคนต้องไหลถึงช่อง · เครื่องยิงต้องถูกกลืน',
           (tester) async {
         await pumpCard(tester, item: itemOf());
@@ -397,14 +428,19 @@ void main() {
         }
 
         // (ข) จังหวะเครื่องยิง — ลำดับเดิม ต่างกันแค่ช่องไฟ ต้องได้ผลตรงข้าม
-        //     ตัวแรกพิสูจน์สายรัวไม่ได้จึงยังรั่ว (นั่นคือเหตุผลของ snapshot)
-        expect(await tap(tester, '1', const Duration(seconds: 2)), isFalse);
-        expect(
-          await tap(tester, '9', gun),
-          isTrue,
-          reason: 'false = ไม่กลืนอะไรเลย → อักขระที่เหลือของบาร์โค้ดรั่วลง '
-              'ช่องจำนวนทั้งสาย ซึ่งเป็นบั๊กเดิมที่กลับด้าน',
-        );
+        //     ตัวแรก ๆ พิสูจน์สายรัวไม่ได้จึงยังรั่ว (นั่นคือเหตุผลของ snapshot)
+        //     แล้วต้องพลิกเป็นกลืนทันทีที่หลักฐานครบ ไม่ใช่ปล่อยรั่วทั้งสาย
+        expect(await tap(tester, '8', const Duration(seconds: 2)), isFalse);
+        for (var i = 2; i <= HandheldScanBuffer.defaultBurstMinRun; i++) {
+          expect(
+            await tap(tester, '8', gun),
+            swallowedAt(i),
+            reason: 'อักขระตัวที่ $i ของสายรัว — ก่อนครบ '
+                '${HandheldScanBuffer.defaultBurstMinRun} ตัวยังพิสูจน์ไม่ได้ว่า'
+                'เครื่องเป็นคนพิมพ์ · false ตลอดสาย = อักขระบาร์โค้ดรั่วลงช่อง'
+                'จำนวนทั้งชุด ซึ่งเป็นบั๊กเดิมที่กลับด้าน',
+          );
+        }
       });
 
       testWidgets('⭐ ยิงบาร์โค้ดขณะช่องจำนวนโฟกัส → จอ/state/SQLite กลับเป็นค่าเดิม',
@@ -429,8 +465,9 @@ void main() {
           reason: 'ยอดเพี้ยนจริงแล้วตรงนี้ — ถ้าไม่เพี้ยน เทสต์ที่เหลือก็ไม่ได้วัดอะไร',
         );
 
+        var n = 1; // อักขระตัวที่ 1 คือ barcode[0] ที่รั่วไปแล้วข้างบน
         for (final ch in barcode.substring(1).split('')) {
-          expect(await tap(tester, ch, gun), isTrue);
+          expect(await tap(tester, ch, gun), swallowedAt(++n));
         }
         expect(await enter(tester, gun), isTrue);
         await tester.pump();
@@ -492,8 +529,9 @@ void main() {
           reason: 'ยอดเพี้ยนจริงแล้วตรงนี้ — ถ้าไม่เพี้ยน เทสต์ที่เหลือก็ไม่ได้วัดอะไร',
         );
 
+        var n = 1; // อักขระตัวที่ 1 คือ barcode[0] ที่รั่วไปแล้วข้างบน
         for (final ch in barcode.substring(1).split('')) {
-          expect(await tap(tester, ch, gun), isTrue);
+          expect(await tap(tester, ch, gun), swallowedAt(++n));
         }
         // ⚠️ ไม่มี Enter เด็ดขาด — นั่นคือทั้งหมดที่เทสต์นี้ต่างจากตัวข้างบน
         await tester.pump(afterBurstDies);
@@ -634,8 +672,9 @@ void main() {
         );
 
         // อักขระที่ตามมาติด ๆ = สายรัวพิสูจน์แล้ว (เงื่อนไขเดียวกับที่อนุญาตให้กู้)
+        var n = 1; // '8' ที่รั่วไปแล้วข้างบนคือตัวที่ 1 ของสายรัวนี้
         for (final ch in '851'.split('')) {
-          expect(await tap(tester, ch, gun), isTrue);
+          expect(await tap(tester, ch, gun), swallowedAt(++n));
         }
       }
 

@@ -220,12 +220,17 @@ void main() {
     test('⭐ ลำดับคีย์ชุดเดียวกัน จังหวะเครื่องยิง vs จังหวะนิ้วคน → ตัดสินตรงข้ามกัน',
         () {
       const code = '2025012'; // 7 ตัว + Enter = 8 เหตุการณ์
+      const proof = HandheldScanBuffer.defaultBurstMinRun;
 
       expect(
         _swallowsAt(code, gap: ms(10), start: t0),
-        [false, ...List.filled(code.length, true)],
-        reason: 'ห่าง 10ms = เครื่องจักร · ตัวแรกพิสูจน์สายรัวไม่ได้จึงรั่ว '
-            'ที่เหลือรวม Enter ต้องถูกกลืนทั้งหมด',
+        [
+          ...List.filled(proof - 1, false),
+          ...List.filled(code.length + 1 - (proof - 1), true),
+        ],
+        reason: 'ห่าง 10ms = เครื่องจักร · แต่ต้องเห็นครบ $proof ตัวติดกันถึงจะ'
+            'พิสูจน์ได้ (ช่องไฟช่องเดียวนิ้วคนที่รีบก็ทำได้) — ${proof - 1} ตัว'
+            'แรกจึงยังรั่วลงช่อง ที่เหลือรวม Enter ต้องถูกกลืนทั้งหมด',
       );
 
       expect(
@@ -246,37 +251,68 @@ void main() {
       // ทั้งชุด (กลืนคีย์ + armBurstDeath + closeCountSnapshot) เปิดโล่งเงียบ ๆ
       for (final gap in [ms(10), ms(30)]) {
         final buf = HandheldScanBuffer();
-        buf.feed(_char('1'), now: t0);
+        var t = t0;
+        var last = false;
+        for (var i = 0; i < HandheldScanBuffer.defaultBurstMinRun; i++) {
+          last = buf.feed(_char('1'), now: t).swallow;
+          t = t.add(gap);
+        }
         expect(
-          buf.feed(_char('2'), now: t0.add(gap)).swallow,
+          last,
           isTrue,
           reason: 'ห่าง ${gap.inMilliseconds}ms อยู่ในช่วงของเครื่องยิงจริง — '
-              'ตัดสินเป็นนิ้วคนเมื่อไหร่ บั๊กยอดเพี้ยนเดิมกลับมาทั้งดุ้น',
+              'ครบ ${HandheldScanBuffer.defaultBurstMinRun} ตัวแล้วยังไม่เชื่อ '
+              'แปลว่าตาข่ายกู้ยอดทั้งชุดเปิดโล่ง บั๊กยอดเพี้ยนเดิมกลับมาทั้งดุ้น',
         );
       }
 
       // ฝั่งคน: แตะคีย์บอร์ดจอติด ๆ กันเร็วที่สุดแบบต่อเนื่องยังเกิน 100ms
+      // (ยาวเป็นสิบตัวก็ต้องไม่ถูกกลืนสักตัว — ตัวนับสายห้ามสะสมข้ามจังหวะคน)
       final human = HandheldScanBuffer();
-      human.feed(_char('1'), now: t0);
+      var ht = t0;
+      for (var i = 0; i < 10; i++) {
+        expect(
+          human.feed(_char('9'), now: ht).swallow,
+          isFalse,
+          reason: 'ห่าง 100ms คือขอบล่างของนิ้วคน — กลืนเมื่อไหร่ ยอดที่พนักงาน'
+              'แตะหายเงียบ ๆ แล้วเส้นตายยังถอยยอดกลับให้อีกดอก',
+        );
+        ht = ht.add(ms(100));
+      }
+    });
+
+    test('เกณฑ์อยู่ที่ burstGap พอดี — เท่ากับ = นับเข้าสาย · เกินไป 1ms = ไม่นับ', () {
+      /// ป้อนอักขระห่างเท่า ๆ กันจนครบเกณฑ์ แล้วคืน swallow ของตัวสุดท้าย
+      bool lastSwallowAt(Duration gap) {
+        final buf = HandheldScanBuffer(burstGap: ms(60));
+        var t = t0;
+        var last = false;
+        for (var i = 0; i < HandheldScanBuffer.defaultBurstMinRun; i++) {
+          last = buf.feed(_char('1'), now: t).swallow;
+          t = t.add(gap);
+        }
+        return last;
+      }
+
+      expect(lastSwallowAt(ms(60)), isTrue);
       expect(
-        human.feed(_char('9'), now: t0.add(ms(100))).swallow,
+        lastSwallowAt(ms(61)),
         isFalse,
-        reason: 'ห่าง 100ms คือขอบล่างของนิ้วคน — กลืนเมื่อไหร่ ยอดที่พนักงาน'
-            'แตะหายเงียบ ๆ แล้วเส้นตายยังถอยยอดกลับให้อีกดอก',
+        reason: 'ช้ากว่าเกณฑ์ = ตัวนับสายเริ่มใหม่ทุกตัว ไม่มีวันสะสมครบ',
       );
     });
 
-    test('เกณฑ์อยู่ที่ burstGap พอดี — เท่ากับ = สายรัว · เกินไป 1ms = นิ้วคน', () {
-      final buf = HandheldScanBuffer(burstGap: ms(60));
-      buf.feed(_char('1'), now: t0);
-      expect(buf.feed(_char('2'), now: t0.add(ms(60))).swallow, isTrue);
+    /// ป้อนอักขระเร็วระดับเครื่องจนสายรัวพิสูจน์ตัวเองแล้ว · คืนเวลาของคีย์ตัวสุดท้าย
+    DateTime proveBurst(HandheldScanBuffer buf, {DateTime? from}) {
+      var t = from ?? t0;
+      for (var i = 0; i < HandheldScanBuffer.defaultBurstMinRun; i++) {
+        buf.feed(_char('2'), now: t);
+        if (i < HandheldScanBuffer.defaultBurstMinRun - 1) t = t.add(ms(10));
+      }
+      return t;
+    }
 
-      final slow = HandheldScanBuffer(burstGap: ms(60));
-      slow.feed(_char('1'), now: t0);
-      expect(slow.feed(_char('2'), now: t0.add(ms(61))).swallow, isFalse);
-    });
-
-    test('ตัวแรกสั่ง snapshot (กำลังจะรั่ว) · ตัวถัดไปในสายรัวไม่สั่งซ้ำ', () {
+    test('⭐ ตัวที่เปิดรหัสสั่ง snapshot ตัวเดียว · ตัวถัดไปในสายห้ามสั่งซ้ำ', () {
       final buf = HandheldScanBuffer();
       expect(
         buf.feed(_char('8'), now: t0),
@@ -284,34 +320,103 @@ void main() {
         reason: 'snapshot ต้องเกิด **ก่อน** ตัวนี้รั่วลงช่อง ไม่ใช่หลัง',
       );
       expect(buf.inBurst, isFalse, reason: 'ตัวเดียวยังพิสูจน์สายรัวไม่ได้');
+
+      // ตัวที่ 2..burstMinRun-1 ยังพิสูจน์ไม่ได้ → **ยังรั่วลงช่องเหมือนกัน**
+      // แต่ห้ามสั่ง snapshot ซ้ำ ไม่งั้นจะทับค่าดีด้วยค่าที่รั่วไปแล้ว
+      var t = t0;
+      for (var i = 2; i < HandheldScanBuffer.defaultBurstMinRun; i++) {
+        t = t.add(ms(10));
+        expect(
+          buf.feed(_char('8'), now: t),
+          (swallow: false, snapshotNow: false, code: null),
+          reason: 'อักขระตัวที่ $i — ยังไม่ครบหลักฐาน จึงยังกลืนไม่ได้ '
+              'แต่ snapshot ที่เก็บตอนตัวแรกต้องรอด',
+        );
+      }
+
+      // ตัวที่ครบเกณฑ์พอดี = จุดที่พลิกเป็นกลืน
       expect(
-        buf.feed(_char('8'), now: t0.add(ms(10))),
+        buf.feed(_char('8'), now: t.add(ms(10))),
         (swallow: true, snapshotNow: false, code: null),
-        reason: 'ถ้าสั่ง snapshot ตรงนี้ด้วย จะทับค่าดีด้วยค่าที่รั่วไปแล้ว',
       );
       expect(buf.inBurst, isTrue);
     });
 
-    test('สะดุดกลางรหัส (เกิน burstGap แต่ไม่ถึง idleReset) → สายรัวไม่ขาด', () {
+    test('⭐ อักขระเร็วแต่ยังไม่ครบเกณฑ์ → ไม่มีวันกลืน (นิ้วคนที่รีบต้องรอด)', () {
       final buf = HandheldScanBuffer();
-      buf.feed(_char('2'), now: t0);
-      buf.feed(_char('0'), now: t0.add(ms(10)));
+      var t = t0;
+      for (var i = 1; i < HandheldScanBuffer.defaultBurstMinRun; i++) {
+        expect(
+          buf.feed(_char('7'), now: t).swallow,
+          isFalse,
+          reason: 'ตัวที่ $i ยังไม่ครบหลักฐาน — กลืนตรงนี้คือเลขที่พนักงาน'
+              'แตะหายจากช่องจำนวนเงียบ ๆ (หน้างาน 5 ก.ย. 2569)',
+        );
+        t = t.add(ms(60));
+      }
+      expect(buf.inBurst, isFalse);
+    });
+
+    test('⭐ เกิน burstHold → เศษที่ค้างถูกทิ้ง ไม่ไปเกาะหน้ารหัสใบถัดไป', () {
+      // เคสหน้างาน: พนักงานคีย์ "19" ลงช่องจำนวน แล้วเหนี่ยวไกใบถัดไปทันที
+      final buf = HandheldScanBuffer();
+      buf.feed(_char('1'), now: t0);
+      buf.feed(_char('9'), now: t0.add(ms(150)));
+      expect(buf.pending, '19');
+
+      // เล็งฉลากแล้วยิง — ห่างจากคีย์ล่าสุด 400ms (เร็วมากสำหรับคน แต่ยาวกว่า
+      // ช่องไฟใด ๆ ภายในการยิงเดียวกันหลายเท่า)
       expect(
-        buf.feed(_char('2'), now: t0.add(ms(80))),
+        _shoot(buf, '8859900112233', start: t0.add(ms(550))),
+        '8859900112233',
+        reason: 'เดิมใช้ idleReset 800ms ตัดสิน "19" จึงยังค้างอยู่แล้วไปเกาะ'
+            'หน้าบาร์โค้ด → ค้นไม่เจอ ใบที่สองไม่ขึ้นการ์ดเลย',
+      );
+    });
+
+    test('⭐ เกิน burstHold → สายรัวที่พิสูจน์แล้วจบลง คีย์ของคนต่อจากนั้นต้องรอด', () {
+      // เครื่องที่ปิด suffix Enter: ไม่มีคีย์ไหนมาบอกว่ารหัสจบ — ตัวที่บอกคือเวลา
+      final buf = HandheldScanBuffer();
+      final last = proveBurst(buf);
+      expect(buf.inBurst, isTrue);
+
+      expect(
+        buf
+            .feed(
+              _char('7'),
+              now: last.add(HandheldScanBuffer.defaultBurstHold + ms(1)),
+            )
+            .swallow,
+        isFalse,
+        reason: 'เดิม _burst เหนียวยาวถึง idleReset 800ms — คนที่หันมาแตะเลข'
+            'ภายในหน้าต่างนั้นถูกตัดสินว่าเป็นเครื่องแล้วโดนกลืนทิ้ง',
+      );
+      expect(buf.inBurst, isFalse);
+    });
+
+    test('สะดุดกลางรหัส (เกิน burstGap แต่ไม่ถึง burstHold) → สายรัวไม่ขาด', () {
+      final buf = HandheldScanBuffer();
+      final last = proveBurst(buf);
+      expect(
+        buf.feed(_char('2'), now: last.add(ms(80))),
         (swallow: true, snapshotNow: false, code: null),
         reason: 'เฟรมตก/GC สะดุดบนเครื่องจริงไม่ควรทำให้อักขระที่เหลือรั่ว '
             'และไม่ควรไปทับ snapshot ที่เก็บไว้ตอนตัวแรก',
       );
+      expect(
+        buf.pending,
+        '22222',
+        reason: 'สะดุดแล้วรหัสต้องไม่ถูกหั่นเป็นสองท่อน',
+      );
     });
 
-    test('เว้นเกิน idleReset กลางรหัส → สายรัวตายพร้อมเศษ ตัวถัดไปเริ่มใหม่', () {
+    test('เว้นนานกลางรหัส → สายรัวตายพร้อมเศษ ตัวถัดไปเริ่มใหม่', () {
       final buf = HandheldScanBuffer(idleReset: ms(800));
-      buf.feed(_char('2'), now: t0);
-      buf.feed(_char('0'), now: t0.add(ms(10)));
+      final last = proveBurst(buf);
       expect(buf.inBurst, isTrue);
 
       expect(
-        buf.feed(_char('7'), now: t0.add(ms(900))),
+        buf.feed(_char('7'), now: last.add(ms(900))),
         (swallow: false, snapshotNow: true, code: null),
         reason: 'ล้างเศษแล้วต้องล้างสถานะสายรัวด้วย — ไม่งั้นเลขตัวถัดไปที่คน '
             'แตะจะถูกกลืนทั้งที่ไม่มีเครื่องยิงเกี่ยวข้องแล้ว',
@@ -336,25 +441,25 @@ void main() {
 
     test('อักขระควบคุมที่แทรกกลางสายรัว → ถูกกลืนเหมือนอักขระอื่น', () {
       final buf = HandheldScanBuffer();
-      buf.feed(_char('4'), now: t0);
+      final last = proveBurst(buf);
       expect(
-        buf.feed(_char(''), now: t0.add(ms(10))).swallow, // ETX suffix
+        buf.feed(_char(''), now: last.add(ms(10))).swallow, // ETX suffix
         isTrue,
       );
     });
 
     test('reset() ล้างสถานะสายรัว — สลับโหมดแล้วเลขที่คนแตะห้ามถูกกลืน', () {
       final buf = HandheldScanBuffer();
-      buf.feed(_char('1'), now: t0);
-      buf.feed(_char('2'), now: t0.add(ms(10)));
+      final last = proveBurst(buf);
       expect(buf.inBurst, isTrue);
 
       buf.reset();
       expect(buf.inBurst, isFalse);
       expect(
-        buf.feed(_char('9'), now: t0.add(ms(20))).swallow,
+        buf.feed(_char('9'), now: last.add(ms(10))).swallow,
         isFalse,
-        reason: 'สายรัวค้างข้ามการ reset = กลืนคีย์คนโดยไม่มีทางกู้',
+        reason: 'สายรัวค้างข้ามการ reset = กลืนคีย์คนโดยไม่มีทางกู้ '
+            '(ตัวนับสายต้องถูกล้างด้วย ไม่ใช่แค่ธง)',
       );
     });
   });

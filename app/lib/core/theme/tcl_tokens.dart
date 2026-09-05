@@ -396,6 +396,13 @@ class TclTokens extends ThemeExtension<TclTokens> {
   // ความสูง control
   static const double hSignIn = 56;
   static const double hTabButton = 56;
+
+  /// แถบเครื่องยิงแนวนอนในจอสแกน เมื่อมีรายการที่สแกนแล้ว (design §2.3)
+  ///
+  /// เท่ากับ [hTabButton] โดย**บังเอิญ**เพราะเจ้าของขอ "ความสูงเท่าเมนูบาร์ด้านล่าง"
+  /// — คนละความหมายกัน ห้ามยุบเป็นตัวเดียว: ปรับความสูงปุ่มแถบแท็บแล้ว hero ของ
+  /// จอสแกนต้องไม่ขยับตาม (และกลับกัน)
+  static const double hHandheldStrip = 56;
   static const double hSubmit = 54;
   static const double hTeamAction = 52;
   static const double hInput = 52;

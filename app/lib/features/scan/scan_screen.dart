@@ -12,6 +12,7 @@ import '../../data/fixtures.dart';
 import '../../data/models.dart';
 import '../../state/app_state.dart';
 import '../count/submit_drafts.dart';
+import 'bluebird_scan_channel.dart';
 import 'handheld_scan_buffer.dart';
 
 // ════════════════════════════════════════════════════════════════════
@@ -53,6 +54,12 @@ const double _fabIconSize = 20;
 /// hero กลางกรอบตอนโหมดเครื่องยิง (โหมดนี้ไม่มีเลเซอร์/กรอบมุมให้มองแทน)
 const double _heroIconSize = 28;
 const double _heroGap = 10;
+
+/// แถบเครื่องยิงแนวนอน (hero ที่หดแล้ว เมื่อมีรายการสแกน) — สูงตาม
+/// `TclTokens.hHandheldStrip` · ไอคอน 20 · padding/gap 12/10
+const double _stripPadX = 12;
+const double _stripGap = 10;
+const double _stripIconSize = 20;
 
 /// `@keyframes rise` — translateY(26px) → 0
 const double _riseFrom = 26;
@@ -136,7 +143,12 @@ const bool _swallowScannerKeys = true;
 DateTime Function() handheldNow = DateTime.now;
 
 /// แหล่งที่อ่านรหัสเข้ามา — ด่านดีดัพต้องรู้ว่า "ใคร" อ่าน ไม่ใช่แค่ "อ่านอะไร"
-enum _ScanSource { camera, handheld, manual }
+///
+/// [handheld] กับ [handheldIntent] คือ **เครื่องยิงตัวเดียวกัน** แต่คนละเส้นทาง
+/// ที่เฟิร์มแวร์เลือกส่งออกมา: keyboard wedge (กลายเป็นคีย์) กับ intent broadcast
+/// (ไม่กลายเป็นคีย์เลย) — เครื่องที่ตั้งค่าเปิดทั้งสองทางจะส่งฉลากใบเดียวมาสองรอบ
+/// แยกเป็นสองแหล่งเพื่อให้ด่านดีดัพจับคู่กันได้ ไม่ใช่นับเป็นของสองชิ้น
+enum _ScanSource { camera, handheld, handheldIntent, manual }
 
 class _ScanScreenState extends ConsumerState<ScanScreen>
     with WidgetsBindingObserver {
@@ -179,6 +191,16 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
   final FocusNode _handheldFocus = FocusNode(debugLabel: 'handheld-scan');
   final HandheldScanBuffer _handheld = HandheldScanBuffer();
 
+  /// เส้นทางที่ **สอง** ของเครื่องยิงตัวเดียวกัน — intent broadcast ของ BBAPI
+  ///
+  /// Bluebird S20 หน้างานถูกตั้งให้ส่งผลอ่านทางนี้ ไม่ใช่ทางคีย์บอร์ด เหนี่ยวไก
+  /// แล้วบี๊บ (เอนจินถอดรหัสได้) แต่ [_handheld] ไม่เคยเห็นคีย์สักตัว
+  ///
+  /// อยู่คู่กับเส้นทางคีย์บอร์ดเสมอ ไม่ได้มาแทน — เครื่องรุ่น/เครื่องที่ตั้งเป็น
+  /// keyboard wedge ยังต้องยิงได้เหมือนเดิม (ดู [BluebirdScanChannel])
+  final BluebirdScanChannel _bbScan = BluebirdScanChannel();
+  StreamSubscription<String>? _bbScanSub;
+
   /// ตัวคุม AppState ที่จับไว้ตั้งแต่จอเกิด — **ทางเดียว**ที่ [dispose] ซ่อม
   /// ยอดที่รั่วได้
   ///
@@ -194,10 +216,18 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
     super.initState();
     _app = ref.read(appProvider.notifier);
     WidgetsBinding.instance.addObserver(this);
+    // เส้นทาง intent ของเครื่องยิง — ต่อสายรับก่อน แล้วค่อยสั่งเปิดโมดูล
+    // (ไม่มีฝั่ง native ก็ไม่มีอะไรเกิดขึ้น ไม่โยน ไม่ toast — ดู [BluebirdScanChannel])
+    _bbScanSub = _bbScan.barcodes.listen(_onIntentScan);
+    _bbScan.start();
     // กลับเข้าแท็บสแกนแล้ว camOn ยังเป็น true → ต้องเปิดกล้องต่อเอง
     // (รอ post-frame ให้ MobileScanner attach controller ก่อน)
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
+      // อ่านสถานะคีย์บอร์ดครั้งแรก — จอนี้ถูกสร้างใหม่ทุกครั้งที่กลับเข้าแท็บ
+      // (ไม่มี IndexedStack) และกลับเข้ามาตอนคีย์บอร์ดยังค้างอยู่ได้
+      // `didChangeMetrics` จะไม่ยิงถ้าไม่มีอะไรเปลี่ยนหลังจากนี้
+      _syncKeyboardInset();
       if (ref.read(appProvider).camOn) unawaited(_setCamera(true));
     });
   }
@@ -217,6 +247,9 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
     _closeCountSnapshot(afterFrame: true); // ยกเลิก `_burstDeathTimer` ให้ด้วย
     //                   ในตัว — ห้ามมีนัดค้างยิงใส่ controller/ref ที่ตายไปแล้ว
     _handheldFocus.dispose();
+    _resultScroll.dispose();
+    unawaited(_bbScanSub?.cancel());
+    _bbScan.dispose(); // ถอนตัวรับ broadcast — แต่ไม่ปิดโมดูลบาร์โค้ด
     unawaited(_shutdown(_scanner));
     super.dispose();
   }
@@ -230,14 +263,46 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
     await scanner.dispose();
   }
 
+  /// คีย์บอร์ดจอกำลังบังพื้นที่อยู่หรือไม่ — **ต้องอ่านจาก `View` ไม่ใช่ MediaQuery**
+  ///
+  /// จอนี้อยู่ใน `body` ของ `Scaffold` ที่ `resizeToAvoidBottomInset` เป็นค่าปริยาย
+  /// (main.dart) ซึ่ง **หัก `viewInsets.bottom` ออกจาก MediaQuery ของ body ไปแล้ว**
+  /// แล้วไปหดตัว body แทน — `MediaQuery.viewInsetsOf(context).bottom` ที่นี่จึงเป็น
+  /// 0 เสมอบนเครื่องจริง เงื่อนไขไหนที่แขวนกับมันคือโค้ดที่ไม่มีวันทำงาน
+  /// (วัดแล้ว: 300.0 นอก Scaffold · 0.0 ใน body ของมัน)
+  bool _keyboardOpen = false;
+
+  /// อ่านค่าจริงจากหน้าต่าง — [WidgetsBindingObserver.didChangeMetrics] คือทางเดียว
+  /// ที่รู้ว่ามันเปลี่ยน เพราะ MediaQuery ของ body **ไม่เปลี่ยน** ตอนคีย์บอร์ดขึ้น
+  /// (ค่าที่ Scaffold หักออกไปแล้วเท่าเดิมทั้งสองสถานะ) `build` จึงไม่ถูกเรียกซ้ำเอง
+  ///
+  /// `viewInsets` ของ `View` เป็นพิกเซลจริงของอุปกรณ์ — เทียบกับ 0 เท่านั้น
+  /// ห้ามเอาไปคำนวณระยะโดยไม่หาร `devicePixelRatio`
+  void _syncKeyboardInset() {
+    if (!mounted) return;
+    final open = View.of(context).viewInsets.bottom > 0;
+    if (open != _keyboardOpen) setState(() => _keyboardOpen = open);
+  }
+
+  @override
+  void didChangeMetrics() {
+    super.didChangeMetrics();
+    _syncKeyboardInset();
+  }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.inactive) {
       unawaited(_setCamera(false));
+      // ⚠️ ต้องหยุดฟังตอนไปอยู่เบื้องหลังด้วย ไม่ใช่แค่ตอนถูกถอดจอ: broadcast
+      // ของ BBAPI กระจายถึงทุกแอปที่ลงทะเบียนไว้ ไม่ได้ดูว่าใครอยู่หน้าจอ
+      // ถ้าไม่ถอน ฉลากที่พนักงานยิงใส่ **แอปอื่น** จะไหลเข้าลิสต์นับของเราเงียบ ๆ
+      _bbScan.stop();
     } else if (state == AppLifecycleState.resumed) {
       if (ref.read(appProvider).camOn) unawaited(_setCamera(true));
+      _bbScan.start(); // สั่งเปิดโมดูลซ้ำด้วย — ระหว่างที่พักอาจมีคนปิดมันไป
     }
   }
 
@@ -397,6 +462,21 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
     }
   }
 
+  /// ฉลากหนึ่งใบจากเส้นทาง intent ของ BBAPI
+  ///
+  /// เข้า `_resolve` ตัวเดียวกับกล้องและคีย์บอร์ดโดยตั้งใจ — สั่นก่อน แล้วค้นจาก
+  /// replica ในเครื่อง ผลลัพธ์จึงเหมือนกันทุกเส้นทาง ไม่มีทางไหนพิเศษกว่าทางไหน
+  ///
+  /// **ไม่ต้องยุ่งกับ snapshot/สายรัว/ตาข่ายกู้ยอดใด ๆ ทั้งสิ้น** — ทั้งชุดนั้นมีไว้
+  /// กันอักขระที่ "รั่ว" ลงช่องจำนวนที่โฟกัสอยู่ แต่รหัสที่มาทางนี้ไม่เคยเป็นคีย์
+  /// จึงไม่มีอะไรรั่วให้ต้องกู้ (ดูหัวข้อเดียวกันที่ [HandheldScanBuffer])
+  ///
+  /// สตรีมเป็น async — จออาจถูกถอดไปแล้วระหว่างที่รหัสเดินทางมา
+  void _onIntentScan(String code) {
+    if (!mounted) return;
+    _resolve(code, source: _ScanSource.handheldIntent);
+  }
+
   Future<void> _openManualEntry() async {
     final code = await showDialog<String>(
       context: context,
@@ -427,12 +507,28 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
       _handheld.reset(); // บัฟเฟอร์ตายแล้ว ไม่มีรหัสไหนจะมาสั่งกู้อีก
     });
 
+    // ยิงใบใหม่ = ต้องเห็นการ์ดใบใหม่ · `scans` ถูกสร้างเป็นลิสต์ใหม่ทุกครั้งที่
+    // เพิ่ม/ลบ/เด้งขึ้นบน ตัวรับนี้จึงติดทุกกรณีที่หัวลิสต์ขยับได้จริง
+    ref.listen<List<ScanRecord>>(
+      appProvider.select((s) => s.scans),
+      (_, _) => _scrollResultsToTop(),
+    );
+
     // min-height 190 ชนะ flex-basis 186 เหมือน CSS → กรอบที่หดจริงสูง 190
-    // โหมดเครื่องยิงตรึง 190 เสมอ ไม่ขยายเต็มจอ — คืนพื้นที่ให้ลิสต์ผลสแกน
+    //
+    // โหมดเครื่องยิง: ยังไม่มีรายการ = hero เต็ม 190 (จอว่างอยู่แล้ว ไม่มีอะไรให้
+    // เสียพื้นที่ให้ และนั่นคือจังหวะเดียวที่คำสอนใช้งานมีประโยชน์) · มีรายการแล้ว =
+    // **หดเป็นแถบแนวนอนสูงเท่าปุ่มแถบเมนู** คืน 134px ให้ลิสต์ผลสแกน
+    // (คำขอเจ้าของ 5 ก.ย. 2569 — ดู docs/design-fidelity.md §2.3 + §6 แถว 10)
+    // ใช้ภาษาเดียวกับโหมดกล้องที่หดกรอบเมื่อมีรายการแรกอยู่แล้ว ไม่ได้คิดกติกาใหม่
     final camera = state.scanMode == ScanMode.handheld
         ? SizedBox(
-            height: TclTokens.cameraMinHeight,
-            child: _cameraFrame(state),
+            height: state.hasScans
+                ? TclTokens.hHandheldStrip
+                : TclTokens.cameraMinHeight,
+            child: state.hasScans
+                ? _handheldStrip(state)
+                : _cameraFrame(state),
           )
         : ConstrainedBox(
             constraints: const BoxConstraints(
@@ -449,6 +545,14 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
     // เทียบเท่า `!state.hasScans` เดิมทุกประการเมื่ออยู่โหมดกล้อง
     final expandCamera = state.scanMode == ScanMode.camera && !state.hasScans;
 
+    // 🔴 คีย์บอร์ดขึ้น = พื้นที่หายไปราว 300px แต่แถบโหมด/แถบเครื่องมือ/ปุ่มส่ง
+    //    ตรึงหมด สิ่งเดียวที่ยอมหดคือลิสต์ผลสแกน → การ์ดที่มีช่องกรอกจำนวนถูกบีบ
+    //    จนเกือบไม่เหลือที่ (เจอจริงหน้างาน 5 ก.ย. 2569: "พอเราจะใส่ตัวเลขนับ
+    //    มันไม่เห็นช่อง") พับ hero/กรอบกล้อง + แถบโหมดทิ้งชั่วคราวตอนพิมพ์
+    //    ⚠️ ใช้ Visibility(maintainState: true) ไม่ใช่ if — MobileScanner ต้องไม่ถูก
+    //       unmount ไม่งั้น controller ที่ยังถืออยู่จะหลุดสถานะ
+    final keyboardOpen = _keyboardOpen;
+
     // เครื่องยิงบาร์โค้ดส่งคีย์เข้ามาที่จอตรง ๆ (ไม่ผ่านช่องกรอก) จึงห่อทั้งจอไว้
     // `skipTraversal` กันไม่ให้โหนดนี้ไปแทรกลำดับ Tab ของช่องกรอกจำนวน
     // และคืน `ignored` ให้คีย์ที่ไม่ใช่ของเครื่องยิง เพื่อให้ไหลต่อไปหาช่องกรอกตามปกติ
@@ -459,8 +563,15 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
       onKeyEvent: _onHandheldKey,
       child: Column(
         children: [
-          if (expandCamera) Expanded(child: camera) else camera,
-          _modeBand(state),
+          if (expandCamera && !keyboardOpen)
+            Expanded(child: camera)
+          else
+            Visibility(
+              visible: !keyboardOpen,
+              maintainState: true,
+              child: camera,
+            ),
+          if (!keyboardOpen) _modeBand(state),
           _toolbar(state),
           Expanded(child: _resultList(state)),
           // ปุ่มส่งเอกสาร — ซ่อนตัวเองเมื่อยังไม่มีบรรทัดที่คีย์ (ลิสต์ได้ความสูงเต็ม)
@@ -519,13 +630,18 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
   /// นาฬิกากู้ช่องจำนวนเมื่อสายรัวตายไปเฉย ๆ — null = ไม่มีอะไรค้างรอกู้
   Timer? _burstDeathTimer;
 
+  /// เก็บค่าในช่องจำนวน ณ วินาทีที่ **รหัสใหม่กำลังจะเริ่ม**
+  ///
+  /// ⚠️ ต้อง [_dropCountSnapshot] ก่อนเสมอ ไม่ใช่เขียนทับเฉย ๆ — นาฬิกากู้ที่ตั้งไว้
+  /// เป็นของ snapshot **ใบเก่า** ปล่อยให้มันรอดมาเจอ snapshot ใบใหม่ = ตอนมันตื่น
+  /// มันจะถอยช่องกลับไปเป็นค่าที่เก็บตอนเปิดรหัสใหม่ ซึ่งอาจเก่ากว่าสิ่งที่พนักงาน
+  /// เพิ่งคีย์ไปแล้ว (เคสจริง: สายรัวตายกลางคัน พนักงานหันมาแก้เลขเอง แล้วเส้นตาย
+  /// ของสายที่ตายไปแล้วมาลบสิ่งที่เพิ่งแก้ทิ้ง)
   void _snapshotCountField() {
+    _dropCountSnapshot();
     final f = _focusedCount;
-    // ไม่มีช่องไหนโฟกัส = ไม่มีอะไรให้รั่วใส่ · ต้องล้างของเก่าทิ้งด้วย ไม่ใช่ปล่อยค้าง
-    if (f == null) {
-      _dropCountSnapshot();
-      return;
-    }
+    // ไม่มีช่องไหนโฟกัส = ไม่มีอะไรให้รั่วใส่
+    if (f == null) return;
     // ⚠️ `_app.countActor` ต้องอ่าน **ที่นี่** ไม่ใช่ตอนกู้ — ตอนกู้ในเส้นทาง
     // [dispose] อาจไม่มีใครล็อกอินอยู่แล้ว (sign-out รีเซ็ต state ก่อนถอดจอ)
     _countSnapshot = (
@@ -653,6 +769,11 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
   /// "ทีหลัง" มีสองจังหวะ ไม่ใช่จังหวะเดียว: Enter ปิดท้าย (มีก็ต่อเมื่อเครื่องตั้ง
   /// suffix ไว้) หรือสายรัวเงียบไปเฉย ๆ ([_armBurstDeath]) — ขาดอันหลังไป
   /// เครื่องที่ปิด suffix จะเหลืออักขระรั่วค้างถาวร
+  ///
+  /// ⚠️ บนเครื่องที่ตั้งเป็นเส้นทาง intent ([_onIntentScan]) ตรงนี้ไม่เคยเห็น
+  /// บาร์โค้ดเลยสักใบ เพราะรหัสไม่เคยกลายเป็นคีย์ — สายรัว/snapshot/ตาข่ายกู้ยอด
+  /// ทั้งชุดจึงไม่ถูกใช้งานบนเครื่องแบบนั้น แต่ยังต้องอยู่ครบสำหรับเครื่องที่ตั้ง
+  /// เป็น keyboard wedge (ดู [HandheldScanBuffer])
   KeyEventResult _onHandheldKey(FocusNode node, KeyEvent event) {
     // ปุ่มฮาร์ดแวร์ที่ผูกไว้มาก่อนบัฟเฟอร์เสมอ — ปุ่มที่ผูกได้ต้องไม่มี
     // `character` อยู่แล้ว (ด่านแรกของ `_refusalReason` ในจอผู้ดูแล) จึงไม่มีทาง
@@ -798,32 +919,7 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
                   constraints: BoxConstraints(
                     maxWidth: w * _statusPillMaxWidth,
                   ),
-                  child: GlassCard(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: _camPillPadX,
-                      vertical: _camPillPadY,
-                    ),
-                    radius: TclTokens.rPill,
-                    fill: TclTokens.camPillBg,
-                    border: TclTokens.b16,
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const _PulseDot(),
-                        const SizedBox(width: _camPillGap),
-                        Flexible(
-                          child: Text(
-                            state.camStatusText,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TclTokens.meta(
-                              TclTokens.tSoftAlt,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
+                  child: _statusPill(state),
                 ),
               ),
 
@@ -858,6 +954,82 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
             ],
           );
         },
+      ),
+    ),
+  );
+
+  /// ป้ายสถานะ (จุด pulse + ข้อความ) — **นิยามเดียวสองที่ใช้**: มุมบนซ้ายของกรอบ
+  /// กล้อง และในแถบเครื่องยิงแนวนอน · ผู้เรียกเป็นคนกำหนดความกว้างสูงสุดเอง
+  Widget _statusPill(AppState state) => GlassCard(
+    padding: const EdgeInsets.symmetric(
+      horizontal: _camPillPadX,
+      vertical: _camPillPadY,
+    ),
+    radius: TclTokens.rPill,
+    fill: TclTokens.camPillBg,
+    border: TclTokens.b16,
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const _PulseDot(),
+        const SizedBox(width: _camPillGap),
+        Flexible(
+          child: Text(
+            state.camStatusText,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TclTokens.meta(TclTokens.tSoftAlt),
+          ),
+        ),
+      ],
+    ),
+  );
+
+  // ── A2. แถบเครื่องยิงแนวนอน (โหมดเครื่องยิง เมื่อมีรายการแล้ว) ────────────
+
+  /// hero ของโหมดเครื่องยิงที่หดเหลือความสูงเท่าปุ่มแถบเมนูล่าง
+  ///
+  /// เหตุผล (หน้างาน 5 ก.ย. 2569): กรอบ 190px คือ 2.6 เท่าของลิสต์ผลสแกนที่ใช้ได้
+  /// จริงตอนคีย์บอร์ดขึ้น — ช่องกรอกจำนวนถูกดันตกขอบล่างของลิสต์ไป 186px
+  /// เจ้าของสั่งตรง ๆ ว่า "ปรับให้เล็กลงให้แนวนอน ความสูงเท่าเมนูบาร์ด้านล่างก็ได้"
+  ///
+  /// สองอย่างที่ **ต้องเอื้อมถึงได้เสมอ** ยังอยู่ครบ: ป้ายสถานะ ("พบสินค้า ·
+  /// 2010201" — บรรทัดเดียวที่ยืนยันว่าเครื่องอ่านฉลากได้จริง) และ FAB ค้นหา
+  /// สิ่งที่ตกไปคือคำสอนใช้งาน ซึ่งยังอยู่เต็มรูปในสถานะจอว่าง — คนที่มีรายการใน
+  /// ลิสต์แล้วคือคนที่ยิงเป็นแล้ว
+  ///
+  /// ไม่มีปุ่มกล้อง/เลเซอร์/กรอบมุมให้เสียไป — โหมดนี้ไม่เคยมีอยู่แล้ว
+  Widget _handheldStrip(AppState state) => Padding(
+    padding: const EdgeInsets.symmetric(horizontal: TclTokens.gutterTab),
+    child: Container(
+      padding: const EdgeInsets.symmetric(horizontal: _stripPadX),
+      decoration: BoxDecoration(
+        color: TclTokens.cameraViewportBg,
+        border: Border.all(color: TclTokens.b13),
+        borderRadius: BorderRadius.circular(TclTokens.rCard),
+      ),
+      child: Row(
+        children: [
+          const StrokeIcon(
+            painter: _HandheldIconPainter(color: TclTokens.accentBright),
+            size: _stripIconSize,
+            color: TclTokens.accentBright,
+          ),
+          const SizedBox(width: _stripGap),
+          // ป้ายชิดซ้าย ย่อเองเมื่อข้อความยาว — ไม่ยืดเต็มแถวจนดูเป็นแถบทึบ
+          Expanded(
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: _statusPill(state),
+            ),
+          ),
+          const SizedBox(width: _stripGap),
+          _CamFab(
+            semanticLabel: 'ค้นหา',
+            painter: const _SearchIconPainter(),
+            onTap: () => ref.read(appProvider.notifier).goTab(AppTab.search),
+          ),
+        ],
       ),
     ),
   );
@@ -1000,6 +1172,29 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
 
   // ── D. รายการผลสแกน ──────────────────────────────────────────────
 
+  /// ลิสต์ผลสแกน — จอเดียวที่เลื่อนได้ จึงถือ controller ไว้ตัวเดียวใช้ทั้งสองแขนง
+  final ScrollController _resultScroll = ScrollController();
+
+  /// เลื่อนลิสต์กลับหัวสุดหลังเฟรมที่ยิงใบใหม่เข้ามา
+  ///
+  /// ⚠️ ต้องเป็น **post-frame** ไม่ใช่ตอนนี้: `addScan` แทรกการ์ดใหม่ที่หัวลิสต์
+  /// แล้ว `RenderSliverList` จะใส่ scroll correction ให้การ์ดเดิมอยู่นิ่งบนจอ
+  /// (พฤติกรรมที่ถูกของ sliver — ของที่มองอยู่ต้องไม่กระโดด) ผลคือ offset โตขึ้น
+  /// เท่าความสูงการ์ดใหม่ **การ์ดใหม่จึงไปโผล่เหนือขอบบนของกรอบที่มองเห็น**
+  /// พนักงานยิงแล้วจอไม่เปลี่ยนอะไรเลย จึงกรอกได้แต่ใบที่ค้างอยู่บนจอใบเดียว
+  /// (หน้างาน 5 ก.ย. 2569 — "Scan หลายตัวไม่สามารถกรอกรายการตั้งแต่รายการที่สองได้")
+  /// การแก้ค่า offset ก่อนเฟรมจึงไม่มีผล ต้องรอให้ correction ลงตัวก่อนแล้วค่อยเลื่อน
+  ///
+  /// `jumpTo` ไม่ใช่ `animateTo` — ตอนนี้พนักงานกำลังจ้องฉลากใบถัดไปไม่ได้จ้องจอ
+  /// อนิเมชันที่วิ่งอยู่ตอนเขาเงยหน้าขึ้นมาคือของที่อ่านยากกว่าตำแหน่งที่นิ่งแล้ว
+  void _scrollResultsToTop() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_resultScroll.hasClients) return;
+      final pos = _resultScroll.position;
+      if (pos.pixels > pos.minScrollExtent) pos.jumpTo(pos.minScrollExtent);
+    });
+  }
+
   Widget _resultList(AppState state) {
     const padding = EdgeInsets.fromLTRB(
       TclTokens.gutterTab,
@@ -1008,10 +1203,15 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
       TclTokens.gutterTab,
     );
     if (!state.hasScans) {
-      return ListView(padding: padding, children: const [_ScanEmptyState()]);
+      return ListView(
+        controller: _resultScroll,
+        padding: padding,
+        children: const [_ScanEmptyState()],
+      );
     }
     final scans = state.scans;
     return ListView.separated(
+      controller: _resultScroll,
       padding: padding,
       itemCount: scans.length,
       // ให้ sliver ย้าย element ตาม key เวลาสแกนซ้ำแล้วรายการเด้งขึ้นบน
