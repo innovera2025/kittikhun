@@ -244,8 +244,37 @@ enum CamStatus {
   offToggled('กล้องปิดอยู่ · camera off'),
   scanning('กำลังค้นหาบาร์โค้ด · scanning'),
   permissionDenied('เปิดกล้องไม่ได้ · ใช้การค้นหาหรือกรอกรหัส'),
-  detectorUnavailable('เครื่องนี้อ่านบาร์โค้ดไม่ได้ · ใช้การค้นหาหรือกรอกรหัส');
+  detectorUnavailable('เครื่องนี้อ่านบาร์โค้ดไม่ได้ · ใช้การค้นหาหรือกรอกรหัส'),
+
+  /// ⚠️ ค่านี้ไม่เคยถูกเขียนผ่าน `setCamStatus()` เลย — เป็นค่าที่ getter
+  /// `camStatusText` คืนตรง ๆ เมื่อ `scanMode == ScanMode.handheld` และกล้อง
+  /// **ไม่ได้ขัดข้อง** ทำให้ 'กล้องปิดอยู่ · แตะไอคอนกล้อง' เป็นสตริงที่ไปไม่ถึง
+  /// ในโหมดเครื่องยิงโดยโครงสร้าง ไม่ใช่แค่ตั้งใจไม่เขียนมัน
+  handheldReady('พร้อมยิงบาร์โค้ด · handheld');
 
   const CamStatus(this.text);
   final String text;
+
+  /// กล้องขัดข้องจริง ๆ (ไม่ใช่แค่ปิดอยู่) — ป้ายสถานะต้องบอกทั้งสองโหมด
+  ///
+  /// โหมดเครื่องยิงกลบ `camStatus` ทิ้งด้วย [handheldReady] เป็นปกติ เพราะกล้อง
+  /// ที่ปิดอยู่ไม่ใช่เรื่องที่ต้องรายงาน — แต่กล้องที่ **สั่งปิดไม่ลง** ยังยึด
+  /// เซ็นเซอร์อยู่ และเครื่องยิงก็พลอยอ่านไม่ได้ (Bluebird คืน
+  /// BBAPI_ERROR_BARCODE_CAMERA_USED = -9) กลบไว้ = ผู้ใช้ไม่มีทางรู้ว่าทำไม
+  /// เหนี่ยวไกแล้วไม่มีอะไรเกิดขึ้น
+  bool get isFailure =>
+      this == CamStatus.permissionDenied ||
+      this == CamStatus.detectorUnavailable;
+}
+
+/// โหมดสแกน — เครื่องยิงบาร์โค้ด (handheld) หรือกล้อง (camera)
+///
+/// ค่าเริ่มต้นคือ handheld (R2 — ไม่ต้องอ่านดิสก์) เก็บระดับเครื่องผ่าน KvMeta (R3)
+/// เพราะเครื่องคลังใช้ร่วมกันหลายกะ (ดู api_client.dart:71)
+enum ScanMode {
+  handheld('เครื่องยิง'),
+  camera('กล้อง');
+
+  const ScanMode(this.label);
+  final String label;
 }

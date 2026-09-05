@@ -1,3 +1,4 @@
+import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -5,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:tcl_stock/core/theme/tcl_tokens.dart';
 import 'package:tcl_stock/core/widgets/common.dart';
 import 'package:tcl_stock/data/models.dart';
+import 'package:tcl_stock/local/local_db.dart';
 import 'package:tcl_stock/main.dart';
 import 'package:tcl_stock/state/app_state.dart';
 
@@ -76,10 +78,21 @@ void main() {
   });
 
   group('AppController — พฤติกรรม login ตาม design', () {
+    late LocalDb db;
     late ProviderContainer container;
 
-    setUp(() => container = ProviderContainer());
-    tearDown(() => container.dispose());
+    // sign-in อ่านโหมดสแกนจาก KvMeta ทั้งโหมด fixture และโหมดต่อ backend
+    // (ดู `_loadScanPrefs`) — เทสต์จึงต้องมี DB ในหน่วยความจำให้อ่าน
+    setUp(() {
+      db = LocalDb(NativeDatabase.memory());
+      container = ProviderContainer(
+        overrides: [localDbProvider.overrideWithValue(db)],
+      );
+    });
+    tearDown(() async {
+      container.dispose();
+      await db.close();
+    });
 
     test('รหัสพนักงานไม่มีในระบบ → ข้อความตรงตาม design', () async {
       final c = container.read(appProvider.notifier);
@@ -152,10 +165,19 @@ void main() {
   });
 
   group('AppController — สิทธิ์', () {
+    late LocalDb db;
     late ProviderContainer container;
 
-    setUp(() => container = ProviderContainer());
-    tearDown(() => container.dispose());
+    setUp(() {
+      db = LocalDb(NativeDatabase.memory());
+      container = ProviderContainer(
+        overrides: [localDbProvider.overrideWithValue(db)],
+      );
+    });
+    tearDown(() async {
+      container.dispose();
+      await db.close();
+    });
 
     Future<void> signInAs(String empId) async {
       final c = container.read(appProvider.notifier);

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
@@ -7,6 +8,7 @@ import '../../core/widgets/common.dart';
 import '../../data/api_client.dart';
 import '../../data/stock_repository.dart';
 import '../../state/app_state.dart';
+import '../scan/handheld_scan_buffer.dart';
 
 // ════════════════════════════════════════════════════════════════════════
 // จอผู้ดูแลรอบนับ (design extension)
@@ -67,7 +69,8 @@ final adminVarianceProvider = FutureProvider<List<VarianceRow>>((ref) async {
 enum AdminView {
   session('รอบนับ'),
   conflicts('ขัดแย้ง'),
-  variance('ส่วนต่าง');
+  variance('ส่วนต่าง'),
+  deviceKeys('ปุ่มเครื่อง');
 
   const AdminView(this.label);
   final String label;
@@ -130,6 +133,7 @@ class AdminScreen extends ConsumerWidget {
             AdminView.session => const _SessionPane(),
             AdminView.conflicts => const _ConflictsPane(),
             AdminView.variance => const _VariancePane(),
+            AdminView.deviceKeys => const _DeviceKeysPane(),
           },
         ),
       ],
@@ -841,6 +845,343 @@ class _Cell extends StatelessWidget {
 }
 
 // ════════════════════════════════════════════════════════════════════════
+// 4. ปุ่มเครื่อง — จับคีย์สดแล้วผูกกับการสลับโหมดสแกน
+//
+// ⚠️ keycode ของปุ่มบน Bluebird S20 ไม่มีใครเผยแพร่ และบางปุ่มถูก BOS กลืน
+//    ก่อนถึงแอป การเดา keycode จึงผิดทั้งสองทาง — pane นี้ให้ช่าง "กดปุ่มจริง
+//    แล้วดูว่าอะไรมาถึง Dart" แทน ผูกแล้วเก็บลง KvMeta ทันที ไม่ต้อง rebuild
+// ════════════════════════════════════════════════════════════════════════
+
+class _DeviceKeysPane extends ConsumerStatefulWidget {
+  const _DeviceKeysPane();
+
+  @override
+  ConsumerState<_DeviceKeysPane> createState() => _DeviceKeysPaneState();
+}
+
+/// คีย์หนึ่งครั้งที่จับได้ พร้อมบริบทที่ใช้ตัดสินว่าผูกได้ไหม
+class _CapturedKey {
+  const _CapturedKey({
+    required this.event,
+    required this.at,
+    required this.burst,
+  });
+
+  final KeyDownEvent event;
+  final DateTime at;
+
+  /// มาห่างจากคีย์ก่อนหน้าไม่เกิน [_DeviceKeysPaneState._burstGap] —
+  /// ลายเซ็นของปุ่มยิงบาร์โค้ดที่ส่งอักขระทั้งชุดแล้วปิดท้ายด้วย Enter
+  final bool burst;
+}
+
+class _DeviceKeysPaneState extends ConsumerState<_DeviceKeysPane> {
+  /// เก็บพอให้เห็น burst ของปุ่มยิงทั้งชุด (อักขระ + Enter) ในหน้าจอเดียว
+  static const int _maxLog = 8;
+
+  static const Duration _burstGap = Duration(milliseconds: 200);
+
+  /// ปุ่มระบบที่ **ห้ามผูกเด็ดขาด ไม่มีปุ่ม override** — Quick Guide ของ S20
+  /// ยืนยันว่าปุ่มข้างขวาเป็นปุ่มปรับเสียงพอดี ถ้าปล่อยให้ผูกทับ ช่างที่ทำตาม
+  /// คำสั่ง "ผูกปุ่มข้าง" ตรงตัวจะทำให้ปุ่มปรับเสียง/ปิดเครื่องใช้ไม่ได้เงียบ ๆ
+  ///
+  /// `final` ไม่ใช่ `const` เพราะ `LogicalKeyboardKey` override `==` — Dart
+  /// ห้ามใส่ใน const set (const_set_element_not_primitive_equality)
+  static final Set<LogicalKeyboardKey> _systemDenylist = {
+    LogicalKeyboardKey.audioVolumeUp,
+    LogicalKeyboardKey.audioVolumeDown,
+    LogicalKeyboardKey.audioVolumeMute,
+    LogicalKeyboardKey.power,
+    LogicalKeyboardKey.sleep,
+    LogicalKeyboardKey.wakeUp,
+    LogicalKeyboardKey.appSwitch,
+    LogicalKeyboardKey.home,
+    LogicalKeyboardKey.call,
+    LogicalKeyboardKey.endCall,
+  };
+
+  final List<_CapturedKey> _log = [];
+
+  /// เวลาของคีย์ก่อนหน้า — ใช้ตัดสิน burst เท่านั้น ไม่เกี่ยวกับบัฟเฟอร์สแกน
+  DateTime? _lastAt;
+
+  KeyEventResult _onProbeKey(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    final now = DateTime.now();
+    final isBurst = _lastAt != null && now.difference(_lastAt!) <= _burstGap;
+    _lastAt = now;
+    setState(() {
+      _log.insert(0, _CapturedKey(event: event, at: now, burst: isBurst));
+      if (_log.length > _maxLog) _log.removeLast();
+    });
+    return KeyEventResult.handled; // กันไม่ให้หลุดไปทำอย่างอื่นระหว่างตรวจปุ่ม
+  }
+
+  /// เหตุผลที่ผูกปุ่มนี้ไม่ได้ — null = ผูกได้
+  ///
+  /// ทุกด่านเป็นการปฏิเสธถาวรโดยตั้งใจ ไม่มีทางยืนยันทับ: ผู้ติดตั้งมองไม่เห็น
+  /// ผลเสียตอนกด (ปุ่มที่ผูกทับจะใช้งานไม่ได้เงียบ ๆ) การถามซ้ำจึงไม่ช่วยอะไร
+  String? _refusalReason(_CapturedKey k) {
+    final ch = k.event.character;
+    if (ch != null) {
+      return 'ปุ่มนี้พิมพ์อักขระได้ (พิมพ์ "$ch") ใช้สลับโหมดไม่ได้';
+    }
+    final key = k.event.logicalKey;
+    if (key == LogicalKeyboardKey.enter ||
+        key == LogicalKeyboardKey.numpadEnter) {
+      return 'ปุ่มนี้คือ Enter — ถ้าผูกไว้อาจตัดรหัสบาร์โค้ดที่กำลังยิงให้จบ'
+          'ก่อนเวลา';
+    }
+    if (_systemDenylist.contains(key)) {
+      return 'ปุ่มนี้เป็นปุ่มระบบของเครื่อง (ปรับเสียง/เปิดปิดเครื่อง ฯลฯ) '
+          'ใช้สลับโหมดไม่ได้';
+    }
+    if (k.burst) {
+      return 'ปุ่มนี้มาเป็นชุดติดกันเร็ว ๆ — น่าจะเป็นปุ่มยิงบาร์โค้ด '
+          '(สังเกตอักขระ+Enter ทั้งชุด) ใช้สลับโหมดไม่ได้';
+    }
+    return null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bound = ref.watch(appProvider).scanModeHotkey;
+
+    return Focus(
+      autofocus: true,
+      onKeyEvent: _onProbeKey,
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(
+          TclTokens.gutterTab,
+          0,
+          TclTokens.gutterTab,
+          TclTokens.gutterTab,
+        ),
+        children: [
+          GlassCard(
+            radius: TclTokens.rCard,
+            fill: TclTokens.s075,
+            border: TclTokens.b11,
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text('ผูกปุ่มบนเครื่องกับการสลับโหมดสแกน',
+                    style: TclTokens.itemName()),
+                const SizedBox(height: 6),
+                Text(
+                  'กดปุ่มบนเครื่องแล้วดูว่าปรากฏในลิสต์ไหม ถ้าไม่ปรากฏเลย '
+                  'แปลว่าระบบปฏิบัติการ/ตัวควบคุมเครื่องยิงกลืนปุ่มนั้นไป'
+                  'ก่อนถึงแอป ลองปุ่มอื่น — แนะนำเริ่มจากปุ่ม Programmable '
+                  'ด้านบนเครื่องก่อนปุ่มข้าง เพราะปุ่มข้างทั้งสองข้างเป็น'
+                  'ปุ่มยิงบาร์โค้ดโดยค่าเริ่มต้น',
+                  style: TclTokens.caption(),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: _listGap),
+          GlassCard(
+            radius: TclTokens.rCard,
+            fill: TclTokens.s075,
+            border: TclTokens.b11,
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text('ปุ่มที่ตั้งไว้ตอนนี้', style: TclTokens.label()),
+                const SizedBox(height: 4),
+                Text(
+                  // ไม่มีชื่อปุ่มให้แสดง — เก็บแค่ keyId เพื่อไม่ต้องพึ่ง
+                  // debugName ที่หายไปใน release build
+                  bound == null ? 'ยังไม่ได้ผูกปุ่ม' : _keyIdHex(bound),
+                  style: TclTokens.statValue(
+                    bound == null ? TclTokens.tMuted : TclTokens.tBrightest,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                // แสดงเสมอแม้ยังไม่ผูก — ช่างต้องถอนปุ่มได้โดยไม่ต้องรอให้
+                // ปุ่มนั้นถึงแอปอีกครั้ง (ปุ่มที่ผูกผิดอาจถูก BOS กลืนไปแล้ว)
+                SecondaryButton(
+                  label: 'ล้างปุ่มที่ตั้งไว้',
+                  onPressed: () =>
+                      ref.read(appProvider.notifier).clearScanModeHotkey(),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          Text('คีย์ล่าสุดที่ถึงแอป', style: TclTokens.label()),
+          const SizedBox(height: 6),
+          if (_log.isEmpty)
+            Text(
+              'ยังไม่มีปุ่มไหนส่งคีย์มาถึงแอป — กดปุ่มบนเครื่องได้เลย',
+              style: TclTokens.caption(),
+            )
+          else
+            for (final k in _log) ...[
+              _CapturedKeyCard(
+                captured: k,
+                refusal: _refusalReason(k),
+                onBind: () => ref
+                    .read(appProvider.notifier)
+                    .bindScanModeHotkey(k.event.logicalKey.keyId),
+              ),
+              const SizedBox(height: _listGap),
+            ],
+          // ท้ายลิสต์โดยตั้งใจ — งานหลักของ pane นี้คือผูกปุ่ม ส่วนการวัดจังหวะ
+          // เป็นงานตรวจที่ทำเป็นครั้งคราว ดันขึ้นไปข้างบนแล้วลิสต์คีย์ (ของที่ช่าง
+          // ต้องเห็นทันทีที่กดปุ่ม) จะถูกดันตกจอ
+          const SizedBox(height: 16),
+          _GapMeasureCard(
+            onClear: () => setState(() => HandheldGapLog.shared.clear()),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// ผลวัด "ช่องไฟระหว่างอักขระ" ของเครื่องยิงตัวจริง
+///
+/// [HandheldScanBuffer.burstGap] เป็นเสาเดียวที่ค้ำด่านป้องกันทั้งสองชั้นของจอ
+/// สแกน (กลืนคีย์ + กู้ยอดที่รั่ว) แต่ตัวเลขนั้นมาจากสเปก ไม่ได้มาจากการวัด
+/// การ์ดนี้ทำให้การวัดหน้างานเป็นการ **อ่านค่า**: ไปแท็บสแกน ยิงบาร์โค้ดสัก 10 ใบ
+/// แล้วกลับมาดูค่าสูงสุดที่นี่ ถ้ามันไต่ขึ้นไปชนเกณฑ์ = เกณฑ์เตี้ยไปสำหรับเครื่อง
+/// รุ่นนั้น และตาข่ายกู้ยอดจะหยุดทำงานเงียบ ๆ (ดู [HandheldGapLog])
+///
+/// อ่านอย่างเดียว ไม่มีอะไรในนี้ป้อนกลับเข้าเส้นทางสแกน
+class _GapMeasureCard extends StatelessWidget {
+  const _GapMeasureCard({required this.onClear});
+
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    final gaps = HandheldGapLog.shared.gaps;
+    final threshold = HandheldScanBuffer.defaultBurstGap.inMilliseconds;
+    final sorted = [...gaps]..sort();
+
+    return GlassCard(
+      radius: TclTokens.rCard,
+      fill: TclTokens.s075,
+      border: TclTokens.b11,
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('จังหวะคีย์ที่วัดได้จากเครื่องยิง', style: TclTokens.itemName()),
+          const SizedBox(height: 6),
+          Text(
+            'ไปแท็บสแกนแล้วยิงบาร์โค้ดสัก 10 ใบ แล้วกลับมาดูค่าที่นี่ · '
+            'เครื่องยิงส่งอักขระห่างกันหลักสิบมิลลิวินาที ถ้าค่าสูงสุดที่วัดได้'
+            'ไต่ขึ้นไปใกล้เกณฑ์ แปลว่าเกณฑ์เตี้ยไปสำหรับเครื่องรุ่นนี้ '
+            'ตัวกันยอดเพี้ยนจะเลิกทำงานโดยไม่มีอะไรฟ้อง',
+            style: TclTokens.caption(),
+          ),
+          const SizedBox(height: 12),
+          Text('เกณฑ์ที่ใช้อยู่', style: TclTokens.label()),
+          const SizedBox(height: 4),
+          Text('$threshold ms', style: TclTokens.statValue()),
+          const SizedBox(height: 12),
+          if (sorted.isEmpty)
+            Text(
+              'ยังไม่มีค่าที่วัดได้ — ยังไม่มีใครยิงบาร์โค้ดตั้งแต่เปิดแอป',
+              style: TclTokens.caption(),
+            )
+          else ...[
+            Text('ต่ำสุด / กลาง / สูงสุด', style: TclTokens.label()),
+            const SizedBox(height: 4),
+            Text(
+              '${sorted.first} / ${sorted[sorted.length ~/ 2]} / '
+              '${sorted.last} ms · จาก ${sorted.length} ค่า',
+              style: TclTokens.statValue(),
+            ),
+            const SizedBox(height: 8),
+            // เรียงตามเวลาจริง ไม่ใช่เรียงค่า — ช่างต้องเห็นรูปร่างของการยิงหนึ่งชุด
+            Text(gaps.join(' · '), style: TclTokens.skuLine()),
+            if (sorted.last >= threshold) ...[
+              const SizedBox(height: 12),
+              _WarnNote(
+                text: 'ค่าสูงสุดที่วัดได้ (${sorted.last} ms) ชนเกณฑ์ '
+                    '$threshold ms แล้ว — ถ้าค่านี้มาจากการยิงจริง (ไม่ใช่คน'
+                    'พิมพ์ปนเข้ามา) ต้องขยาย burstGap ก่อนปล่อยใช้งานจริง',
+              ),
+            ],
+          ],
+          const SizedBox(height: 12),
+          SecondaryButton(label: 'ล้างค่าที่วัดไว้', onPressed: onClear),
+        ],
+      ),
+    );
+  }
+}
+
+class _CapturedKeyCard extends StatelessWidget {
+  const _CapturedKeyCard({
+    required this.captured,
+    required this.refusal,
+    required this.onBind,
+  });
+
+  final _CapturedKey captured;
+
+  /// null = ผูกได้ (ผู้เรียกเป็นคนตัดสิน — การ์ดนี้แค่แสดงผล)
+  final String? refusal;
+  final VoidCallback onBind;
+
+  @override
+  Widget build(BuildContext context) {
+    final key = captured.event.logicalKey;
+    final ch = captured.event.character;
+
+    return GradientCard(
+      gradient: TclTokens.listCardBg,
+      border: TclTokens.b11,
+      radius: TclTokens.rCard,
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  _keyName(key),
+                  style: TclTokens.itemName(),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              if (captured.burst) ...[
+                const SizedBox(width: 10),
+                Pill(
+                  label: 'มาเป็นชุด',
+                  background: TclTokens.warnTint14,
+                  style: TclTokens.rolePill(TclTokens.warn),
+                ),
+              ],
+            ],
+          ),
+          const SizedBox(height: 2),
+          Text(_keyIdHex(key.keyId), style: TclTokens.skuLine()),
+          const SizedBox(height: 8),
+          Text(
+            // '—' ไม่ใช่ '' — ปุ่มที่ไม่พิมพ์อักขระคือปุ่มที่ผูกได้ ต้องอ่านออก
+            'อักขระ ${ch ?? '—'} · เวลา ${_hhmm(captured.at)}',
+            style: TclTokens.meta(),
+          ),
+          const SizedBox(height: 12),
+          if (refusal != null)
+            _WarnNote(text: refusal!)
+          else
+            PrimaryButton(label: 'ตั้งเป็นปุ่มสลับโหมด', onPressed: onBind),
+        ],
+      ),
+    );
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════
 // ชิ้นส่วนร่วม
 // ════════════════════════════════════════════════════════════════════════
 
@@ -908,6 +1249,15 @@ class _CenterNote extends StatelessWidget {
         ),
       );
 }
+
+/// ชื่อปุ่มที่พออ่านออก — release build ไม่มี `debugName` จึงตกมาที่ keyId
+String _keyName(LogicalKeyboardKey key) {
+  if (key.keyLabel.isNotEmpty) return key.keyLabel;
+  return key.debugName ?? 'ปุ่มไม่มีชื่อ · ${_keyIdHex(key.keyId)}';
+}
+
+/// keyId เป็นเลขฐาน 16 — รูปเดียวกับที่เอกสาร Flutter/Android ใช้อ้างคีย์
+String _keyIdHex(int keyId) => '0x${keyId.toRadixString(16)}';
 
 String _hhmm(DateTime value) {
   final local = value.toLocal();
