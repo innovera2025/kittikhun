@@ -167,8 +167,24 @@ export interface ErpAdapter {
    *
    * คืนอาเรย์เดียว (ไม่ stream) — จำนวนผู้ใช้อยู่หลักร้อย และ deactivation sweep
    * ต้องเห็น "ชุดครบ" ของรอบนั้นถึงจะตัดสินได้ว่าใครหายไปจาก ERP แล้วจริง
+   *
+   * ⚠️ 5 ก.ย. 2569: **ล็อกอินไม่ใช้เมธอดนี้แล้ว** — ใช้ `fetchUserByLogin()` ยิงทีละคน
+   *    ตามที่ลูกค้าสั่ง เหลือผู้เรียกเดียวคือรอบ sync ผู้ใช้ ซึ่งเป็นผู้สมัครถูกลบ (ดู sync.module.ts)
    */
   fetchUsers(): Promise<ErpUserRow[]>;
+
+  /**
+   * อ่านผู้ใช้ **คนเดียว** ตามชื่อที่พิมพ์ตอนล็อกอิน — รูปเดียวกับ query ต้นฉบับของลูกค้า
+   * (`WHERE user_name = ?cUser` ซึ่งเป็น query ต่อการล็อกอินหนึ่งครั้ง ไม่ใช่ query กวาดทั้งตาราง)
+   *
+   * ไม่พบ = `null` (ล็อกอินไม่ผ่านทันที ไม่มีระยะผ่อนผัน — คำสั่งลูกค้า "ถ้าหาไม่เจอก็เข้าไม่ได้")
+   * ต่อ ERP ไม่ได้ = **โยน error** ห้ามคืน `null` เด็ดขาด — สองกรณีนี้ต้องแยกจากกันที่ผู้เรียก
+   * ไม่งั้น ERP ล่ม 1 นาทีจะกลายเป็น "ไม่พบชื่อผู้ใช้" ของทั้งคลังพร้อมกัน
+   *
+   * 🚫 `password` ต้องถูกห่อเป็น `ErpSecret` เหมือน `fetchUsers()` เป๊ะ ๆ
+   *    ชื่อขึ้นต้น `fetch` โดยตั้งใจให้ผ่าน `WriteishMethodName` — ยังเป็น SELECT ล้วน
+   */
+  fetchUserByLogin(loginName: string): Promise<ErpUserRow | null>;
 
   healthCheck(): Promise<ErpHealth>;
 }
@@ -447,6 +463,7 @@ export abstract class BaseErpDriver implements ErpAdapter {
   abstract fetchItems(since?: ErpCursor): AsyncIterable<CanonicalItem[]>;
   abstract fetchItemsBySku(skus: readonly string[]): Promise<CanonicalItem[]>;
   abstract fetchUsers(): Promise<ErpUserRow[]>;
+  abstract fetchUserByLogin(loginName: string): Promise<ErpUserRow | null>;
   abstract healthCheck(): Promise<ErpHealth>;
 
   /**

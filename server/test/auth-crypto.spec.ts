@@ -1,3 +1,5 @@
+import * as crypto from 'node:crypto';
+
 import * as argon2 from 'argon2';
 import { ConfigService } from '@nestjs/config';
 import type { JwtService } from '@nestjs/jwt';
@@ -5,6 +7,18 @@ import type { JwtService } from '@nestjs/jwt';
 import { AuthService } from '../src/auth/auth.service';
 import type { AppConfig } from '../src/config/env.config';
 import type { PostgresService } from '../src/db/postgres.service';
+import type { ErpAdapter } from '../src/erp/erp-adapter';
+
+/**
+ * ห่อ `timingSafeEqual` ไว้เพื่อ**นับจำนวนครั้งที่ถูกเรียกจริง** — ฟังก์ชันจริงยังทำงานเต็ม
+ * (`requireActual`) เปลี่ยนแค่ให้สอดส่องได้ · จำเป็นเพราะ property ของ `node:crypto`
+ * redefine ไม่ได้ (`jest.spyOn` โยน "Cannot redefine property") และคุณสมบัติที่ต้องพิสูจน์
+ * ที่นี่คือ "ถูกเรียกหรือไม่" ซึ่งวัดด้วยนาฬิกาไม่ได้ (memcmp ระดับไมโครวินาที)
+ */
+jest.mock('node:crypto', () => {
+  const actual = jest.requireActual<typeof import('node:crypto')>('node:crypto');
+  return { ...actual, timingSafeEqual: jest.fn(actual.timingSafeEqual) };
+});
 
 /**
  * ชั้นเข้ารหัสของ auth — ทดสอบได้โดยไม่ต้องมี Postgres
@@ -26,7 +40,9 @@ const CFG: Record<string, string | number> = {
 function makeService(overrides: Record<string, string | number> = {}): AuthService {
   const merged = { ...CFG, ...overrides };
   const cfg = { get: (k: string) => merged[k] } as unknown as ConfigService<AppConfig, true>;
-  return new AuthService({} as PostgresService, {} as JwtService, cfg);
+  // ERP ไม่ถูกแตะเลยในไฟล์นี้ (ทดสอบเฉพาะฟังก์ชันเข้ารหัสล้วน ๆ) — ถ้ามีเส้นทางไหนเผลอ
+  // เรียก adapter ขึ้นมา จะระเบิดเป็น TypeError ให้เห็นทันที ไม่ใช่ผ่านไปเงียบ ๆ
+  return new AuthService({} as PostgresService, {} as JwtService, cfg, {} as ErpAdapter);
 }
 
 describe('AuthService — ชั้นเข้ารหัส', () => {
@@ -124,6 +140,18 @@ describe('AuthService — ชั้นเข้ารหัส', () => {
       expect(() => AuthService.safeEqual('abc', 'abcdef')).not.toThrow();
       expect(AuthService.safeEqual('abc', 'abcdef')).toBe(false);
       expect(AuthService.safeEqual('', 'x')).toBe(false);
+    });
+
+    it('⭐ ความยาวไม่เท่ากันก็ยัง**เทียบจริง** ไม่ลัดวงจร (ไม่งั้นวัดความยาวรหัสผ่านได้)', () => {
+      // เดิมเขียนเป็น `length === length && timingSafeEqual(...)` → ยาวไม่เท่า = คืนค่าทันที
+      // โดยไม่เทียบเลย ซึ่งเร็วกว่าเคสยาวเท่ากันอย่างวัดได้ ผู้โจมตีไล่ความยาวรหัสผ่านจริง
+      // ออกได้ก่อนเริ่มเดาตัวอักษร · ตอนนี้ต้องเรียก timingSafeEqual เสมอ บน buffer ยาวเท่ากัน
+      const spy = crypto.timingSafeEqual as unknown as jest.Mock;
+      spy.mockClear();
+      expect(AuthService.safeEqual('abc', 'abcdefghij')).toBe(false);
+      expect(spy).toHaveBeenCalledTimes(1);
+      const [left, right] = spy.mock.calls[0] as [Buffer, Buffer];
+      expect(left.length).toBe(right.length);
     });
 
     it('ว่างทั้งคู่ → true (ไม่ crash)', () => {

@@ -1,6 +1,11 @@
 import { inspect } from 'node:util';
 
-import { DEFAULT_USERS_SQL, toErpUserRow } from '../src/erp/drivers/mssql.driver';
+import { MockDriver } from '../src/erp/drivers/mock.driver';
+import {
+  DEFAULT_USER_LOGIN_SQL,
+  DEFAULT_USERS_SQL,
+  toErpUserRow,
+} from '../src/erp/drivers/mssql.driver';
 import { assertReadOnlySql } from '../src/erp/erp-adapter';
 import { ErpSecret } from '../src/erp/erp-secret';
 
@@ -107,5 +112,89 @@ describe('DEFAULT_USERS_SQL — query ดึงผู้ใช้ที่ใช
     expect(DEFAULT_USERS_SQL).not.toMatch(/\bemp_id\b/i);
     // และ LEFT JOIN Employee/EmpPict ต้องไม่ถูกใส่กลับมา (ได้ NULL ทุกแถว + ไม่มีที่ลง)
     expect(DEFAULT_USERS_SQL).not.toMatch(/employee|emppict/i);
+  });
+});
+
+/**
+ * `DEFAULT_USER_LOGIN_SQL` — query **ตอนล็อกอิน** ที่ลูกค้าเขียนมาเอง
+ *
+ * ต่างจาก `DEFAULT_USERS_SQL` ตรงที่มันคือ "หาคนที่กำลังล็อกอินหนึ่งคน" (`WHERE user_name = ?cUser`)
+ * ไม่ใช่ "กวาดรายชื่อทั้งตาราง" — และตั้งแต่ 5 ก.ย. 2569 เส้นทางล็อกอินใช้ตัวนี้ตัวเดียว
+ */
+describe('DEFAULT_USER_LOGIN_SQL — query ล็อกอินทีละคนตามต้นฉบับของลูกค้า', () => {
+  it('⭐ ผ่านกฎเหล็กชั้นที่ 3 (assertReadOnlySql)', () => {
+    expect(() => assertReadOnlySql(DEFAULT_USER_LOGIN_SQL)).not.toThrow();
+  });
+
+  it('🔴 ชื่อผู้ใช้ถูก**ผูกเป็นพารามิเตอร์** ไม่ใช่ต่อสตริงเข้า SQL (ขอบเขต SQL injection)', () => {
+    // ชื่อผู้ใช้มาจากช่องกรอกบนมือถือ = input ภายนอกล้วน ๆ · ถ้าวันไหนมีคนเปลี่ยนบรรทัดนี้
+    // เป็น template literal ใส่ค่าเข้าไปตรง ๆ ERP ทั้งตัวจะเปิดให้ยิงคำสั่งอะไรก็ได้
+    expect(DEFAULT_USER_LOGIN_SQL).toMatch(/WHERE\s+user_name\s*=\s*@cUser/i);
+    // ห้ามมี placeholder แบบต่อสตริง (`${...}` / `'+'` / `?`) หลงเหลืออยู่
+    expect(DEFAULT_USER_LOGIN_SQL).not.toContain('${');
+    expect(DEFAULT_USER_LOGIN_SQL).not.toContain('?cUser');
+    expect(DEFAULT_USER_LOGIN_SQL).not.toMatch(/=\s*'/);
+  });
+
+  it('คง WITH (NOLOCK) ทั้งสองตาราง และ LEFT OUTER JOIN Employee ตามที่ลูกค้าเขียน', () => {
+    // ลูกค้ายืนยันรูปนี้ — `Employee` ว่างทั้งตารางบน ERP จริง แต่เป็น LEFT JOIN จึงไม่ตัดใครทิ้ง
+    expect(DEFAULT_USER_LOGIN_SQL.match(/WITH\s*\(NOLOCK\)/gi)).toHaveLength(2);
+    expect(DEFAULT_USER_LOGIN_SQL).toMatch(
+      /LEFT\s+OUTER\s+JOIN\s+Employee\s+WITH\s*\(NOLOCK\)\s+ON\s+menuuser\.emp_id\s*=\s*Employee\.EmployeeCode/i,
+    );
+    expect(DEFAULT_USER_LOGIN_SQL).toMatch(/ORDER\s+BY\s+User_Name/i);
+  });
+
+  it('alias ครบทั้ง 5 คอลัมน์ที่ toErpUserRow อ่าน และตัวตนมาจาก user_name', () => {
+    for (const column of ['login_name', 'password', 'user_level', 'name_thai', 'emp_code']) {
+      expect(DEFAULT_USER_LOGIN_SQL).toContain(column);
+    }
+    expect(DEFAULT_USER_LOGIN_SQL).toMatch(/user_name\s+AS\s+emp_code/i);
+  });
+
+  it('ไม่มีตัวคั่นแบตช์ GO', () => {
+    expect(/^\s*GO\s*$/im.test(DEFAULT_USER_LOGIN_SQL)).toBe(false);
+  });
+});
+
+/**
+ * `MockDriver.fetchUserByLogin()` — เส้นทางล็อกอินของ `ERP_DRIVER=mock` (dev/CI/demo)
+ * ต้องมีพฤติกรรมเดียวกับของจริงในสามข้อที่มีผลต่อผลลัพธ์: ไม่สนตัวพิมพ์ · ไม่พบ = null ·
+ * รหัสผ่านห่อด้วย ErpSecret
+ */
+describe('MockDriver.fetchUserByLogin — ผู้ใช้คนเดียวตอนล็อกอิน', () => {
+  const driver = new MockDriver();
+
+  it('พบชื่อผู้ใช้ → คืนแถวเดียวที่ password ถูกห่อเป็น ErpSecret', async () => {
+    const row = await driver.fetchUserByLogin('somchai.a');
+
+    expect(row).not.toBeNull();
+    expect(row?.loginName).toBe('somchai.a');
+    expect(row?.password).toBeInstanceOf(ErpSecret);
+    expect(JSON.stringify(row)).not.toContain(row?.password.expose() ?? 'ไม่มีค่า');
+  });
+
+  it('⭐ ไม่สนตัวพิมพ์ใหญ่เล็ก (menuuser อยู่บน collation Thai_CI_AS)', async () => {
+    // fixture มี `Suda.K` ตัวพิมพ์ผสมไว้เพื่อเคสนี้โดยเฉพาะ
+    const upper = await driver.fetchUserByLogin('SUDA.K');
+    const lower = await driver.fetchUserByLogin('suda.k');
+
+    expect(upper?.loginName).toBe('Suda.K');
+    expect(lower?.loginName).toBe('Suda.K');
+  });
+
+  it('ไม่พบ / ชื่อว่าง → null (ไม่ใช่ throw และไม่ใช่แถวเปล่า)', async () => {
+    // `null` = "ERP ไม่มีคนนี้ → เข้าไม่ได้" ส่วน throw สงวนไว้ให้ "ต่อ ERP ไม่ได้" เท่านั้น
+    await expect(driver.fetchUserByLogin('ไม่มีคนนี้')).resolves.toBeNull();
+    await expect(driver.fetchUserByLogin('   ')).resolves.toBeNull();
+  });
+
+  it('คนเดียวกับที่อยู่ใน fetchUsers() — mock ต้องไม่มีสองแหล่งความจริง', async () => {
+    const all = await driver.fetchUsers();
+    const one = await driver.fetchUserByLogin('anan.p');
+
+    const fromAll = all.find((u) => u.loginName === 'anan.p');
+    expect(one?.empCode).toBe(fromAll?.empCode);
+    expect(one?.password.expose()).toBe(fromAll?.password.expose());
   });
 });

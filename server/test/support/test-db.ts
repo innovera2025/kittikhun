@@ -37,6 +37,9 @@ export const TEST_CONFIG: Record<string, string | number> = {
   AUTH_THROTTLE_BASE_MS: 1,
   AUTH_THROTTLE_MAX_MS: 4,
   WAREHOUSE_CODE: 'WH01',
+  // role เดียวที่ผู้ใช้จาก ERP ได้ทุกคน — `AuthService` ใช้ตอน upsert แถว `users`
+  // ของคนที่เพิ่งล็อกอินผ่าน ERP ครั้งแรก (ค่าเดียวกับ default จริงใน env.config)
+  ERP_USER_FIXED_ROLE: 'staff',
 };
 
 export function testConfigService(

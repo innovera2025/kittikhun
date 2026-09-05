@@ -128,6 +128,15 @@ const makeFakeErp = (): FakeErp => {
       if (fake.failWith !== null) return Promise.reject(fake.failWith);
       return Promise.resolve(fake.users);
     },
+    // เส้นทางล็อกอิน (`AuthService.login()`) ไม่ได้ถูกทดสอบในไฟล์นี้ — มีไว้ให้ครบ interface
+    // เท่านั้น · เคสของมันอยู่ใน auth-integration.spec.ts ที่ใช้ ERP ปลอมของ support/fake-erp
+    fetchUserByLogin(loginName: string): Promise<ErpUserRow | null> {
+      if (fake.failWith !== null) return Promise.reject(fake.failWith);
+      const wanted = loginName.trim().toLowerCase();
+      return Promise.resolve(
+        fake.users.find((u) => u.loginName.trim().toLowerCase() === wanted) ?? null,
+      );
+    },
   };
   return fake;
 };
@@ -165,7 +174,14 @@ describeWithDb('sync ผู้ใช้จาก ERP — วงจรจริ�
       signOptions: { algorithm: 'HS256' },
       verifyOptions: { algorithms: ['HS256'] },
     });
-    auth = new AuthService(db, jwt, testConfigService());
+    // ⚠️ `auth` ถูกสร้างครั้งเดียวแต่ `erp` ถูกสร้างใหม่ทุก `beforeEach` → ส่ง adapter ตัวแทน
+    //    ที่ **ชี้ไปยัง fake ตัวปัจจุบันเสมอ** ไม่งั้น `auth.login()` จะถาม ERP ตัวที่ตายไปแล้ว
+    //    (ล็อกอินถาม ERP สด ๆ ตั้งแต่ 5 ก.ย. 2569 — ไม่ได้อ่าน `user_credentials` อีกแล้ว)
+    const currentErp: ErpAdapter = {
+      ...makeFakeErp(),
+      fetchUserByLogin: (loginName: string) => erp.fetchUserByLogin(loginName),
+    };
+    auth = new AuthService(db, jwt, testConfigService(), currentErp);
   });
 
   afterAll(async () => {
@@ -727,14 +743,19 @@ describeWithDb('sync ผู้ใช้จาก ERP — วงจรจริ�
       expect(session.user.empId).toBe(LEAVER);
       expect(session.user.role).toBe(FIXED_ROLE);
 
-      // ── รอบ 2: หายจาก menuuser แล้ว แต่ยังไม่พ้น grace → **ยังต้องล็อกอินได้** ──────
-      // ถ้าเคสนี้แดง แปลว่าการ์ดกันการอ่าน ERP เพี้ยนรอบเดียวหายไป (คนละเรื่องกับลาออก)
+      // ── รอบ 2: หายจาก menuuser แล้ว แต่ยังไม่พ้น grace ───────────────────────
+      // การ์ดกัน "ERP ตอบเพี้ยนรอบเดียว" ยังทำงานเหมือนเดิม: แถว credential ไม่ถูกลบ
+      // ⚠️ **แต่ล็อกอินถูกปฏิเสธตั้งแต่วินาทีนี้แล้ว** — ตั้งแต่ 5 ก.ย. 2569 ล็อกอินถาม ERP
+      //    สด ๆ ไม่ได้อ่าน `user_credentials` อีกต่อไป grace จึงคุ้มครองแค่ *ข้อมูลในตารางเรา*
+      //    (ไม่ให้ถูกลบเพราะ ERP สะดุดรอบเดียว) ไม่ได้คุ้มครอง *สิทธิ์เข้าใช้งาน* อีกแล้ว
+      //    ตรงตามคำสั่งลูกค้า: "กลับมาถ้าหาไม่เจอก็เข้าไม่ได้"
       erp.users = STAYS.map((e) => erpUser(e, { password: SEED_SECRET }));
       const second = await sync.syncUsers('round-2');
       expect(second.metrics).toMatchObject({ absent: 1, graceElapsed: 0, deactivated: 0 });
       expect((await credentialOf(LEAVER))?.absent_since).not.toBeNull();
-      const stillIn = await auth.login({ empId: 'e42', pin: PW, deviceId: DEVICE });
-      expect(stillIn.user.empId).toBe(LEAVER);
+      await expect(
+        auth.login({ empId: 'e42', pin: PW, deviceId: DEVICE }),
+      ).rejects.toMatchObject({ code: 'UNKNOWN_EMPLOYEE' });
 
       // ── รอบ 3: หายต่อเนื่องจนพ้น grace → ปิดล็อกอินจริง ───────────────────────
       expect(await expireGrace()).toBe(1);
@@ -804,6 +825,9 @@ describeWithDb('sync ผู้ใช้จาก ERP — วงจรจริ�
     it('หายนานเกิน grace → ลบ credential จริง ตัด token แต่แถว users ยังอยู่ครบ', async () => {
       await seedLocalAdmin();
       await seedStaff(ALL);
+      // `seedStaff` เขียนแค่ตารางของเรา — ล็อกอินถาม ERP สด ๆ แล้ว จึงต้องมีแถวใน ERP ปลอม
+      // ด้วย ไม่งั้นไม่มี token ให้ sweep ไปตัดในตอนท้าย (สิ่งที่เคสนี้ต้องพิสูจน์)
+      erp.users = ALL.map((e) => erpUser(e, { password: SEED_SECRET }));
       await auth.login({ empId: 'e12', pin: SEED_SECRET, deviceId: DEVICE });
       const sync = makeSync({ ERP_USER_MIN_EXPECTED_ROWS: 5 });
       erp.users = ALL.slice(0, 11).map((e) => erpUser(e, { password: SEED_SECRET }));

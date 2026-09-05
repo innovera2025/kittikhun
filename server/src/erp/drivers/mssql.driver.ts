@@ -505,6 +505,44 @@ export const DEFAULT_USERS_SQL = `SELECT user_name  AS login_name,
  ORDER BY user_name`;
 
 /**
+ * ผู้ใช้ **คนเดียว** ตอนล็อกอิน — คือ query ต้นฉบับของลูกค้าตามรูปที่เขาส่งมาจริง ๆ
+ *
+ *     SELECT user_name As USERID, a_Password, id_random, user_level As Ulevel,
+ *            name_thai, Employee.EmpPict
+ *     FROM  menuuser WITH (NOLOCK)
+ *     LEFT OUTER JOIN Employee WITH (NOLOCK) ON menuuser.emp_id = Employee.EmployeeCode
+ *     WHERE user_name = ?cUser
+ *     ORDER BY User_Name
+ *
+ * ⭐ `?cUser` คือ **พารามิเตอร์** ไม่ใช่ค่าคงที่ — query นี้จึงเป็น "หาแถวของคนที่กำลังล็อกอิน
+ *    หนึ่งคน แล้วเทียบรหัสผ่าน" ไม่ใช่ query กวาดรายชื่อทั้งตาราง (นั่นคือ `DEFAULT_USERS_SQL`)
+ *    ที่นี่ผูกเป็น `@cUser` ผ่าน `request.input()` ของ mssql → **ไม่มีการต่อสตริงเข้า SQL เลย**
+ *    ชื่อผู้ใช้คือ input จากอินเทอร์เน็ต การ concat ตรงนี้ = SQL injection เต็มรูปแบบบน ERP
+ *
+ * คงไว้ตามที่ลูกค้าเขียนโดยตั้งใจ:
+ *  - `WITH (NOLOCK)` ทั้งสองตาราง — ล็อกอินต้องไม่ไปรอ lock ของงาน ERP ที่วิ่งอยู่
+ *  - `LEFT OUTER JOIN Employee` — `Employee` มี 0 แถวใน db_TCL จริง (คืน NULL ทุกครั้ง)
+ *    แต่เป็น LEFT JOIN จึงไม่ตัดแถวใครทิ้ง และเป็นรูปที่ลูกค้ายืนยันว่าต้องใช้
+ *  - `ORDER BY User_Name` — เหลือได้แถวเดียวอยู่แล้ว แต่คงไว้ให้ตรงต้นฉบับ
+ *
+ * ต่างจากต้นฉบับแค่รายการคอลัมน์: alias เป็นชื่อที่ `toErpUserRow()` อ่าน และ **ไม่ดึง**
+ * `id_random` / `Employee.EmpPict` เพราะไม่มีอะไรในระบบนี้ใช้ค่าสองตัวนั้นเลย
+ * (`EmpPict` เป็นรูปภาพ — ดึงมาทุกครั้งที่มีคนกดล็อกอินคือภาระเปล่าบน ERP)
+ *
+ * 🚫 ไม่มี ENV ให้ override query นี้โดยตั้งใจ — มันคือสัญญาที่ลูกค้าเขียนมาเอง
+ *    ถ้ารูปนี้เปลี่ยน ต้องเป็นการแก้โค้ดที่มีคนอ่าน ไม่ใช่บรรทัดใน .env ของเครื่องใดเครื่องหนึ่ง
+ */
+export const DEFAULT_USER_LOGIN_SQL = `SELECT user_name  AS login_name,
+       a_Password AS password,
+       user_level AS user_level,
+       name_thai  AS name_thai,
+       user_name  AS emp_code
+  FROM menuuser WITH (NOLOCK)
+  LEFT OUTER JOIN Employee WITH (NOLOCK) ON menuuser.emp_id = Employee.EmployeeCode
+ WHERE user_name = @cUser
+ ORDER BY User_Name`;
+
+/**
  * หัวรอบนับแบบ dedupe แล้ว
  * ⚠️ tbl_CountHdr PK = (Roworder, TransactionNo) → TransactionNo/VoucherNo ซ้ำได้
  *    → เอา Roworder สูงสุดต่อ TransactionNo
@@ -888,6 +926,38 @@ export class MssqlDriver extends BaseErpDriver {
     // ⚠️ ไม่เรียก normalizeRow ซ้ำ — runQuery() decode ผ่าน decodeThai ให้ทุกคอลัมน์แล้ว
     //    การ decode ซ้ำรอบสองอาจแปลงรหัสผ่านที่ decode ถูกแล้วให้เพี้ยนแบบเงียบ ๆ
     return rows.map(toErpUserRow);
+  }
+
+  /**
+   * ผู้ใช้คนเดียวตอนล็อกอิน — ยิง `DEFAULT_USER_LOGIN_SQL` โดยผูกชื่อผู้ใช้เป็นพารามิเตอร์
+   *
+   * 🚫 `@cUser` ผูกผ่าน `runQuery()` → `request.input()` เท่านั้น **ห้ามต่อสตริงเข้า SQL**
+   *    (ค่านี้มาจากช่องกรอกบนมือถือ = input จากภายนอกล้วน ๆ)
+   * ⚠️ ไม่ trim / ไม่ lower ค่าที่ส่งเข้า ERP — SQL Server เทียบตาม collation ของคอลัมน์เอง
+   *    (`Thai_CI_AS` = ไม่สนตัวพิมพ์) การ normalize ฝั่งเราจะทำให้ผลต่างจากที่ ERP เห็นจริง
+   *    ตัดเฉพาะช่องว่างหัวท้ายที่คนพิมพ์ติดมา ซึ่งไม่มีทางเป็นส่วนของชื่อผู้ใช้จริง
+   *
+   * ต่อ ERP ไม่ได้ → error ลอยขึ้นไปตามสัญญาของ adapter (ห้ามกลืนเป็น "ไม่พบผู้ใช้")
+   */
+  async fetchUserByLogin(loginName: string): Promise<ErpUserRow | null> {
+    const wanted = loginName.trim();
+    if (wanted.length === 0) return null;
+
+    const rows = await this.runQuery('user-login', DEFAULT_USER_LOGIN_SQL, { cUser: wanted });
+    const row = rows[0];
+    if (row === undefined) return null;
+
+    // `user_name` ไม่ใช่ PK ใน `menuuser` → ซ้ำได้ตามทฤษฎี · เอาแถวแรกตาม ORDER BY เหมือน
+    // ต้นฉบับ แต่ต้องดังพอให้ผู้ดูแลไปแก้ที่ ERP (สองคนใช้ชื่อล็อกอินเดียวกัน = ปัญหาที่นั่น)
+    // 🚫 ห้ามใส่ค่าจากแถว (โดยเฉพาะรหัสผ่าน) ลง log บรรทัดนี้
+    if (rows.length > 1) {
+      logger.warn(
+        `menuuser คืน ${rows.length} แถวสำหรับชื่อผู้ใช้เดียว — ใช้แถวแรกตาม ORDER BY User_Name ` +
+          'และต้องไปแก้ข้อมูลซ้ำที่ ERP',
+      );
+    }
+
+    return toErpUserRow(row);
   }
 
   // -------------------------------------------------------------------------

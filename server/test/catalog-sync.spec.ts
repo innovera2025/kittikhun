@@ -53,6 +53,9 @@ const makeFakeErp = (): FakeErp => {
     fetchUsers(): Promise<ErpUserRow[]> {
       return Promise.resolve([]);
     },
+    fetchUserByLogin(): Promise<ErpUserRow | null> {
+      return Promise.resolve(null);
+    },
   };
   return fake;
 };

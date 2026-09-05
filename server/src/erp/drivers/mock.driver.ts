@@ -226,6 +226,22 @@ const USER_SEEDS: readonly {
   },
 ];
 
+type UserSeed = (typeof USER_SEEDS)[number];
+
+/**
+ * seed → `ErpUserRow` — ห่อ plaintext ด้วย `ErpSecret` ตั้งแต่บรรทัดนี้ เพื่อให้เส้นทาง mock
+ * เจอกฎเดียวกับของจริง (ทั้ง `fetchUsers()` และ `fetchUserByLogin()` ผ่านตัวนี้ตัวเดียว)
+ */
+function toErpUserRow(seed: UserSeed): ErpUserRow {
+  return {
+    loginName: seed.loginName,
+    password: ErpSecret.of(seed.password),
+    userLevel: seed.userLevel,
+    nameThai: seed.nameThai,
+    empCode: seed.empCode,
+  };
+}
+
 export class MockDriver implements ErpAdapter {
   /** fixture ไม่มี updated-at ที่เชื่อถือได้ → server ใช้ full snapshot + diff */
   capabilities(): ErpCapabilities {
@@ -249,15 +265,21 @@ export class MockDriver implements ErpAdapter {
    * ห่อ plaintext ด้วย `ErpSecret` ตั้งแต่ตรงนี้ เพื่อให้เส้นทาง mock เจอกฎเดียวกับของจริง
    */
   fetchUsers(): Promise<ErpUserRow[]> {
-    return Promise.resolve(
-      USER_SEEDS.map((seed) => ({
-        loginName: seed.loginName,
-        password: ErpSecret.of(seed.password),
-        userLevel: seed.userLevel,
-        nameThai: seed.nameThai,
-        empCode: seed.empCode,
-      })),
-    );
+    return Promise.resolve(USER_SEEDS.map(toErpUserRow));
+  }
+
+  /**
+   * ผู้ใช้คนเดียวตอนล็อกอิน — เทียบชื่อแบบ **ไม่สนตัวพิมพ์ใหญ่เล็ก** ให้ตรงกับของจริง
+   * (`menuuser` อยู่บน collation `Thai_CI_AS` → `WHERE user_name = @cUser` ก็ไม่สนอยู่แล้ว
+   *  fixture มี `Suda.K` ตัวพิมพ์ผสมไว้ให้เทสต์จับพฤติกรรมนี้โดยเฉพาะ)
+   *
+   * ไม่พบ = `null` (mock ไม่มีทาง "ต่อไม่ได้" จึงไม่มีเส้นทาง throw ที่นี่)
+   */
+  fetchUserByLogin(loginName: string): Promise<ErpUserRow | null> {
+    const wanted = loginName.trim().toLowerCase();
+    if (wanted.length === 0) return Promise.resolve(null);
+    const seed = USER_SEEDS.find((s) => s.loginName.toLowerCase() === wanted);
+    return Promise.resolve(seed === undefined ? null : toErpUserRow(seed));
   }
 
   /** mock ไม่ต้องต่ออะไร — แต่ต้องมีตาม contract เพื่อให้ ErpModule เรียกได้เหมือนกันทุก driver */

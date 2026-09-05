@@ -644,7 +644,20 @@ export class SyncService implements OnModuleInit {
 
   // ── 2b. syncUsers ───────────────────────────────────────────────────────
 
-  /** ดึงผู้ใช้จาก `menuuser` เข้า users/user_credentials — ไม่ throw เมื่อ ERP ล่ม */
+  /**
+   * ดึงผู้ใช้จาก `menuuser` เข้า users/user_credentials — ไม่ throw เมื่อ ERP ล่ม
+   *
+   * 🗑️ **ผู้สมัครถูกลบทั้งเส้นทาง (5 ก.ย. 2569)** — `AuthService.login()` ไม่อ่าน
+   *    `user_credentials` ของ ERP อีกแล้ว มันถาม ERP สด ๆ ทีละคนด้วย query ของลูกค้า
+   *    (`ErpAdapter.fetchUserByLogin()`) แล้วเทียบรหัสผ่านแบบ string ตรง ๆ
+   *    → รอบนี้ทั้งรอบ (พร้อม `user_credentials` แถว source='erp'/'legacy_pin', การ hash
+   *      รหัสผ่าน ERP ด้วย argon2, deactivation sweep และเพดานเลื่อน/ถอนสิทธิ์) **ไม่มีผล
+   *      ต่อการล็อกอินอีกต่อไป** ค้างไว้เฉย ๆ เพราะการรื้อออกเป็นการเปลี่ยนที่เสี่ยงกว่า
+   *      และต้องทำเป็นคอมมิตของตัวเอง (มีข้อมูลจริงอยู่ในตารางนั้นบนเครื่องลูกค้าแล้ว)
+   *
+   * ⚠️ สิ่งที่ยัง **ห้ามลบพร้อมกัน**: บัญชี break-glass `source='local'` ยังเป็นทางเดียว
+   *    ที่กลับเข้าระบบได้ตอน ERP ล่ม และด่านที่ 0 ของรอบนี้คือสิ่งที่กันไม่ให้มันหายไป
+   */
   async syncUsers(triggeredBy: string): Promise<SyncRunResult> {
     return this.withLock('users', triggeredBy, (by) => this.runUsers(by));
   }
