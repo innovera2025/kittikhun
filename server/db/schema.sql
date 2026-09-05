@@ -187,6 +187,10 @@ COMMENT ON COLUMN user_credentials.login_name IS
   'สิ่งที่ผู้ใช้พิมพ์จริงตอนล็อกอิน (lower แล้ว) — legacy/local = lower(emp_id), ERP = lower(menuuser.user_name) จึงเป็น PK แทน emp_id';
 COMMENT ON COLUMN user_credentials.erp_user_level IS
   'ค่าดิบจาก menuuser.user_level — เก็บไว้ตอบ U1 จากข้อมูลจริงได้ทุกเมื่อ';
+-- ⚠️ ต้องมาก่อน COMMENT ข้างล่างเสมอ — ตารางที่มีอยู่แล้วจะไม่ได้คอลัมน์จาก
+--    CREATE TABLE IF NOT EXISTS แล้ว COMMENT จะล้มทั้งไฟล์ (ON_ERROR_STOP=1)
+-- NULL = พบใน ERP อยู่ → แถวเดิมเริ่มที่ "ยังไม่จับเวลา" ซึ่งปลอดภัยที่สุด
+ALTER TABLE user_credentials ADD COLUMN IF NOT EXISTS absent_since timestamptz;
 COMMENT ON COLUMN user_credentials.absent_since IS
   'รอบแรกที่ไม่พบคนนี้ในผล ERP (NULL = พบอยู่) — ลบได้ต่อเมื่อค้างนานเกินเกณฑ์ grace เท่านั้น '
   'ไม่เกี่ยวกับ user_level ที่ map ไม่ได้ (นั่นคือปัญหา config ห้ามลบ credential เด็ดขาด)';
@@ -600,6 +604,13 @@ COMMENT ON TABLE  sync_runs IS 'บันทึกทุกรอบดึงข
 COMMENT ON COLUMN sync_runs.stock_as_of IS 'เวลาที่ดึง ERP สำเร็จ — ป้าย "ข้อมูล ณ HH:MM" อ่านจากค่านี้ (ไม่ใช่ max ของ erp_updated_at ซึ่งจะโกหกเมื่อ ERP ไม่มีอะไรเปลี่ยน)';
 COMMENT ON COLUMN sync_runs.status IS 'partial = ดึงไม่ครบ → ห้ามขยับ cursor และห้าม tombstone';
 COMMENT ON COLUMN sync_runs.anomalies IS 'array ของความผิดปกติ: row-count drift, barcode ชนกัน, ItemCode ซ้ำ, decode ภาษาไทยพัง, คลังไม่ตรงที่คาด';
+-- ⚠️ ต้องมาก่อน COMMENT ข้างล่างเสมอ (เหตุผลเดียวกับ user_credentials.absent_since)
+--    เคยพลาดมาแล้วตอน deploy 5 ก.ย. 2569: COMMENT ยิงใส่คอลัมน์ที่ยังไม่มี → schema หยุดกลางไฟล์
+-- DB เก่าไม่มีคอลัมน์นี้ — แถวเดิมได้ '{}' ตาม DEFAULT
+ALTER TABLE sync_runs ADD COLUMN IF NOT EXISTS metrics jsonb NOT NULL DEFAULT '{}'::jsonb;
+DO $do$ BEGIN
+  ALTER TABLE sync_runs ADD CONSTRAINT sync_runs_metrics_obj CHECK (jsonb_typeof(metrics) = 'object');
+EXCEPTION WHEN duplicate_object THEN NULL; END $do$;
 COMMENT ON COLUMN sync_runs.metrics IS 'ตัวนับสรุปของรอบ (รอบผู้ใช้: mapped/unmapped/unmappedKeptCredential/rejected/absent/graceElapsed/deactivated/adminsDeactivated/refused/elevated/elevationsRefused) — ตอบ "รอบนี้ทำอะไรไป" ได้จากแถวเดียว';
 
 -- =============================================================================
@@ -859,15 +870,7 @@ $do$;
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS last_emp_id text;
 COMMENT ON COLUMN devices.last_emp_id IS 'คนล่าสุดที่ login บนเครื่องนี้ — ใช้ตามหาเครื่องที่หายพร้อมงานนับค้าง';
 
--- นาฬิกา grace ของ deactivation sweep (DB ที่สร้าง user_credentials ไว้ก่อนมีคอลัมน์นี้)
--- NULL = พบใน ERP อยู่ → ค่าเริ่มต้นของทุกแถวเดิมคือ "ยังไม่เริ่มจับเวลา" ซึ่งปลอดภัยที่สุด
-ALTER TABLE user_credentials ADD COLUMN IF NOT EXISTS absent_since timestamptz;
 
--- ตัวนับสรุปต่อรอบ sync (DB เก่าไม่มีคอลัมน์นี้ — แถวเดิมได้ '{}' ตาม DEFAULT)
-ALTER TABLE sync_runs ADD COLUMN IF NOT EXISTS metrics jsonb NOT NULL DEFAULT '{}'::jsonb;
-DO $do$ BEGIN
-  ALTER TABLE sync_runs ADD CONSTRAINT sync_runs_metrics_obj CHECK (jsonb_typeof(metrics) = 'object');
-EXCEPTION WHEN duplicate_object THEN NULL; END $do$;
 
 -- ── Backfill legacy PIN → user_credentials (ไม่มีใครถูกล็อกออกตอน deploy) ────────────
 -- ⚠️ ไฟล์นี้ถูก replay ทุก deploy — ทั้งสามก้อนด้านล่างจึงผูกกับด่านเดียวกัน:
