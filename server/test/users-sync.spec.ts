@@ -408,7 +408,7 @@ describeWithDb('sync ผู้ใช้จาก ERP — วงจรจริ�
         await makeSync({ ...BOOT, ...over }, registry).onModuleInit();
         const jobs = registry.getCronJobs();
         const names = [...jobs.keys()];
-        for (const job of jobs.values()) job.stop();
+        for (const job of jobs.values()) await job.stop();
         return names;
       };
 

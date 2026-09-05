@@ -26,6 +26,82 @@
 
 ---
 
+## ⛔ แก้ขอบเขตตามคำสั่งลูกค้า — 5 ก.ย. 2569 (ทับข้อความเดิมทุกจุดที่ขัดกัน)
+
+> คำสั่งจากลูกค้า (คำต่อคำ):
+> *"ไม่ต้องสนใจ Role ทำทั้งหมดให้อยู่ใน Role เดียวกัน แค่ต้องซิ้งเวลาเขาลาออก
+> กลับมาถ้าหาไม่เจอก็เข้าไม่ได้ Ok จัดการด่วน"*
+
+### R1 — ยกเลิกการแม็ป role ทั้งหมด
+
+`ERP_USER_LEVEL_ROLE_MAP` **ถูกลบออกจากระบบ** แทนที่ด้วย `ERP_USER_FIXED_ROLE` (enum
+`admin | staff | viewer`, ค่าเริ่มต้น **`staff`**) ซึ่งใช้กับ **ทุกแถว** ที่ ERP ส่งมาเหมือนกันหมด
+
+- เลือก `staff` เป็นค่าเริ่มต้นเพราะเป็น role ที่ "นับสต็อกและส่งผลนับได้" = งานจริงของแอปนี้
+  โดยไม่แจกสิทธิ์ admin ให้ทุกบัญชีของ ERP · สลับเป็น `admin`/`viewer` ได้ด้วยการแก้ค่าคอนฟิกบรรทัดเดียว
+- คีย์เก่าที่ยังตั้งค้างในไฟล์คอนฟิก **ทำให้ boot ไม่ขึ้น** พร้อมข้อความชี้ไปที่คีย์ใหม่ —
+  ปล่อยให้เป็นคีย์ที่ไม่มีใครอ่านไม่ได้ เพราะผู้ดูแลที่ยังเห็น `9=admin` จะเชื่อว่ากติกาเดิมยังทำงานอยู่
+
+### 🚨 R1 — ด่านที่หายไปพร้อมกับ allowlist (ต้องอ่านก่อนอนุมัติ)
+
+`ERP_USER_LEVEL_ROLE_MAP` เดิมทำ **สองหน้าที่พร้อมกัน** และแผนนี้เคยพึ่งหน้าที่ที่สองไว้เป็นคำตอบ
+ของข้อบกพร่องร้ายแรงข้อ #5:
+
+1. ตัดสินว่าใครได้ role อะไร ← หน้าที่นี้ถูกแทนด้วย `ERP_USER_FIXED_ROLE`
+2. **เป็นประตูเดียวที่กันบัญชี ERP ที่ไม่เกี่ยวกับคลังไม่ให้ล็อกอินเข้าแอปนี้** ← **ประตูนี้ไม่มีแล้ว**
+
+`menuuser` คือตารางบัญชีของ ERP **ทั้งบริษัท** (บัญชี · ขาย · จัดซื้อ · superuser) และ query
+ไม่มี `WHERE` กรองคลัง/แผนกเลย (U4/U7 ยังไม่มีคอลัมน์ให้กรอง) → **ตั้งแต่วันนี้ทุกบัญชีของ ERP
+ที่อ่านตัวตนออก จะได้บัญชีในแอปคลังนี้ทันที** ด้วย role เดียวกันหมด นี่คือผลที่ลูกค้าสั่งโดยตรง
+ไม่ใช่บั๊ก — และเป็นการ **ถอยกลับ** ของข้อบกพร่อง #5 ที่แผนนี้เคยปิดไว้
+
+ถ้าจะเอาประตูนั้นคืนโดยไม่ขัดคำสั่ง ทางเดียวคือกรองที่ฝั่ง ERP: ใส่ `WHERE` ในไฟล์ SQL ที่ชี้ด้วย
+`ERP_SQL_USERS_SQL_FILE` (ต้องได้คอลัมน์กรองจากเจ้าของ ERP ก่อน — คือ U4/U7 ที่ยังค้างอยู่)
+
+### R1 — ด่าน "ห้ามระบบเหลือศูนย์ admin" ถูกย้าย ไม่ได้ถูกลบ
+
+ด่าน boot เดิมคือ *"ต้องมีอย่างน้อย 1 level ที่ map เป็น admin"* ซึ่งใช้ต่อไม่ได้ (ไม่มี map แล้ว
+และค่า fixed role ที่ถูกต้องคือ `staff` → กฎเดิมจะบล็อก boot ตลอดกาล) กฎนั้นพิสูจน์อะไรไม่ได้จริง
+ตั้งแต่แรกด้วยซ้ำ: map ที่เขียน `9=admin` บน ERP ที่ไม่มีใคร level 9 ก็ผ่านด่าน ทั้งที่ไม่มี admin สักคน
+
+**ความจริงที่ต้องบังคับแทนคือ "มี credential break-glass `source='local'` ที่เป็น admin อยู่จริง"**
+ซึ่งเป็นข้อเท็จจริงใน DB ไม่ใช่ค่าในไฟล์คอนฟิก — `loadConfig()` เป็นฟังก์ชัน pure ที่ไม่ต่อ DB
+(และต้องเป็นแบบนั้นต่อไป) จึงตรวจที่นั่นไม่ได้ ด่านจึงอยู่สองจุดใน `sync.module.ts`:
+
+| จุด | เมื่อไม่มี break-glass admin | ทำไมไม่ล้ม boot ทั้งเซิร์ฟเวอร์ |
+|---|---|---|
+| `SyncService.onModuleInit()` | **ไม่ติดตั้ง cron รอบผู้ใช้** + log ระดับ error ที่บอกให้รัน `npm run create-admin` | API ที่ดับทั้งตัว = ล็อกคนทั้งคลังออก ซึ่งหนักกว่าเรื่องที่กำลังกันอยู่ (กติกาข้อ 3) · รอบ `items` ยังเดินตามปกติ |
+| ด่าน 0 ของ `runUsers()` | ปฏิเสธทั้ง run ไม่เขียน DB แม้แถวเดียว (บันทึกเป็น `failed`) | ครอบคลุม `POST /sync/users` ที่ยิงด้วยมือ ซึ่งข้ามด่าน boot ได้ |
+
+DB ตอบไม่ได้ตอน boot (ยังไม่พร้อม) = "ตอบไม่ได้" ไม่ใช่ "ไม่มี" → ตั้ง cron ตามปกติแล้วให้ด่าน 0
+ของแต่ละรอบเป็นคนตัดสิน (fail-safe ทั้งสองทิศ)
+
+### R2 — ปิดล็อกอินเมื่อหายจาก ERP (กลไกเดิม แต่ต้องพิสูจน์ว่ามีผลจริง)
+
+`absent_since` + เพดาน % + เพดานแถวขั้นต่ำ **คงไว้ทั้งหมด** สิ่งที่เพิ่มคือ:
+
+- `ABSENCE_GRACE_HOURS` ที่เคยฝังตายไว้ 24 ชม. กลายเป็นคอนฟิก `ERP_USER_ABSENCE_GRACE_HOURS`
+  **ค่าเริ่มต้นใหม่ = 2 ชม.** (`min: 1` — ตั้ง 0 ไม่ได้)
+- **เหตุผลของ 2 ชม.:** ลูกค้าสั่งว่า "หาไม่เจอก็เข้าไม่ได้" จึงบีบหน้าต่างลงให้ใกล้ทันทีที่สุด
+  เท่าที่ยังไม่ทิ้งการป้องกัน · cron รอบผู้ใช้เดินชั่วโมงละครั้ง (`17 * * * *`) → 2 ชม. แปลว่า
+  **"ต้องมีรอบอ่าน ERP อิสระอย่างน้อยสองรอบที่เห็นตรงกันว่าคนนี้หายไป"** ไม่ใช่เชื่อการอ่านครั้งเดียว
+- **ทำไมไม่ยอมให้เป็น 0:** การอ่าน ERP ที่ขาดหายรอบเดียว (query ถูกตัดทอน · ตารางถูกล็อก ·
+  deploy กลางคัน) จะปิดล็อกอินคนทั้งคลังทันที ซึ่งเสียหายหนักกว่าคนที่ลาออกแล้วยังเข้าได้อีกหนึ่ง
+  หน้าต่างมาก (กติกาข้อ 3) ผู้ดูแลบีบให้แคบลงได้ แต่ถอดออกไม่ได้
+- เทสต์ที่พิสูจน์ข้อกำหนดของลูกค้าตรง ๆ: `users-sync.spec.ts` →
+  *"⭐⭐ ลาออกแล้วล็อกอินไม่ได้จริง — พิสูจน์ผ่าน `AuthService.login` เส้นทางเดียวกับแอป"*
+  (รอบ 1 ล็อกอินได้ → รอบ 2 หายจาก ERP แต่ยัง **ต้อง** ล็อกอินได้ → พ้น grace → ล็อกอินไม่ได้
+  พร้อมทั้ง refresh token ที่ค้างอยู่ก็ใช้ต่อไม่ได้)
+
+### ตัวนับที่หายไปจาก `sync_runs.metrics`
+
+`unmapped` และ `unmappedKeptCredential` ถูกตัดทิ้ง (ไม่มี allowlist แล้ว จึงไม่มีแถวไหน "map ไม่ได้"
+ได้อีก) แถวเก่าใน `sync_runs` ยังมีคีย์นั้นตามเดิม — เป็น jsonb ไม่ย้อนไปแก้ประวัติ
+anomaly `erp_level_unmapped` / `erp_level_unmapped_kept_credential` และ audit action
+`users.erp_level_unmapped` ก็หายไปพร้อมกัน
+
+---
+
 ## ข้อที่ยังไม่รู้ — บล็อกการลงมือจริงบางส่วน (ต้องตอบก่อนหรือระหว่างลงมือ)
 
 **กติกาของหัวข้อนี้: ทุกข้อมีสมมติฐานที่แผนเดินต่อโดยไม่รอคำตอบ + สิ่งที่พังถ้าสมมติฐานผิด +
@@ -33,7 +109,7 @@
 
 | # | คำถาม | สมมติฐานที่แผนเดินต่อ | พังยังไงถ้าสมมติฐานผิด | จุดที่ได้คำตอบจริง |
 |---|---|---|---|---|
-| **U1** | `menuuser.user_level` ค่าไหนแปลว่า admin/staff/viewer? (ถามเจ้าของโปรเจกต์แล้ว ยังไม่ตอบ) | เป็นค่า scalar เล็ก ๆ (ตัวเลข/รหัสสั้น) ที่ map เข้า `ERP_USER_LEVEL_ROLE_MAP` ได้ตรงไปตรงมา | ถ้าเป็น bitmask/permission string ต่อโมดูล: ด่าน allowlist (ข้อ 5 ด้านบน) จะทำให้แทบไม่มีใคร map ได้เลย — sync ปฏิเสธการรันเพราะ map ว่าง (Phase 0 gate) ไม่ใช่ import ผิดเงียบ ๆ | ขั้น F-1 (`npm run verify:erp-users`) พิมพ์ `user_level` ที่พบจริงทุกค่าพร้อมจำนวนแถว **ก่อน**เขียนโค้ดฝั่ง mapping |
+| **U1** ✅ ตกไปแล้ว 5 ก.ย. 2569 | ~~`menuuser.user_level` ค่าไหนแปลว่า admin/staff/viewer?~~ ลูกค้าตอบด้วยการสั่งว่า **ไม่ต้องแม็ปเลย** — ทุกคนได้ `ERP_USER_FIXED_ROLE` เท่ากันหมด `user_level` ยังถูกเก็บลง `user_credentials.erp_user_level` ไว้ดูย้อนหลังเท่านั้น ข้อความเดิมด้านล่างเก็บไว้เป็นประวัติ | เป็นค่า scalar เล็ก ๆ (ตัวเลข/รหัสสั้น) ที่ map เข้า `ERP_USER_LEVEL_ROLE_MAP` ได้ตรงไปตรงมา | ถ้าเป็น bitmask/permission string ต่อโมดูล: ด่าน allowlist (ข้อ 5 ด้านบน) จะทำให้แทบไม่มีใคร map ได้เลย — sync ปฏิเสธการรันเพราะ map ว่าง (Phase 0 gate) ไม่ใช่ import ผิดเงียบ ๆ | ขั้น F-1 (`npm run verify:erp-users`) พิมพ์ `user_level` ที่พบจริงทุกค่าพร้อมจำนวนแถว **ก่อน**เขียนโค้ดฝั่ง mapping |
 | **U2** | `id_random` มีไว้ทำอะไร ในเมื่อ A4 บอกว่า verify เป็น string compare ตรง ๆ | ไม่มีบทบาทในการ verify — A4 สมบูรณ์ (ยืนยันจากโจทย์ผู้ใช้ตรง ๆ) | ถ้าจริง ๆ เป็น per-user salt ที่ front-end VFP ผสมก่อนเทียบ: ทุก hash ที่ sync สร้างจะ verify ไม่ผ่าน → **ล็อกอิน ERP ล้มเหลว 100%** ตั้งแต่ Phase 3 นัดแรก | เห็นทันทีที่ Phase 3 ทดสอบล็อกอิน ERP จริงครั้งแรก (ก่อน retire legacy PIN ใด ๆ — ยังย้อนกลับได้) |
 | **U3** | `menuuser.emp_id` (คอลัมน์ join กับ `Employee`) คือรหัสเดียวกับ `users.emp_id` ของเราไหม และผ่าน `^[A-Za-z0-9._-]{1,32}$`ไหม | ใช่ทั้งสองข้อ | ถ้ารูปแบบไม่ตรง: แถวนั้นถูกปฏิเสธเป็น anomaly (`rejected_row`) ไม่ล้มทั้ง run — แต่ถ้ารหัสตรงรูปแบบแต่**ไม่ใช่คนเดียวกับพนักงานเดิม**: เกิดบุคคลซ้ำ (มีประวัตินับของเก่าติดอยู่ที่รหัสเดิม แยกจากบัญชีที่ล็อกอินได้ใหม่) — เป็นความเสียหายที่ sync เองมองไม่เห็น | ขั้น F-1 เทียบ `menuuser.emp_id` กับ `users.emp_id` ที่มีอยู่แล้ว รายงานจำนวนที่ตรงกัน — ถ้าตรงกันน้อยกว่า ~90% ให้ **หยุด** ก่อน Phase 3 |
 | **U4 / U7** | ผู้ใช้ที่ sync มาควรได้ `warehouse_code` อะไร ในเมื่อ query ที่ให้มาไม่มีคอลัมน์คลังเลย และ `menuuser` ไม่มี `WHERE` กรองอะไรเลย (เป็นตาราง user ทั้ง ERP ไม่ใช่แค่คลัง) | deployment นี้เดินคลังเดียว (ตาม `WAREHOUSE_CODE` ที่ตั้งไว้แล้ว) ทุกบัญชีที่ sync มาได้รับค่าเดียวกันนี้ | ถ้า ERP instance นี้ให้บริการหลายคลังจริง: บัญชีฝ่ายบัญชี/ขาย/superuser ที่ไม่เกี่ยวกับคลังนี้เลยจะเห็นสต็อกคลังนี้ได้ถ้า `user_level` ของเขาบังเอิญ map มาเป็น staff/admin — **ด่าน allowlist (แก้ข้อบกพร่อง #5) ลดผลกระทบ**เพราะ level ที่ไม่ map ไว้จะไม่ได้บัญชีเลย แต่ไม่ได้แก้ปัญหาที่ต้นตอ | ต้องถามเจ้าของ ERP ตรง ๆ ก่อน Phase 3: "instance นี้เดินกี่คลัง มีคอลัมน์ site/dept ในตารางอื่นที่ join ได้ไหม" — **ไม่ใช่สิ่งที่ sync ตอบเองได้** ต้องเป็นการยืนยันจากคน |
@@ -82,8 +158,8 @@
 | 1 | เปลี่ยนชื่อฟิลด์ wire ล็อก fleet ที่ยังไม่อัปเดตออกทั้งหมด | **ไม่เปลี่ยนชื่อฟิลด์เลย** — คง `{empId, pin, deviceId, appVersion}` ทั้งคำขอและคง error code เดิม (`UNKNOWN_EMPLOYEE`/`INVALID_PIN`) เปลี่ยนแค่ regex ที่ผ่อนลง + ข้อความไทย ดู ขั้นตอนกลุ่ม B และ Cutover Phase 2 + ด่าน fleet-readiness ใหม่ (ขั้น F-2) ที่อิง `devices.app_version` ซึ่งมีข้อมูลจริงอยู่แล้ว |
 | 2 | legacy-pin retirement ลบทั้งก้อนไม่มีการ์ด เสี่ยงล้างทั้งคลังจากไฟล์ SQL ที่ถูกตัดทอน | ยุบ "retirement" ให้เป็น**กรณีพิเศษของ deactivation sweep เดียวกัน** ผูกกับทั้ง `ERP_USER_DEACTIVATE_MAX_PCT` (สัดส่วน) และ `ERP_USER_MIN_EXPECTED_ROWS` (จำนวนแถวขั้นต่ำ) พร้อมกัน ดู ขั้นตอนกลุ่ม C ข้อ C-7 |
 | 3 | schema.sql replay ชุบชีวิต credential ที่เพิ่ง deactivate กลับมา | backfill ใน migration เช็ค `NOT EXISTS (SELECT 1 FROM sync_runs WHERE kind='users' AND status='success')` ก่อนแทรกทุกครั้ง — ปิดตัวเองถาวรหลัง sync สำเร็จครั้งแรก ไม่ต้องสร้างตารางสถานะใหม่ ดู ขั้นตอนกลุ่ม A ข้อ A-4 |
-| 4 | ไม่มีด่าน last-admin ระหว่าง sync ทำให้ role map ที่ผิดพลาดเพียงเล็กน้อยลดสิทธิ์ admin ทุกคนพร้อมกัน | ด่านสามชั้น: (ก) `create-admin` เขียน `user_credentials.source='local'` ที่ sync ห้ามแตะ (ข) sync ปฏิเสธทั้ง run ถ้าไม่มี local-admin credential อยู่เลย (ค) การลดสิทธิ์ admin→อื่นต่อแถวเช็คด้วย `SELECT ... FOR UPDATE` เหมือน `MembersService.changeRole` เป๊ะ ดู ขั้นตอนกลุ่ม C ข้อ C-5, C-6 และกลุ่ม D ข้อ D-3 |
-| 5 | query ไม่มี `WHERE` เลย ดึงบัญชีทั้ง ERP (บัญชี, ขาย, superuser) เข้ามาเป็นผู้ใช้แอปคลัง | เปลี่ยนจาก "role-map-with-default-fallback" เป็น **allowlist ล้วน**: `user_level` ที่ไม่ได้ระบุใน `ERP_USER_LEVEL_ROLE_MAP` = ไม่ได้บัญชีเลย (ไม่ fallback เป็น viewer) ดู ขั้นตอนกลุ่ม C ข้อ C-4 และ Blocking Unknowns U4/U7 |
+| 4 | ไม่มีด่าน last-admin ระหว่าง sync ทำให้ role ที่ตั้งผิดลดสิทธิ์ admin ทุกคนพร้อมกัน | ด่าน**สี่**ชั้น: (ก) `create-admin` เขียน `user_credentials.source='local'` ที่ sync ห้ามแตะ (ข) `onModuleInit()` ไม่ติดตั้ง cron รอบผู้ใช้ถ้าไม่มี local-admin (เพิ่ม 5 ก.ย. 2569 — แทนกฎ boot เดิมที่อิงตารางแมป) (ค) sync ปฏิเสธทั้ง run ถ้าไม่มี local-admin credential อยู่เลย (ง) การลดสิทธิ์ admin→อื่นต่อแถวเช็คด้วย `SELECT ... FOR UPDATE` เหมือน `MembersService.changeRole` เป๊ะ ดู ขั้นตอนกลุ่ม C ข้อ C-5, C-6 และกลุ่ม D ข้อ D-3 |
+| 5 | query ไม่มี `WHERE` เลย ดึงบัญชีทั้ง ERP (บัญชี, ขาย, superuser) เข้ามาเป็นผู้ใช้แอปคลัง | ~~allowlist ล้วนผ่าน `ERP_USER_LEVEL_ROLE_MAP`~~ ⛔ **ถูกถอนออก 5 ก.ย. 2569 ตามคำสั่งลูกค้า** — ทุกบัญชีที่ ERP ส่งมาได้บัญชีในแอปคลังด้วย `ERP_USER_FIXED_ROLE` เท่ากันหมด ข้อบกพร่องนี้ **เปิดอยู่อีกครั้งโดยเจตนา** ทางเดียวที่ปิดได้โดยไม่ขัดคำสั่งคือใส่ `WHERE` ที่ฝั่ง ERP ผ่าน `ERP_SQL_USERS_SQL_FILE` (ต้องได้คอลัมน์กรองจาก U4/U7 ก่อน) ดูหัวข้อ "แก้ขอบเขตตามคำสั่งลูกค้า" ด้านบน |
 | 6 | deactivation guardrail คุมแค่ `source='erp'` แต่ retirement (แยกอีกทาง) ไม่มีการ์ดเลย | รวมเป็น sweep เดียวตามข้อ 2 — ไม่มี "อีกทาง" ที่ไม่มีการ์ดอีกต่อไป |
 | 7 | `create-admin` เรียก `ts-node src/cli/...` แต่คอนเทนเนอร์จริงไม่มีทั้ง `ts-node` (ถูก prune) และไม่มี `src/` (ไม่ถูก COPY) — break-glass ใช้งานจริงไม่ได้ | แก้ script ใน `package.json` เป็น `node dist/cli/create-admin.js` (ตรงกับที่คอมเมนต์ในไฟล์เดิมคาดไว้อยู่แล้ว) ยืนยันว่า `nest build` คอมไพล์ไฟล์นี้จริงจาก `tsconfig.json` (`include: ["src/**/*"]`) ดู ขั้นตอนกลุ่ม D ข้อ D-2 |
 | 8 | `... WHERE users.role IS DISTINCT FROM ... RETURNING role` ให้ role **ใหม่**เสมอ (เทียบกับตัวเองไม่มีทางต่าง) และ path ไม่เปลี่ยนอะไรเลยคืน 0 แถว — การเพิกถอน refresh token ไม่เคยทำงาน | เลิกพึ่ง `RETURNING` เปรียบเทียบ เปลี่ยนเป็น `SELECT emp_id, role FROM users WHERE emp_id=$1 OR role='admin' ORDER BY emp_id FOR UPDATE` อ่าน role เก่าไว้ในโค้ดแอปก่อน UPDATE แล้วเทียบเองใน JS — สำเนาจากรูปแบบเดียวกับ `MembersService.changeRole` (members.service.ts:200-220) เป๊ะ ดู ขั้นตอนกลุ่ม C ข้อ C-5 |
@@ -117,7 +193,7 @@ Postgres ของเราเอง ไม่ใช่ query สด) และ 
 - ไม่รองรับ ERP หลายคลัง/หลาย instance ในรอบนี้ (U4/U7 — ยังต้องยืนยันจากคนก่อน Phase 3)
 - ไม่เพิ่ม role ที่ 4 ให้ enum `user_role` (ยังคง admin/staff/viewer ตามเดิม — ถ้า U1 บังคับให้ต้องมี
   role ที่ 4 จริง ๆ เป็นแผนแยกต่างหาก)
-- ไม่ทำ UI สำหรับตั้งค่า `ERP_USER_LEVEL_ROLE_MAP` (เป็น env var ที่ตั้งตอน deploy ไม่ใช่ตั้งจากแอป)
+- ไม่ทำ UI สำหรับตั้งค่า `ERP_USER_FIXED_ROLE` (เป็นตัวแปรคอนฟิกที่ตั้งตอน deploy ไม่ใช่ตั้งจากแอป)
 - ไม่ทำ telemetry ส่งขึ้น server เพิ่มเติมสำหรับวัด fleet readiness — ใช้ `devices.app_version` /
   `devices.last_seen_at` ที่มีข้อมูลจริงอยู่แล้วจากทุก login/heartbeat
 
@@ -148,11 +224,11 @@ identifier) ไม่ใช่ "รหัสพนักงาน" เป๊ะ 
 |---|---|---|---|---|
 | 1 | credential อยู่ตารางไหน | ตารางใหม่ `user_credentials` (1:1 กับ `users.emp_id` ผ่าน UNIQUE) `users.pin_hash` เหลือไว้เฉยๆ (nullable) จนกว่าจะ cleanup | `count_submissions.emp_id` เป็น `ON DELETE RESTRICT` (ลบ `users` แถวที่เคยนับไม่ได้) แต่ credential ไม่มีใครอ้างอิงกลับ → ลบได้อิสระ = กลไก deactivate ตัวเดียวที่ทำได้จริงสำหรับ U6 | เขียนทับ `users.pin_hash` ตรง ๆ (พึ่งพากับตารางที่ 11 route `@RequireFreshRole` อ่านทุก request), ตารางแยกต่อ "แหล่งข้อมูล" (ซับซ้อนเกินจำเป็น) |
 | 2 | `users.emp_id` ของผู้ใช้ ERP ควรเป็นอะไร | `menuuser.emp_id` (คอลัมน์ join กับ `Employee` — คือรหัสพนักงานจริง) | ปรากฏใน `count_submissions`/`closed_variance`/`audit_log` ที่มีอยู่แล้วและเป็น append-only — เปลี่ยนความหมายทีหลังจะพังประวัติ | `menuuser.user_name` (เป็น login handle ที่เปลี่ยนชื่อได้ ไม่เหมาะเป็น anchor ถาวร) |
-| 3 | `user_level` → role | **Allowlist**: `ERP_USER_LEVEL_ROLE_MAP` ระบุ level→role ที่รู้จักเท่านั้น level อื่นไม่ได้บัญชีเลย (ไม่ fallback viewer) | แก้ข้อบกพร่อง #5 ตรง ๆ — `menuuser` ไม่มี WHERE กรองคลัง/แผนก การ fallback เป็น viewer เท่ากับให้ทุกบัญชี ERP (บัญชี, ขาย, ...) ล็อกอินอ่านสต็อกได้ | default เป็น viewer (ดีไซน์เดิม — ทำให้ query ที่ไม่มี WHERE นำเข้าทุกคนโดยไม่รู้ตัว) |
+| 3 | `user_level` → role | ⛔ **แก้ 5 ก.ย. 2569:** ไม่แม็ปแล้ว — ทุกคนได้ `ERP_USER_FIXED_ROLE` ค่าเดียวกัน (ค่าเริ่มต้น `staff`) ส่วน `user_level` ยังถูกเก็บลง `user_credentials.erp_user_level` ไว้ตอบ U1 แต่ไม่ตัดสินอะไร | คำสั่งลูกค้าตรง ๆ: "ทำทั้งหมดให้อยู่ใน Role เดียวกัน" · `staff` = สิทธิ์ที่นับสต็อกและส่งผลนับได้ ซึ่งคืองานจริงของแอป โดยไม่แจก admin ให้ทุกบัญชี ERP | ~~allowlist ล้วน~~ (ของเดิม — ปิดข้อบกพร่อง #5 ได้ แต่ขัดคำสั่งลูกค้า), fallback เป็น viewer (นำเข้าทุกคนเหมือนกันแต่ให้สิทธิ์ต่ำจนนับสต็อกไม่ได้ = ไม่ตอบโจทย์งานจริง) |
 | 4 | sync ลบผู้ใช้ที่หายจาก ERP ไหม | ไม่แตะ `users` เลย — ลบเฉพาะแถว `user_credentials` | ลบ `users` ไม่ได้จริงถ้าเคยนับ (FK RESTRICT) การลบ credential พอสำหรับ "ล็อกอินไม่ได้" ซึ่งคือเป้าหมายจริงของ U6 | เพิ่มคอลัมน์ `disabled_at` ใหม่ (schema ใหญ่ขึ้นโดยไม่จำเป็น ในเมื่อ absence ของ credential สื่อความหมายเดียวกันอยู่แล้ว) |
 | 5 | legacy-pin retirement | **ไม่มีขั้นตอนแยก** — เป็นกรณีพิเศษของ deactivation sweep เดียวกัน (ดูข้อ C-7) | ข้อบกพร่อง #2/#6 คือ retirement แยกจาก sweep แล้วไม่มีการ์ด รวมเป็นเส้นทางเดียวปิดช่องนั้นทั้งหมด | DELETE ท้าย run ที่สำเร็จ (ของเดิม — ไม่มีเพดานสัดส่วน ไม่มีเพดานจำนวนแถว) |
 | 6 | detect รหัสผ่านเปลี่ยนไหมโดยไม่ rehash ทุกรอบ | `argon2.verify(existing_hash, erp_password)` ก่อนเสมอ — ตรงกันจริง = แตะแค่ `erp_last_seen_at` | argon2 hash มี salt เทียบ hash ตรง ๆ ไม่ได้ — verify คือวิธีเดียวที่ถูกต้อง และช่วยไม่ให้ revoke refresh token ทุกเครื่องทุกชั่วโมงโดยไม่จำเป็น | เก็บ HMAC fingerprint ไว้เทียบเร็ว ๆ (เป็น digest เร็วของ secret เอนโทรปีต่ำ ถ้า DB+key รั่วพร้อมกัน crack ได้เร็วกว่า argon2 มาก) |
-| 7 | ตรวจ "ต้องมี admin เหลืออย่างน้อย 1" ระหว่าง sync อย่างไร | สามชั้น: create-admin เขียน `source='local'` ที่ sync ห้ามแตะ + sync ปฏิเสธทั้ง run ถ้าไม่มี local-admin เลย + ต่อแถวใช้ `SELECT...FOR UPDATE` เหมือน `changeRole` | ข้อบกพร่อง #4/#7 — เดิมไม่มีด่านนี้เลย และ break-glass ที่อ้างไว้ใช้งานจริงไม่ได้ (ts-node ไม่อยู่ใน runtime image) | เช็คแค่ "map ต้องไม่ว่าง" (ยังปล่อยให้ map ที่ผิดพลาดเล็กน้อยแต่ครบทุก key ลดสิทธิ์ admin ทุกคนพร้อมกันได้) |
+| 7 | ตรวจ "ต้องมี admin เหลืออย่างน้อย 1" อย่างไร | สี่ชั้น: `create-admin` เขียน `source='local'` ที่ sync ห้ามแตะ + `onModuleInit()` ไม่ตั้ง cron รอบผู้ใช้ถ้าไม่มี local-admin + sync ปฏิเสธทั้ง run ถ้าไม่มี + ต่อแถวใช้ `SELECT...FOR UPDATE` เหมือน `changeRole` | ข้อบกพร่อง #4/#7 · ตั้งแต่ 5 ก.ย. 2569 ERP ให้ role เดียวกันทุกคน จึงไม่มีทางผลิต admin คนใหม่ได้เอง — break-glass กลายเป็น **ทางเข้าระดับ admin ทางเดียวของระบบ** ไม่ใช่แค่กุญแจสำรอง | ~~กฎ boot "ต้องมี level ที่ map เป็น admin"~~ (พิสูจน์อะไรไม่ได้จริง: map ที่เขียน `9=admin` บน ERP ที่ไม่มีใคร level 9 ก็ผ่าน), ล้ม boot ทั้งเซิร์ฟเวอร์เมื่อไม่มี break-glass (API ที่ดับ = ล็อกคนทั้งคลังออก หนักกว่าเรื่องที่กันอยู่) |
 | 8 | credential ที่มีอยู่แล้วตอน sync มาเจอ (มี emp_id ซ้ำ) | อัปเดตในที่ (`UPDATE ... WHERE emp_id=$1`) เปลี่ยน `login_name`/`source`/`secret_hash` ไปเลย ไม่ลบแล้วสร้างใหม่ | คนที่มี legacy_pin เดิมแล้วปรากฏใน ERP รอบแรก (ไม่ว่าจะใช้ user_name อะไร) ถูก "เปลี่ยนสัญชาติ" เป็น erp ในที่เดียว ไม่ทิ้งแถวเก่าให้ sweep ไปเจอทีหลัง (ผลข้างเคียงที่ถูกต้องคือ retirement เหลือแค่คนที่ไม่เคยโผล่ใน ERP เลย) | ลบแถวเก่าทิ้งแล้ว INSERT ใหม่ (เสีย `secret_rotated_at` history และเสี่ยง FK ชั่วครู่) |
 | 9 | ฟิลด์ wire ของ login เปลี่ยนชื่อไหม | **ไม่เปลี่ยน** (`empId`/`pin`) เปลี่ยนแค่ zod schema ภายใน (คลาย regex) | ข้อบกพร่อง #1 — fleet ไม่ได้อัปเดตพร้อมกัน (sideload manual) เปลี่ยนชื่อฟิลด์ = APK เก่าได้ `400 VALIDATION` ทันทีที่ deploy โดยไม่มี escape hatch (`GET /meta` ไม่มีจริง, `APP_MIN_VERSION` ไม่เคยถูกบังคับใช้) | เปลี่ยนเป็น `{username, password}` (ของดีไซน์ที่ชนะเดิม — สวยกว่าแต่ทำลาย N-1 compatibility ที่ `docs/architecture.md:292` วางกฎไว้ชัดสำหรับเส้นทางวิกฤต) |
 | 10 | error code ของ login เปลี่ยนไหม | **ไม่เปลี่ยน** (`UNKNOWN_EMPLOYEE`, `INVALID_PIN` เหมือนเดิมทุกตัว) เปลี่ยนแค่ข้อความไทย | เหตุผลเดียวกับข้อ 9 — แอปเก่าเช็ค `e.code == codeInvalidPin` เพื่อเคลียร์ช่อง ถ้าเปลี่ยน code ทั้งฟีเจอร์ "เคลียร์ช่องเมื่อผิด" หายไปเงียบ ๆ บนเครื่องที่ยังไม่อัปเดต | เปลี่ยนเป็น `UNKNOWN_USER`/`INVALID_CREDENTIALS` (ของดีไซน์เดิม) |
@@ -569,8 +645,14 @@ ERP_USER_SYNC_ENABLED: envBool(false,
 ERP_USER_SYNC_CRON: envStr('cron expression ของรอบ sync ผู้ใช้', { pattern: CRON_RE })
   .default('17 * * * *'),  // offset จาก items */30 กัน ERP_SQL_POOL_MAX=3 ชนกัน
 
-/** "level=role,level=role" — level ที่ไม่ระบุ = ไม่ได้บัญชีเลย (allowlist, ไม่ fallback viewer) */
-ERP_USER_LEVEL_ROLE_MAP: envStr('เช่น 9=admin,5=staff,1=viewer').optional(),
+/**
+ * ⛔ แก้ 5 ก.ย. 2569 — `ERP_USER_LEVEL_ROLE_MAP` ถูกลบ แทนด้วย role เดียวของทุกคน
+ * (คีย์เก่าที่ตั้งค้างไว้ = boot ไม่ขึ้น พร้อมข้อความชี้ไปคีย์ใหม่)
+ */
+ERP_USER_FIXED_ROLE: envEnum(RoleSchema.options, '...').default('staff'),
+
+/** หน้าต่าง grace ของ absent_since — เดิมฝังตาย 24 ชม. ใน sync.module.ts */
+ERP_USER_ABSENCE_GRACE_HOURS: envInt({ min: 1, max: 720, default: 2, hint: '...' }),
 
 ERP_USER_DEACTIVATE_MAX_PCT: envInt({
   min: 1, max: 100, default: 10,
@@ -584,11 +666,10 @@ ERP_USER_MIN_EXPECTED_ROWS: envInt({ min: 1, max: 100_000 }).optional(),
 Cross-field validator (~env.config.ts, ใกล้ `checkSqlSource` เดิม):
 
 ```ts
+// ⛔ แก้ 5 ก.ย. 2569 — กฎเรื่อง role map ถูกถอดทั้งหมด เหลือเพียงเพดานแถวขั้นต่ำ
+// ด่าน "ต้องมี admin เหลืออย่างน้อย 1" ย้ายไป sync.module.ts (onModuleInit + ด่าน 0)
+// เพราะเป็นข้อเท็จจริงใน DB ไม่ใช่ค่าในไฟล์คอนฟิก — ห้ามเติมกฎเรื่อง admin กลับมาที่นี่
 if (config.ERP_USER_SYNC_ENABLED) {
-  if (!config.ERP_USER_LEVEL_ROLE_MAP?.trim()) {
-    addIssue('ERP_USER_LEVEL_ROLE_MAP',
-      'ต้องตั้งเมื่อ ERP_USER_SYNC_ENABLED=true (ว่าง = sync ปฏิเสธการรันเสมอ — ตั้งใจ fail-safe)');
-  }
   if (config.ERP_USER_MIN_EXPECTED_ROWS === undefined) {
     addIssue('ERP_USER_MIN_EXPECTED_ROWS',
       'ต้องตั้งเมื่อ ERP_USER_SYNC_ENABLED=true — ใช้ผลจาก npm run verify:erp-users (Phase 0)');
@@ -640,14 +721,14 @@ private async runUsers(triggeredBy: string): Promise<SyncRunResult> {
       });
     }
 
-    const roleMap = this.parseRoleMap(this.cfg.ERP_USER_LEVEL_ROLE_MAP); // Map<string, Role>
+    // ⛔ แก้ 5 ก.ย. 2569 — เดิมเป็น `this.parseRoleMap(this.cfg.ERP_USER_LEVEL_ROLE_MAP)`
+    const fixedRole = this.fixedRole(); // Role เดียวของทุกแถวในรอบนี้
     const rows = await this.erp.fetchUsers();
     const minExpected = this.cfg.ERP_USER_MIN_EXPECTED_ROWS;
     const rowCountOk = rows.length >= minExpected;
 
-    const seenEmpIds = new Set<string>();     // เฉพาะแถวที่ผ่าน validation + มี role mapped
+    const seenEmpIds = new Set<string>();     // เฉพาะแถวที่ผ่าน validation (ไม่มีด่าน role map แล้ว)
     const seenLoginNames = new Set<string>(); // กันชนกันเองภายในรอบเดียว
-    const unmappedLevelsSeen = new Set<string>();
     let upserted = 0;
 
     for (const row of rows) {
@@ -664,15 +745,9 @@ private async runUsers(triggeredBy: string): Promise<SyncRunResult> {
       }
       seenLoginNames.add(login);
 
-      const mappedRole = roleMap.get(row.userLevel);
-      if (!mappedRole) {
-        // ── Allowlist ล้วน (แก้ข้อบกพร่อง #5) — ไม่ได้บัญชีเลย ไม่ fallback viewer ──
-        if (!unmappedLevelsSeen.has(row.userLevel)) {
-          unmappedLevelsSeen.add(row.userLevel);
-          await this.audit('scheduler', 'users.erp_level_unmapped', { userLevel: row.userLevel });
-        }
-        continue;
-      }
+      // ⛔ แก้ 5 ก.ย. 2569 — ด่าน allowlist ทั้งบล็อกถูกถอดออกตามคำสั่งลูกค้า
+      //    ทุกแถวที่ผ่านด่านรูปแบบได้ role เดียวกันหมด (ดูหัวข้อ "ด่านที่หายไป" ต้นไฟล์)
+      const mappedRole = fixedRole;
       seenEmpIds.add(empCode);
 
       await this.db.transaction(async (client) => {
@@ -1090,7 +1165,9 @@ SQL
 
 รัน `npm run verify:erp-users` (ขั้น F-1) ตอบ U1 (ค่า `user_level` จริง), U3 (รูปแบบ/ตรงกับ `users`
 เท่าไร) จากข้อมูลจริง **ห้ามไปต่อ Phase 3 จนกว่า:**
-- มีอย่างน้อย 1 ค่า `user_level` ที่ตั้งใจ map เป็น `admin` ใน `ERP_USER_LEVEL_ROLE_MAP`
+- ~~มีอย่างน้อย 1 ค่า `user_level` ที่ตั้งใจ map เป็น `admin`~~ ⛔ **ไม่ใช้แล้ว 5 ก.ย. 2569** —
+  แทนด้วย: ยืนยันว่า `ERP_USER_FIXED_ROLE` คือ role ที่ตั้งใจให้ **ทุกคน** ได้ (ค่าเริ่มต้น `staff`)
+  และรับทราบว่าทุกบัญชีใน `menuuser` จะได้บัญชีในแอปคลังนี้ (ดูหัวข้อ "ด่านที่หายไป" ด้านบน)
 - % ที่ `menuuser.emp_id` ตรงกับ `users.emp_id` เดิม อยู่ในระดับที่สมเหตุสมผล (ถ้าต่ำผิดปกติ ให้
   หยุดคุยกับเจ้าของ ERP ก่อน — นี่คือสัญญาณของ U3 ที่ผิดสมมติฐาน)
 - เจ้าของ ERP ยืนยันตรง ๆ เรื่อง U4/U7 (กี่คลัง มีคอลัมน์กรองไหม)
@@ -1115,16 +1192,23 @@ Server ใหม่อ่านจาก `user_credentials` แล้ว (B-2) `
 เก่า ห้ามไปต่อ** — เหตุผล: หน้าจอเก่าเป็น numeric keypad พิมพ์ ERP username จริงไม่ได้เลย ไม่ว่า wire
 จะ compat แค่ไหน
 
-**ด่านที่ 2 — Break-glass admin:** ยืนยันมี `user_credentials.source='local'` ของ admin อย่างน้อย 1
-คน (รัน `npm run create-admin` ถ้ายังไม่มี — D-3) — sync จะปฏิเสธรันทั้ง run ถ้าไม่มี (C-7 ด่าน 0)
+**ด่านที่ 2 — Break-glass admin (ยกระดับเป็นด่านที่สำคัญที่สุด):** ยืนยันมี
+`user_credentials.source='local'` ของ admin อย่างน้อย 1 คน (รัน `npm run create-admin` ถ้ายังไม่มี —
+D-3) ตั้งแต่ 5 ก.ย. 2569 ERP ให้ role เดียวกันทุกคน → **นี่คือทางเข้าระดับ admin ทางเดียวของระบบ**
+ถ้าไม่มี: server จะไม่ติดตั้ง cron รอบผู้ใช้เลย (log ระดับ error ตอน boot) และ `POST /sync/users`
+ที่ยิงด้วยมือจะถูกปฏิเสธทั้ง run (C-7 ด่าน 0)
 
-**ด่านที่ 3 — Config ครบ:** `ERP_USER_LEVEL_ROLE_MAP` ตั้งจากผล Phase 0 แล้ว, `ERP_USER_MIN_EXPECTED_
-ROWS` ตั้งจากจำนวนแถวที่ F-1 รายงาน (server บูตไม่ขึ้นถ้าไม่ตั้งทั้งคู่ — C-5)
+**ด่านที่ 3 — Config ครบ:** `ERP_USER_MIN_EXPECTED_ROWS` ตั้งจากจำนวนแถวที่ F-1 รายงาน (server
+บูตไม่ขึ้นถ้าไม่ตั้ง — C-5) · ตรวจ `ERP_USER_FIXED_ROLE` และ `ERP_USER_ABSENCE_GRACE_HOURS` ว่าเป็น
+ค่าที่ตั้งใจจริง (ทั้งคู่มีค่าเริ่มต้นที่ปลอดภัยอยู่แล้ว: `staff` และ 2 ชม.) · **ห้ามมี
+`ERP_USER_LEVEL_ROLE_MAP` ค้างอยู่** — ถ้ามี server จะบูตไม่ขึ้นพร้อมข้อความชี้ไปคีย์ใหม่
 
 **ผ่านทั้ง 3 ด่านแล้ว:** ตั้ง `ERP_USER_SYNC_ENABLED=true`, restart api, กด `POST /sync/users` ครั้ง
 แรกด้วยมือ **อ่าน `GET /sync/runs` ก่อนทำอะไรต่อเสมอ**: เทียบ `rows_read` กับตัวเลขที่ F-1 รายงาน,
-ดู `anomalies` ทุกตัว (`rejected_row`, `duplicate_login`, `erp_level_unmapped`,
-`deactivate_guardrail_blocked`, `row_count_below_floor`)
+ดู `anomalies` ทุกตัว (`rejected_row`, `duplicate_login`, `login_name_conflict`,
+`blank_name_thai`, `elevate_guardrail_blocked`, `deactivate_guardrail_blocked`,
+`row_count_below_floor`, `admin_credentials_deactivated`, `admin_credential_floor_blocked`)
+⚠️ `erp_level_unmapped` / `erp_level_unmapped_kept_credential` ไม่มีแล้วตั้งแต่ 5 ก.ย. 2569
 
 ต่อคนที่มี `emp_id` ตรงกับแถวใน ERP: credential ของเขาถูกเปลี่ยนในที่ (ไม่ว่า `user_name` จะเป็นอะไร)
 — **ตั้งแต่วินาทีนั้น PIN เดิมใช้ไม่ได้ รหัสผ่าน ERP ใช้ได้** เป็นคัตโอเวอร์ต่อคน อะตอมมิก ตรงกับ
@@ -1257,17 +1341,25 @@ constraint A2 (แทนที่ ไม่ใช่คู่ขนาน) ค�
     `refresh_tokens` ไม่ถูก revoke, `users.updated_at` ไม่ขยับ
   - **CHANGED PASSWORD**: รหัสผ่านเปลี่ยนใน mock ERP → `secret_hash` เปลี่ยน,
     `secret_rotated_at` ขยับ, **ทุก** refresh token ของ emp_id นั้นถูก revoke
-  - **ROLE CHANGE — พิสูจน์บั๊ก RETURNING เดิมถูกแก้จริง**: user_level เปลี่ยนจาก map เป็น admin →
-    map เป็น staff → `role_version` เพิ่ม 1 พอดี **และ** `refresh_tokens.revoked_at` ถูกตั้งค่าจริง
-    (นี่คือเทสต์ที่ต้องพิสูจน์ว่า "แดง" ถ้าใช้ `RETURNING` แบบเดิมของดีไซน์ที่ชนะ ก่อนจะยอมรับว่าผ่าน)
-  - **PROMOTION ไม่ revoke**: staff → admin ไม่ตัด refresh token
-  - **LAST-ADMIN FLOOR — ต่อแถว**: admin คนเดียวที่เหลือ, ERP ส่ง user_level ที่ map เป็น staff มา →
+  - **ROLE CHANGE — พิสูจน์บั๊ก RETURNING เดิมถูกแก้จริง**: `ERP_USER_FIXED_ROLE` เปลี่ยนจาก
+    `admin` → `staff` ระหว่างสองรอบ → `role_version` เพิ่ม 1 พอดี **และ**
+    `refresh_tokens.revoked_at` ถูกตั้งค่าจริง (เทสต์นี้ต้อง "แดง" ถ้าใช้ `RETURNING` แบบเดิม)
+  - **PROMOTION ไม่ revoke**: `viewer` → `staff` ไม่ตัด refresh token
+  - **LAST-ADMIN FLOOR — ต่อแถว**: admin คนเดียวที่เหลือ, `ERP_USER_FIXED_ROLE` ไม่ใช่ admin →
     role ยังเป็น `admin` (ไม่ถูกลด) + anomaly `users.erp_last_admin_floor_blocked` ถูก audit
   - **NO LOCAL ADMIN → ปฏิเสธทั้ง run**: ลบ credential source='local' ทั้งหมดก่อนรัน → status
     `'failed'`, `rowsUpserted=0` (ไม่มีการเขียนอะไรเลยแม้แต่แถวเดียว)
-  - **ALLOWLIST — user_level ไม่ map**: ERP ส่งแถวที่ user_level ไม่อยู่ใน map → ไม่มี `users`/
-    `user_credentials` แถวใหม่ถูกสร้าง + anomaly `users.erp_level_unmapped` หนึ่งรายการต่อค่า level
-    ที่ต่างกัน (ไม่ใช่ต่อแถว) แม้มี 50 แถวระดับเดียวกันที่ไม่ map
+  - ~~**ALLOWLIST — user_level ไม่ map**~~ ⛔ **ถูกแทน 5 ก.ย. 2569** ด้วยสามเคสใหม่:
+    (ก) ทุก `user_level` ได้ role เดียวกัน และบัญชีที่ allowlist เคยกันไว้ **ได้บัญชีแล้ว**
+    (ข) เปลี่ยน `ERP_USER_FIXED_ROLE` เป็น `viewer` → ทุกคนเป็น viewer
+    (ค) แถวที่ยังอยู่ใน ERP แต่ตกด่านรูปแบบ → ห้ามลบ ห้ามเริ่มนาฬิกา grace แม้รันซ้ำ
+        (รูปแบบที่เหลือของบั๊กเดิม "sweep ใช้ชุดคนที่เขียนสำเร็จแทนชุดคนที่ยังอยู่ใน ERP")
+  - **ด่าน boot ฝั่ง sync**: `ERP_USER_SYNC_ENABLED=true` แต่ไม่มี break-glass admin →
+    `onModuleInit()` ไม่ติดตั้ง cron `kk:sync:users` แต่ `kk:sync:items` ยังตั้งตามปกติ
+  - **ปิดล็อกอินจริงผ่านเส้นทาง login**: อยู่ใน ERP → ล็อกอินได้ · หายไปแต่ยังไม่พ้น grace →
+    **ยังล็อกอินได้** · พ้น grace → `AuthError` code `UNKNOWN_EMPLOYEE` + refresh token ใช้ต่อไม่ได้
+  - **grace มาจากคอนฟิกจริง**: ตั้ง `ERP_USER_ABSENCE_GRACE_HOURS=5` → หาย 3 ชม. ไม่ลบ ·
+    หาย 6 ชม. ลบ (แดงทันทีถ้ามีใครเอาค่า 24 ชม. กลับไปฝังตาย)
   - **ROW-COUNT FLOOR**: mock ERP คืนแถวน้อยกว่า `ERP_USER_MIN_EXPECTED_ROWS` → status `'partial'`,
     `rowsTombstoned=0` แน่นอน (ไม่ deactivate อะไรเลยแม้จะมี candidate ที่ "หายไป")
   - **DEACTIVATE GUARDRAIL**: mock ERP หาย 30% ของ credential ที่มีอยู่ (เกิน default 10%) →
