@@ -18,7 +18,9 @@
 --
 -- คุณสมบัติของไฟล์นี้:
 --   • idempotent ทั้งไฟล์ (CREATE ... IF NOT EXISTS + DO block สำหรับ enum/trigger/index)
---   • รันซ้ำได้ปลอดภัย → ใช้เป็น migration แรก (รันใต้ pg advisory lock ใน entrypoint)
+--   • รันซ้ำได้ปลอดภัย → เป็นทั้ง schema แรกและทุก migration หลังจากนั้น
+--     ⚠️ ไม่มีอะไรรันไฟล์นี้ให้อัตโนมัติตอน boot — มนุษย์รัน `npm run migrate`
+--     (psql -f db/schema.sql) เองก่อน build/สลับคอนเทนเนอร์เสมอ (deploy/update.sh ขั้น 4)
 --   • เวลาทุกคอลัมน์เป็น timestamptz (server ตั้ง TZ=Asia/Bangkok, การเรียงลำดับใช้ UTC จริง)
 --   • ยอด/จำนวนเป็น numeric(18,3) — ERP ใช้หน่วยเป็นทศนิยม (กส./ถัง/มัด)
 --
@@ -55,6 +57,18 @@ DO $do$ BEGIN
   -- count_sessions = mirror ของรอบนับ ERP (tbl_CountHdr) จึงมี kind แยกจาก items/stock
   CREATE TYPE sync_kind AS ENUM ('items', 'stock', 'count_sessions');
 EXCEPTION WHEN duplicate_object THEN NULL; END $do$;
+
+-- ค่าที่ 4 ของ sync_kind (รอบ sync ผู้ใช้จาก menuuser) — ต้องเป็น statement เดี่ยวระดับบนสุด
+-- ห้ามห่อ DO block: ALTER TYPE ... ADD VALUE รันในฟังก์ชัน/DO block ไม่ได้ และมี IF NOT EXISTS
+-- ในตัวอยู่แล้วจึงไม่ต้องดัก duplicate_object เอง
+--
+-- ⚠️ ค่าที่เพิ่งเพิ่มด้วย ALTER TYPE ห้ามถูกใช้ "เป็นค่า enum" ในทรานแซกชันเดียวกัน
+--    (Postgres: `unsafe use of new value "users" of enum type sync_kind`) — ด่านนี้ไม่หายไป
+--    แม้ psql -f จะ autocommit ทีละ statement เพราะ **ผู้เรียกอื่นส่งทั้งไฟล์เป็นก้อนเดียว**:
+--    `applySchema()` ของชุดเทสต์ยิง db.query(ทั้งไฟล์) = ทรานแซกชันโดยปริยายอันเดียว
+--    ทุกจุดที่ต้องอ้าง 'users' ท้ายไฟล์จึงเทียบบน `kind::text` (ค่าคงที่ข้อความล้วน
+--    ไม่ถูก resolve เป็นค่า enum) — ความหมายเท่าเดิมเป๊ะ แต่ replay ได้ทั้งสองแบบการเรียก
+ALTER TYPE sync_kind ADD VALUE IF NOT EXISTS 'users';
 
 DO $do$ BEGIN
   -- partial = ดึงได้ไม่ครบ → ห้ามขยับ cursor, ห้าม tombstone (erp-integration.md §5)
@@ -132,6 +146,63 @@ CREATE TABLE IF NOT EXISTS users (
 COMMENT ON TABLE  users IS 'พนักงาน + credential PIN (argon2id + server pepper) — system of record ของสิทธิ์ ห้ามเชื่อ role จาก JWT อย่างเดียว';
 COMMENT ON COLUMN users.role_version IS 'bump ทุกครั้งที่เปลี่ยน role — endpoint blast radius สูงต้องตรวจค่านี้กับ DB ทุกครั้ง';
 COMMENT ON COLUMN users.throttle_until IS 'escalating delay ต่อ empId (1s/5s/30s/...) แทนการล็อคตายตัว — กันคนอื่นยิง PIN ผิดเพื่อล็อคพนักงาน';
+
+-- 3.1b user_credentials -------------------------------------------------------
+-- แยกจาก users โดยตั้งใจ: users คือ system of record ของ "สิทธิ์" (มี FK 9+ ตารางชี้มา
+-- และ count_submissions เป็น ON DELETE RESTRICT → ลบแถว users ที่เคยนับไม่ได้เลย)
+-- ส่วนแถวนี้คือ "ตัวยืนยันตัวตน" ที่ไม่มีใครอ้างอิงกลับ → ลบได้อิสระ = กลไกปิดล็อกอิน
+-- ของพนักงานที่ออกจาก ERP แล้ว โดยไม่แตะประวัติการนับแม้แถวเดียว
+DO $do$ BEGIN
+  -- erp = sync เป็นเจ้าของ (ห้ามแตะโดยมนุษย์) · local = break-glass จาก create-admin (sync ห้ามแตะ)
+  -- legacy_pin = PIN เดิมที่ backfill มาตอน migrate — เก็บกวาดเองหลัง sync ผู้ใช้สำเร็จครั้งแรก
+  CREATE TYPE user_credential_source AS ENUM ('erp', 'local', 'legacy_pin');
+EXCEPTION WHEN duplicate_object THEN NULL; END $do$;
+
+CREATE TABLE IF NOT EXISTS user_credentials (
+  login_name        text        PRIMARY KEY,
+  emp_id            text        NOT NULL UNIQUE
+                                 REFERENCES users(emp_id) ON UPDATE CASCADE ON DELETE CASCADE,
+  secret_hash       text        NOT NULL,
+  source            user_credential_source NOT NULL,
+  secret_rotated_at timestamptz NOT NULL DEFAULT now(),
+  erp_user_level    text,
+  erp_last_seen_at  timestamptz,
+  -- นาฬิกา grace ของการปิดล็อกอิน: ตั้งรอบแรกที่ "ไม่พบใน ERP" ล้างทันทีที่กลับมาพบ
+  -- ลบแถวได้ต่อเมื่อค้างค่านี้นานกว่าเกณฑ์ → รอบเดียวที่ ERP ตอบเพี้ยนลบใครไม่ได้
+  absent_since      timestamptz,
+  created_at        timestamptz NOT NULL DEFAULT now(),
+  updated_at        timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT user_credentials_login_fmt CHECK (
+    login_name = btrim(login_name) AND login_name = lower(login_name)
+    AND length(login_name) BETWEEN 1 AND 64),
+  CONSTRAINT user_credentials_hash_argon CHECK (secret_hash LIKE '$argon2id$%'),
+  CONSTRAINT user_credentials_erp_fields CHECK (
+    (source = 'erp') = (erp_user_level IS NOT NULL AND erp_last_seen_at IS NOT NULL))
+);
+
+COMMENT ON TABLE user_credentials IS
+  'ตัวยืนยันตัวตน 1 แถวต่อคน แยกจาก users โดยตั้งใจ — sync เขียนที่นี่ authz อ่านที่ users '
+  'ลบแถวนี้ = ปิดล็อกอินโดยไม่แตะ FK ของ users.emp_id เลย (ดู U6)';
+COMMENT ON COLUMN user_credentials.login_name IS
+  'สิ่งที่ผู้ใช้พิมพ์จริงตอนล็อกอิน (lower แล้ว) — legacy/local = lower(emp_id), ERP = lower(menuuser.user_name) จึงเป็น PK แทน emp_id';
+COMMENT ON COLUMN user_credentials.erp_user_level IS
+  'ค่าดิบจาก menuuser.user_level — เก็บไว้ตอบ U1 จากข้อมูลจริงได้ทุกเมื่อ';
+COMMENT ON COLUMN user_credentials.absent_since IS
+  'รอบแรกที่ไม่พบคนนี้ในผล ERP (NULL = พบอยู่) — ลบได้ต่อเมื่อค้างนานเกินเกณฑ์ grace เท่านั้น '
+  'ไม่เกี่ยวกับ user_level ที่ map ไม่ได้ (นั่นคือปัญหา config ห้ามลบ credential เด็ดขาด)';
+
+DROP TRIGGER IF EXISTS trg_user_credentials_touch ON user_credentials;
+CREATE TRIGGER trg_user_credentials_touch BEFORE UPDATE ON user_credentials
+  FOR EACH ROW EXECUTE FUNCTION touch_updated_at();
+
+-- users.pin_hash ถูกแทนที่ด้วย user_credentials.secret_hash แล้ว → ผ่อนเป็น nullable
+-- (ไม่ลบข้อมูล ไม่ลบคอลัมน์ — ค่าเดิมทุกแถวคือทางถอยฉุกเฉินของทั้งแผนจนถึง Phase 5)
+-- idempotent: replay ซ้ำเป็น no-op เพราะคอลัมน์ nullable อยู่แล้ว ไม่ error
+-- CHECK users_pin_hash_argon ไม่ต้องแก้ — NULL LIKE '...' ประเมินเป็น NULL ซึ่ง CHECK ถือว่าผ่าน
+ALTER TABLE users ALTER COLUMN pin_hash DROP NOT NULL;
+COMMENT ON COLUMN users.pin_hash IS
+  'DEPRECATED — ย้ายไป user_credentials.secret_hash เก็บไว้ชั่วคราวเป็นทางถอยฉุกเฉิน '
+  'ห้ามใช้เขียนใหม่ ลบคอลัมน์นี้ในคอมมิตแยกหลัง Phase 5 เท่านั้น (ดู Cutover)';
 
 -- 3.2 devices -----------------------------------------------------------------
 -- เครื่องต้องมีแถวนี้ก่อน: ทุก path ที่รับ device_id (login / ingest / scan) ต้อง
@@ -508,6 +579,8 @@ CREATE TABLE IF NOT EXISTS sync_runs (
   status          sync_run_status NOT NULL DEFAULT 'running',
   error           text,
   anomalies       jsonb           NOT NULL DEFAULT '[]'::jsonb,
+  -- ตัวนับสรุปต่อรอบ (object แบน ๆ) — ผู้ดูแลต้องอ่านออกว่ารอบนั้นทำอะไรไปโดยไม่ต้องเปิดโค้ด
+  metrics         jsonb           NOT NULL DEFAULT '{}'::jsonb,
   stock_as_of     timestamptz,
   cursor_after    bigint,
   triggered_by    text,
@@ -516,6 +589,7 @@ CREATE TABLE IF NOT EXISTS sync_runs (
   CONSTRAINT sync_runs_finish_order CHECK (finished_at IS NULL OR finished_at >= started_at),
   CONSTRAINT sync_runs_rows_ge      CHECK (rows_read >= 0 AND rows_upserted >= 0 AND rows_tombstoned >= 0),
   CONSTRAINT sync_runs_anomalies_arr CHECK (jsonb_typeof(anomalies) = 'array'),
+  CONSTRAINT sync_runs_metrics_obj   CHECK (jsonb_typeof(metrics) = 'object'),
   -- ล้มเหลวต้องบอกเหตุ (จุดแรกที่ผู้ดูแลเปิดดูเมื่อ "ทำไมสต็อกไม่อัปเดต")
   CONSTRAINT sync_runs_error_when_failed CHECK (status <> 'failed' OR error IS NOT NULL),
   -- ป้าย "ข้อมูล ณ HH:MM" ต้องมาจากรอบที่สำเร็จจริงเท่านั้น
@@ -526,6 +600,7 @@ COMMENT ON TABLE  sync_runs IS 'บันทึกทุกรอบดึงข
 COMMENT ON COLUMN sync_runs.stock_as_of IS 'เวลาที่ดึง ERP สำเร็จ — ป้าย "ข้อมูล ณ HH:MM" อ่านจากค่านี้ (ไม่ใช่ max ของ erp_updated_at ซึ่งจะโกหกเมื่อ ERP ไม่มีอะไรเปลี่ยน)';
 COMMENT ON COLUMN sync_runs.status IS 'partial = ดึงไม่ครบ → ห้ามขยับ cursor และห้าม tombstone';
 COMMENT ON COLUMN sync_runs.anomalies IS 'array ของความผิดปกติ: row-count drift, barcode ชนกัน, ItemCode ซ้ำ, decode ภาษาไทยพัง, คลังไม่ตรงที่คาด';
+COMMENT ON COLUMN sync_runs.metrics IS 'ตัวนับสรุปของรอบ (รอบผู้ใช้: mapped/unmapped/unmappedKeptCredential/rejected/absent/graceElapsed/deactivated/adminsDeactivated/refused/elevated/elevationsRefused) — ตอบ "รอบนี้ทำอะไรไป" ได้จากแถวเดียว';
 
 -- =============================================================================
 -- 4. Indexes (ตาม query จริงของ API surface)
@@ -783,3 +858,59 @@ $do$;
 -- ────────────────────────────────────────────────────────────────────────────
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS last_emp_id text;
 COMMENT ON COLUMN devices.last_emp_id IS 'คนล่าสุดที่ login บนเครื่องนี้ — ใช้ตามหาเครื่องที่หายพร้อมงานนับค้าง';
+
+-- นาฬิกา grace ของ deactivation sweep (DB ที่สร้าง user_credentials ไว้ก่อนมีคอลัมน์นี้)
+-- NULL = พบใน ERP อยู่ → ค่าเริ่มต้นของทุกแถวเดิมคือ "ยังไม่เริ่มจับเวลา" ซึ่งปลอดภัยที่สุด
+ALTER TABLE user_credentials ADD COLUMN IF NOT EXISTS absent_since timestamptz;
+
+-- ตัวนับสรุปต่อรอบ sync (DB เก่าไม่มีคอลัมน์นี้ — แถวเดิมได้ '{}' ตาม DEFAULT)
+ALTER TABLE sync_runs ADD COLUMN IF NOT EXISTS metrics jsonb NOT NULL DEFAULT '{}'::jsonb;
+DO $do$ BEGIN
+  ALTER TABLE sync_runs ADD CONSTRAINT sync_runs_metrics_obj CHECK (jsonb_typeof(metrics) = 'object');
+EXCEPTION WHEN duplicate_object THEN NULL; END $do$;
+
+-- ── Backfill legacy PIN → user_credentials (ไม่มีใครถูกล็อกออกตอน deploy) ────────────
+-- ⚠️ ไฟล์นี้ถูก replay ทุก deploy — ทั้งสามก้อนด้านล่างจึงผูกกับด่านเดียวกัน:
+--    "ยังไม่เคยมีรอบ sync ผู้ใช้ที่สำเร็จ" (อ่านจาก sync_runs ตารางที่มีอยู่แล้ว ไม่สร้างตารางสถานะใหม่)
+--    หลัง cutover จริงครั้งแรก ทั้งสามก้อนปิดตัวเองถาวร → replay จะไม่ชุบชีวิต credential
+--    ที่ sync ตั้งใจ deactivate ไปแล้วกลับมา และไม่ฟ้องว่า "คนหาย" ทั้งที่คือการ deactivate ตามดีไซน์
+-- ⚠️ ตอน cleanup (Phase 5) ที่จะลบคอลัมน์ users.pin_hash จริง ต้องลบทั้งสามก้อนนี้พร้อมกัน
+--    ในคอมมิตเดียว — ทั้งสามอ้างคอลัมน์ที่กำลังจะหาย ลืมลบ = replay ครั้งถัดไป error
+
+-- Pre-flight: lowercase(emp_id) ชนกันไหม — ถ้าชนแปลว่ามีคนล็อกอินไม่ได้แน่หลัง backfill
+DO $do$
+DECLARE dup text;
+BEGIN
+  IF EXISTS (SELECT 1 FROM sync_runs WHERE kind::text = 'users' AND status = 'success') THEN
+    RETURN; -- cutover จริงเกิดแล้ว — ไม่มีความหมายจะเช็คซ้ำ (และ users อาจมีคนที่ถูก deactivate ไปแล้ว)
+  END IF;
+  SELECT string_agg(l, ', ') INTO dup
+    FROM (SELECT lower(emp_id) AS l FROM users GROUP BY 1 HAVING count(*) > 1) t;
+  IF dup IS NOT NULL THEN
+    RAISE EXCEPTION 'emp_id ชนกันเมื่อทำเป็นตัวพิมพ์เล็ก (%) — แก้ก่อน migrate ไม่งั้นมีคน login ไม่ได้', dup;
+  END IF;
+END $do$;
+
+-- Backfill — ปิดตัวเองอัตโนมัติหลัง sync ผู้ใช้สำเร็จครั้งแรก
+INSERT INTO user_credentials (login_name, emp_id, secret_hash, source)
+SELECT lower(u.emp_id), u.emp_id, u.pin_hash, 'legacy_pin'
+  FROM users u
+ WHERE u.pin_hash IS NOT NULL
+   AND u.pin_hash LIKE '$argon2id$%'
+   AND NOT EXISTS (SELECT 1 FROM sync_runs WHERE kind::text = 'users' AND status = 'success')
+ON CONFLICT DO NOTHING;   -- ครอบคลุมทั้ง login_name PK และ emp_id UNIQUE
+
+-- Post-flight: การันตีไม่มีใครหลุดจากการ backfill (เฉพาะก่อน cutover จริง)
+DO $do$
+DECLARE missing int;
+BEGIN
+  IF EXISTS (SELECT 1 FROM sync_runs WHERE kind::text = 'users' AND status = 'success') THEN
+    RETURN; -- หลัง cutover ผู้ใช้ที่ไม่มี credential แล้วคือ "ถูก deactivate ตามดีไซน์" ไม่ใช่บั๊ก
+  END IF;
+  SELECT count(*) INTO missing FROM users u
+   WHERE u.pin_hash IS NOT NULL
+     AND NOT EXISTS (SELECT 1 FROM user_credentials c WHERE c.emp_id = u.emp_id);
+  IF missing > 0 THEN
+    RAISE EXCEPTION 'ผู้ใช้ % คนยังไม่มีแถวใน user_credentials — deploy ต่อจะทำให้ login ไม่ได้', missing;
+  END IF;
+END $do$;

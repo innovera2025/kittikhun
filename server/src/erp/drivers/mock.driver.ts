@@ -1,4 +1,5 @@
 import type { ErpAdapter, ErpHealth } from '../erp-adapter';
+import { ErpSecret } from '../erp-secret';
 
 /**
  * Mock driver — fixture canonical จาก design ต้นแบบ (`Stock Scan Mobile.dc.html`)
@@ -17,6 +18,7 @@ type ItemBatch =
   ReturnType<ErpAdapter['fetchItems']> extends AsyncIterable<infer TBatch> ? TBatch : never;
 type CanonicalItem = ItemBatch[number];
 type ErpCapabilities = ReturnType<ErpAdapter['capabilities']>;
+type ErpUserRow = Awaited<ReturnType<ErpAdapter['fetchUsers']>>[number];
 
 /**
  * mock ยึดรหัสคลังตาม design (`WH-BKK-02`)
@@ -168,6 +170,78 @@ function toCanonicalItem(seed: ItemSeed): CanonicalItem {
   };
 }
 
+/**
+ * ผู้ใช้จำลองของ `menuuser` — ครอบทุกสาขาที่ `runUsers()` ต้องเดินจริง
+ *
+ * ⚠️ ค่า `password` ทั้งหมดเป็น **สตริงสมมติสำหรับ dev/CI เท่านั้น** ไม่ใช่ความลับของใคร
+ *    และไม่มีทางไปโผล่ที่ ERP จริง (ไฟล์นี้ทำงานเฉพาะเมื่อ `ERP_DRIVER=mock`)
+ *
+ * `userLevel` จงใจมีค่าที่ **ไม่อยู่ใน allowlist** ปนมาหนึ่งค่า ('3' = ฝ่ายบัญชี) เพื่อให้
+ * เทสต์ allowlist มีของจริงให้ยืนยันว่า level ที่ไม่ได้ map ไว้ **ไม่ได้บัญชีเลย**
+ * (ไม่ fallback เป็น viewer) — `menuuser` คือตารางบัญชีของ ERP ทั้งระบบ ไม่ใช่แค่คลัง
+ */
+const USER_SEEDS: readonly {
+  readonly loginName: string;
+  readonly password: string;
+  readonly userLevel: string;
+  readonly nameThai: string;
+  readonly empCode: string;
+}[] = [
+  {
+    loginName: 'somchai.a',
+    password: 'mock-admin-secret',
+    userLevel: '9',
+    nameThai: 'สมชาย อารีย์',
+    empCode: '52101',
+  },
+  {
+    loginName: 'Suda.K',
+    password: 'mock-staff-secret',
+    userLevel: '5',
+    nameThai: 'สุดา กมลชัย',
+    empCode: '52102',
+  },
+  {
+    loginName: 'anan.p',
+    password: 'mock-staff-secret-2',
+    userLevel: '5',
+    nameThai: 'อนันต์ พงษ์ศิริ',
+    empCode: '52103',
+  },
+  {
+    loginName: 'wipa.s',
+    password: 'mock-viewer-secret',
+    userLevel: '1',
+    nameThai: 'วิภา สุขใจ',
+    empCode: '52104',
+  },
+  {
+    // ฝ่ายบัญชี — ไม่ควรมีบัญชีในแอปคลัง แต่ตั้งแต่ 5 ก.ย. 2569 **ก็ได้บัญชีเหมือนกัน**
+    // (ไม่มี allowlist ของ user_level แล้ว ทุกแถวได้ ERP_USER_FIXED_ROLE เท่ากันหมด)
+    loginName: 'account.one',
+    password: 'mock-accounting-secret',
+    userLevel: '3',
+    nameThai: 'บัญชี หนึ่ง',
+    empCode: '52105',
+  },
+];
+
+type UserSeed = (typeof USER_SEEDS)[number];
+
+/**
+ * seed → `ErpUserRow` — ห่อ plaintext ด้วย `ErpSecret` ตั้งแต่บรรทัดนี้ เพื่อให้เส้นทาง mock
+ * เจอกฎเดียวกับของจริง (ทั้ง `fetchUsers()` และ `fetchUserByLogin()` ผ่านตัวนี้ตัวเดียว)
+ */
+function toErpUserRow(seed: UserSeed): ErpUserRow {
+  return {
+    loginName: seed.loginName,
+    password: ErpSecret.of(seed.password),
+    userLevel: seed.userLevel,
+    nameThai: seed.nameThai,
+    empCode: seed.empCode,
+  };
+}
+
 export class MockDriver implements ErpAdapter {
   /** fixture ไม่มี updated-at ที่เชื่อถือได้ → server ใช้ full snapshot + diff */
   capabilities(): ErpCapabilities {
@@ -184,6 +258,28 @@ export class MockDriver implements ErpAdapter {
 
   async *fetchItems(): AsyncGenerator<CanonicalItem[]> {
     yield ITEM_SEEDS.map(toCanonicalItem);
+  }
+
+  /**
+   * ผู้ใช้จำลองจาก `menuuser` — คืนชุดครบรอบเดียวเหมือน driver จริง
+   * ห่อ plaintext ด้วย `ErpSecret` ตั้งแต่ตรงนี้ เพื่อให้เส้นทาง mock เจอกฎเดียวกับของจริง
+   */
+  fetchUsers(): Promise<ErpUserRow[]> {
+    return Promise.resolve(USER_SEEDS.map(toErpUserRow));
+  }
+
+  /**
+   * ผู้ใช้คนเดียวตอนล็อกอิน — เทียบชื่อแบบ **ไม่สนตัวพิมพ์ใหญ่เล็ก** ให้ตรงกับของจริง
+   * (`menuuser` อยู่บน collation `Thai_CI_AS` → `WHERE user_name = @cUser` ก็ไม่สนอยู่แล้ว
+   *  fixture มี `Suda.K` ตัวพิมพ์ผสมไว้ให้เทสต์จับพฤติกรรมนี้โดยเฉพาะ)
+   *
+   * ไม่พบ = `null` (mock ไม่มีทาง "ต่อไม่ได้" จึงไม่มีเส้นทาง throw ที่นี่)
+   */
+  fetchUserByLogin(loginName: string): Promise<ErpUserRow | null> {
+    const wanted = loginName.trim().toLowerCase();
+    if (wanted.length === 0) return Promise.resolve(null);
+    const seed = USER_SEEDS.find((s) => s.loginName.toLowerCase() === wanted);
+    return Promise.resolve(seed === undefined ? null : toErpUserRow(seed));
   }
 
   /** mock ไม่ต้องต่ออะไร — แต่ต้องมีตาม contract เพื่อให้ ErpModule เรียกได้เหมือนกันทุก driver */

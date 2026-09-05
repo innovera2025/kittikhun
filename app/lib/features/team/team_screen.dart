@@ -6,20 +6,14 @@ import '../../core/widgets/common.dart';
 import '../../data/models.dart';
 import '../../state/app_state.dart';
 
-/// design: ปุ่มแถวล่างของแท็บสมาชิกเป็น 15px (เท่าปุ่มรอง) ไม่ใช่ 16px ของ CTA หลัก
-final double _teamCtaFontSize = TclTokens.ctaSecondary().fontSize!;
-
 /// ด้านของ avatar สมาชิก (44×44 ตาม design — ไม่ใช่ความสูง control ตัวใด)
 const double _avatarSize = 44;
 
 /// ระยะห่างระหว่างช่องในการ์ดสมาชิก (flex gap 13 ของ design)
 const double _cardGap = 13;
 
-/// ระยะห่างระหว่างการ์ดในลิสต์ / ระหว่างปุ่มแถวล่าง (flex gap 10)
+/// ระยะห่างระหว่างการ์ดในลิสต์ (flex gap 10)
 const double _listGap = 10;
-
-/// ความกว้างต่ำสุดของปุ่ม "ออกจากระบบ" (min-width:118px)
-const double _signOutMinWidth = 118;
 
 /// สีของ role ตาม ROLES ใน design (pill + avatar)
 typedef _RoleTone = ({Color pillBg, Color fg, Color border, Color avatarBg});
@@ -48,7 +42,10 @@ _RoleTone _toneOfRole(Role role) => switch (role) {
 
 /// หน้าสมาชิกและสิทธิ์ (design §2.6)
 ///
-/// ลิสต์สมาชิก (flex:1 scroll) + hint ท้ายลิสต์ → แถวปุ่ม เพิ่มสมาชิก / ออกจากระบบ
+/// ลิสต์สมาชิก (flex:1 scroll) + hint ท้ายลิสต์ → ปุ่ม "ออกจากระบบ"
+///
+/// ⚠️ ไม่มีปุ่ม "เพิ่มสมาชิก" แล้ว — รายชื่อมาจาก sync ผู้ใช้ ERP อย่างเดียว
+/// สร้างคนใหม่ต้องทำที่ ERP (ปุ่มที่กดแล้วได้ 404 แย่กว่าไม่มีปุ่ม)
 class TeamScreen extends ConsumerWidget {
   const TeamScreen({super.key});
 
@@ -88,27 +85,14 @@ class TeamScreen extends ConsumerWidget {
             TclTokens.gutterTab,
             14,
           ),
-          child: Row(
-            children: [
-              Expanded(
-                child: PrimaryButton(
-                  label: 'เพิ่มสมาชิก',
-                  height: TclTokens.hTeamAction,
-                  radius: TclTokens.rTeamAction,
-                  shadow: TclTokens.shTeamAddBtn,
-                  fontSize: _teamCtaFontSize,
-                  onPressed: controller.openAddSheet,
-                ),
-              ),
-              const SizedBox(width: _listGap),
-              SecondaryButton(
-                label: 'ออกจากระบบ',
-                height: TclTokens.hTeamAction,
-                radius: TclTokens.rTeamAction,
-                minWidth: _signOutMinWidth,
-                onPressed: controller.signOut,
-              ),
-            ],
+          child: SizedBox(
+            width: double.infinity,
+            child: SecondaryButton(
+              label: 'ออกจากระบบ',
+              height: TclTokens.hTeamAction,
+              radius: TclTokens.rTeamAction,
+              onPressed: controller.signOut,
+            ),
           ),
         ),
       ],

@@ -131,9 +131,7 @@ void main() {
 
     test('ไม่ระบุ actor → เขียนตามคนที่ล็อกอินอยู่ตอนนี้ (เส้นทางปกติ)', () async {
       c.setEmpId('52318');
-      for (final k in ['0', '0', '0', '0', '0', '0']) {
-        c.pressKey(k);
-      }
+      c.setPassword('any-secret');
       await c.signIn();
 
       expect(c.countActor.empId, '52318');
@@ -143,9 +141,7 @@ void main() {
 
     test('viewer → setScanCount ไม่เขียน draft', () async {
       c.setEmpId('52402'); // Nattaporn K. = viewer
-      for (final k in ['0', '0', '0', '0', '0', '0']) {
-        c.pressKey(k);
-      }
+      c.setPassword('any-secret');
       await c.signIn();
       expect(container.read(appProvider).me.role, Role.viewer);
 
@@ -245,9 +241,7 @@ void main() {
       final c = container.read(appProvider.notifier);
       if (signInAs != null) {
         c.setEmpId(signInAs);
-        for (final k in ['0', '0', '0', '0', '0', '0']) {
-          c.pressKey(k);
-        }
+        c.setPassword('any-secret');
         await c.signIn();
       }
       c.rememberScannedItem(item);
@@ -767,9 +761,7 @@ void main() {
         addTearDown(container.dispose);
         final c = container.read(appProvider.notifier);
         c.setEmpId('52318'); // ธนากร (staff) — **ไม่ใช่**คนแรกในรายชื่อ
-        for (final k in ['0', '0', '0', '0', '0', '0']) {
-          c.pressKey(k);
-        }
+        c.setPassword('any-secret');
         await c.signIn();
         expect(container.read(appProvider).me.empId, '52318');
         c.rememberScannedItem(itemOf());

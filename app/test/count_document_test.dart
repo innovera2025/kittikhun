@@ -340,9 +340,7 @@ void main() {
 
     Future<void> signIn(String empId) async {
       c.setEmpId(empId);
-      for (final k in ['0', '0', '0', '0', '0', '0']) {
-        c.pressKey(k);
-      }
+      c.setPassword('any-secret');
       await c.signIn();
     }
 
@@ -402,9 +400,7 @@ void main() {
       final c = container.read(appProvider.notifier);
       if (signInAs != null) {
         c.setEmpId(signInAs);
-        for (final k in ['0', '0', '0', '0', '0', '0']) {
-          c.pressKey(k);
-        }
+        c.setPassword('any-secret');
         await c.signIn();
       }
       await c.loadDrafts();

@@ -18,11 +18,23 @@ import '../local/sync_engine.dart';
 /// [AppController.setScanCount])
 typedef CountActor = ({String empId, String? warehouseCode});
 
+/// ข้อความชวนกรอกบนบรรทัดสถานะของจอล็อกอิน — จุดเดียวที่ถ้อยคำนี้มีอยู่
+///
+/// (เดิมพิมพ์ซ้ำสามที่แล้วเพี้ยนจากกันได้เงียบ ๆ ตอนแก้ถ้อยคำ)
+const String _kLoginHint = 'กรอกชื่อผู้ใช้และรหัสผ่านเพื่อเข้าใช้งาน';
+
+/// ⚠️ ต้องตรงกับ `AUTH_ERROR_MESSAGE_TH.UNKNOWN_EMPLOYEE` ฝั่ง server เป๊ะ —
+/// ข้อความเดียวกันต้องออกมาไม่ว่าจะถูกปฏิเสธที่เครื่องหรือที่เซิร์ฟเวอร์
+const String _kUnknownUser = 'ไม่พบชื่อผู้ใช้นี้ · unknown user';
+
+/// ปฏิเสธรหัสผ่านว่างที่เครื่อง — ด่านเดียวที่เหลือหลังเลิกผูกความยาว 6 หลัก
+const String _kEmptyPassword = 'กรอกรหัสผ่านก่อนเข้าสู่ระบบ';
+
 /// สถานะทั้งแอป — พฤติกรรมทุกอย่างตรงตาม design ต้นแบบ
 ///
 /// หมายเหตุ production (ต่างจาก demo โดยเจตนา — ดู docs/design-fidelity.md §6):
-/// - ไม่มี PIN กลาง `000000` และ **ปฏิเสธ PIN ว่างเสมอ**
-/// - ไม่เติม empId ล่วงหน้า
+/// - ไม่มีรหัสผ่านกลาง `000000` และ **ปฏิเสธรหัสผ่านว่างเสมอ**
+/// - ไม่เติมชื่อผู้ใช้ล่วงหน้า
 /// - sign-out เคลียร์ค่าที่กรอกไว้ (เครื่องใช้ร่วมกัน)
 @immutable
 class AppState {
@@ -32,7 +44,7 @@ class AppState {
     this.empId = '',
     this.pin = '',
     this.loginError = false,
-    this.loginMessage = 'กรอกรหัสพนักงานและ PIN เพื่อเข้าใช้งาน',
+    this.loginMessage = _kLoginHint,
     this.members = Fixtures.members,
     this.currentEmpId,
     this.scans = const [],
@@ -43,13 +55,7 @@ class AppState {
     this.query = '',
     this.counts = const {},
     this.toast,
-    this.addSheetOpen = false,
-    this.newName = '',
-    this.newId = '',
-    this.newRole = Role.staff,
     this.busy = false,
-    this.mustChangePin = false,
-    this.lastInitialPin,
     this.session,
     this.searchHits,
     this.scannedItems = const {},
@@ -63,7 +69,11 @@ class AppState {
   final AppTab tab;
 
   // ── login ──────────────────────────────────────────────────────────
+  /// ชื่อผู้ใช้ที่พิมพ์ในช่องแรก — ชื่อฟิลด์คงเดิมเพราะ wire ยังส่งคีย์ `empId`
+  /// (ผู้ใช้ ERP ใช้ `menuuser.user_name` ซึ่งอาจไม่เท่ากับรหัสพนักงานแล้ว)
   final String empId;
+
+  /// รหัสผ่านที่พิมพ์ — ชื่อฟิลด์คงเดิมด้วยเหตุผลเดียวกับ [empId] (wire = `pin`)
   final String pin;
   final bool loginError;
   final String loginMessage;
@@ -96,20 +106,9 @@ class AppState {
 
   // ── UI ทั่วไป ───────────────────────────────────────────────────────
   final String? toast;
-  final bool addSheetOpen;
-  final String newName;
-  final String newId;
-  final Role newRole;
 
   /// กำลังรอ backend (ปิดปุ่มกันกดซ้ำ)
   final bool busy;
-
-  /// ต้องตั้ง PIN ใหม่ก่อนใช้งาน (PIN เริ่มต้นจาก admin หรือถูก reset)
-  final bool mustChangePin;
-
-  /// PIN เริ่มต้นของสมาชิกที่เพิ่งเพิ่ม — แสดงให้ admin เห็น **ครั้งเดียว**
-  /// ⚠️ อยู่ใน memory เท่านั้น ห้ามเก็บลง storage ห้าม log
-  final ({String empId, String name, String pin})? lastInitialPin;
 
   /// รอบนับที่ดึงมาเก็บในเครื่อง (นับต่อได้แม้ออฟไลน์) — null = ยังไม่มีรอบเปิด
   final ActiveSession? session;
@@ -187,14 +186,7 @@ class AppState {
     Map<String, String>? counts,
     String? toast,
     bool clearToast = false,
-    bool? addSheetOpen,
-    String? newName,
-    String? newId,
-    Role? newRole,
     bool? busy,
-    bool? mustChangePin,
-    ({String empId, String name, String pin})? lastInitialPin,
-    bool clearInitialPin = false,
     ActiveSession? session,
     bool clearSession = false,
     List<Item>? searchHits,
@@ -222,14 +214,7 @@ class AppState {
     query: query ?? this.query,
     counts: counts ?? this.counts,
     toast: clearToast ? null : (toast ?? this.toast),
-    addSheetOpen: addSheetOpen ?? this.addSheetOpen,
-    newName: newName ?? this.newName,
-    newId: newId ?? this.newId,
-    newRole: newRole ?? this.newRole,
     busy: busy ?? this.busy,
-    mustChangePin: mustChangePin ?? this.mustChangePin,
-    lastInitialPin:
-        clearInitialPin ? null : (lastInitialPin ?? this.lastInitialPin),
     session: clearSession ? null : (session ?? this.session),
     searchHits: searchHits ?? this.searchHits,
     scannedItems: scannedItems ?? this.scannedItems,
@@ -249,40 +234,32 @@ class AppController extends Notifier<AppState> {
   // Login
   // ══════════════════════════════════════════════════════════════════
 
-  /// รับเฉพาะตัวเลข สูงสุด 6 หลัก · กดแล้วล้าง error
-  void setEmpId(String v) {
-    final digits = v.replaceAll(RegExp(r'[^0-9]'), '');
-    state = state.copyWith(
-      empId: digits.length > 6 ? digits.substring(0, 6) : digits,
-      loginError: false,
-    );
-  }
+  /// ชื่อผู้ใช้ — ตัดช่องว่างหัวท้ายอย่างเดียว · พิมพ์แล้วล้าง error
+  ///
+  /// ⚠️ ไม่กรองอักขระและไม่จำกัดความยาวที่นี่: ชื่อผู้ใช้ ERP (`menuuser.user_name`)
+  /// ไม่รู้รูปแบบล่วงหน้า — server เป็นผู้ตัดสิน (`EmpIdSchema` ≤64) การกรองเองที่นี่
+  /// เท่ากับล็อกคนที่มีชื่อผู้ใช้ไม่ตรงสมมติฐานออกจากระบบโดยไม่มีข้อความอธิบาย
+  void setEmpId(String v) =>
+      state = state.copyWith(empId: v.trim(), loginError: false);
 
-  /// keypad: '1'-'9', '0', 'C' (ล้าง), '⌫' (ลบตัวท้าย)
-  void pressKey(String key) {
-    final pin = switch (key) {
-      'C' => '',
-      '⌫' => state.pin.isEmpty ? '' : state.pin.substring(0, state.pin.length - 1),
-      _ => (state.pin + key).length > 6 ? state.pin : state.pin + key,
-    };
-    state = state.copyWith(pin: pin, loginError: false);
-  }
+  /// รหัสผ่าน — เก็บดิบทุกตัวอักษร · พิมพ์แล้วล้าง error
+  ///
+  /// ⚠️ **ห้าม trim** — ERP เทียบ `a_Password` แบบ string เป๊ะ ช่องว่างท้ายมีความหมาย
+  void setPassword(String v) =>
+      state = state.copyWith(pin: v, loginError: false);
 
   /// เข้าสู่ระบบ
   ///
   /// ตั้ง `--dart-define=API_BASE_URL=...` → เรียก backend จริง
-  /// ไม่ตั้ง → โหมด fixture สำหรับพัฒนา/ดู UI (ไม่มี PIN กลาง ยังต้องกรอกครบ 6 หลัก)
+  /// ไม่ตั้ง → โหมด fixture สำหรับพัฒนา/ดู UI (ไม่มีรหัสผ่านกลาง ยังต้องกรอกครบทั้งคู่)
   ///
-  /// ⚠️ ต่างจาก demo: PIN ว่างถูกปฏิเสธเสมอ
+  /// ⚠️ ต่างจาก demo: รหัสผ่านว่างถูกปฏิเสธเสมอ
   Future<void> signIn() async {
     if (state.busy) return;
 
-    // ลำดับการตรวจตาม design: รหัสพนักงานก่อน แล้วค่อย PIN
+    // ลำดับการตรวจตาม design: ชื่อผู้ใช้ก่อน แล้วค่อยรหัสผ่าน
     if (state.empId.isEmpty) {
-      state = state.copyWith(
-        loginError: true,
-        loginMessage: 'ไม่พบรหัสพนักงานนี้ · unknown employee ID',
-      );
+      state = state.copyWith(loginError: true, loginMessage: _kUnknownUser);
       return;
     }
 
@@ -291,12 +268,10 @@ class AppController extends Notifier<AppState> {
       return;
     }
 
-    // โหมดต่อ backend: ต้องมี PIN ครบก่อนยิง API (server ตรวจรหัสพนักงานให้)
-    if (state.pin.length < 6) {
-      state = state.copyWith(
-        loginError: true,
-        loginMessage: 'กรอก PIN ให้ครบ 6 หลัก',
-      );
+    // โหมดต่อ backend: ต้องมีรหัสผ่านก่อนยิง API (server ตรวจชื่อผู้ใช้ให้)
+    // ความยาวไม่ใช่ด่านของแอปอีกต่อไป — รหัสผ่าน ERP ยาวเท่าไรก็ได้ (≤128)
+    if (state.pin.isEmpty) {
+      state = state.copyWith(loginError: true, loginMessage: _kEmptyPassword);
       return;
     }
 
@@ -322,11 +297,10 @@ class AppController extends Notifier<AppState> {
         currentEmpId: result.user.empId,
         warehouseCode: result.user.warehouseCode,
         members: members,
-        mustChangePin: result.mustChangePin,
         pin: '',
         loginError: false,
         busy: false,
-        loginMessage: 'กรอกรหัสพนักงานและ PIN เพื่อเข้าใช้งาน',
+        loginMessage: _kLoginHint,
         scanMode: prefs.mode,
         scanModeHotkey: prefs.hotkey,
       );
@@ -350,17 +324,12 @@ class AppController extends Notifier<AppState> {
     final found =
         state.members.where((m) => m.empId == state.empId).firstOrNull;
     if (found == null) {
-      state = state.copyWith(
-        loginError: true,
-        loginMessage: 'ไม่พบรหัสพนักงานนี้ · unknown employee ID',
-      );
+      state = state.copyWith(loginError: true, loginMessage: _kUnknownUser);
       return;
     }
-    if (state.pin.length < 6) {
-      state = state.copyWith(
-        loginError: true,
-        loginMessage: 'กรอก PIN ให้ครบ 6 หลัก',
-      );
+    // ⚠️ ไม่ผูกความยาวอีกต่อไป — ด่านเดียวที่เหลือคือ "ต้องไม่ว่าง" (design §6 ข้อ 1)
+    if (state.pin.isEmpty) {
+      state = state.copyWith(loginError: true, loginMessage: _kEmptyPassword);
       return;
     }
     final prefs = await _loadScanPrefs();
@@ -370,7 +339,7 @@ class AppController extends Notifier<AppState> {
       currentEmpId: found.empId,
       pin: '',
       loginError: false,
-      loginMessage: 'กรอกรหัสพนักงานและ PIN เพื่อเข้าใช้งาน',
+      loginMessage: _kLoginHint,
       scanMode: prefs.mode,
       scanModeHotkey: prefs.hotkey,
     );
@@ -384,9 +353,6 @@ class AppController extends Notifier<AppState> {
       return fallback;
     }
   }
-
-  /// ตั้ง PIN ใหม่สำเร็จแล้ว — ปลดสถานะบังคับเปลี่ยน
-  void pinChanged() => state = state.copyWith(mustChangePin: false);
 
   /// ออกจากระบบ — reset ตาม design + เคลียร์ค่าที่กรอกของ user เดิม
   ///
@@ -983,109 +949,6 @@ class AppController extends Notifier<AppState> {
       final reverted = [...state.members];
       reverted[index] = target;
       state = state.copyWith(members: reverted, busy: false);
-      flash(e.message);
-    }
-  }
-
-  void openAddSheet() {
-    if (!state.me.role.isAdmin) {
-      flash('ต้องมีสิทธิ์ผู้ดูแลเพื่อเพิ่มสมาชิก');
-      return;
-    }
-    state = state.copyWith(addSheetOpen: true);
-  }
-
-  void closeAddSheet() =>
-      state = state.copyWith(addSheetOpen: false, newName: '', newId: '');
-
-  void setNewName(String v) => state = state.copyWith(newName: v);
-
-  void setNewId(String v) {
-    final d = v.replaceAll(RegExp(r'[^0-9]'), '');
-    state = state.copyWith(newId: d.length > 6 ? d.substring(0, 6) : d);
-  }
-
-  void setNewRole(Role r) => state = state.copyWith(newRole: r);
-
-  Future<void> addMember() async {
-    if (state.busy) return;
-    if (state.newName.trim().isEmpty || state.newId.length < 3) {
-      flash('กรอกชื่อและรหัสพนักงานให้ครบ');
-      return;
-    }
-    if (state.members.any((m) => m.empId == state.newId)) {
-      flash('รหัสพนักงานนี้มีอยู่แล้ว');
-      return;
-    }
-
-    if (!ApiConfig.isConfigured) {
-      // โหมดพัฒนา — เพิ่มในหน่วยความจำ (ไม่มี PIN เพราะไม่มี backend)
-      state = state.copyWith(
-        members: [
-          ...state.members,
-          Member(
-            name: state.newName.trim(),
-            empId: state.newId,
-            shift: 'ยังไม่กำหนดกะ',
-            role: state.newRole,
-          ),
-        ],
-        addSheetOpen: false,
-        newName: '',
-        newId: '',
-      );
-      flash('เพิ่มสมาชิกแล้ว · member added');
-      return;
-    }
-
-    state = state.copyWith(busy: true);
-    try {
-      final result = await ref.read(membersRepositoryProvider).add(
-            empId: state.newId,
-            name: state.newName.trim(),
-            role: state.newRole,
-          );
-      state = state.copyWith(
-        members: [...state.members, result.member],
-        addSheetOpen: false,
-        newName: '',
-        newId: '',
-        busy: false,
-        // PIN เริ่มต้นแสดงให้ admin ครั้งเดียว (อยู่ใน memory เท่านั้น)
-        lastInitialPin: (
-          empId: result.member.empId,
-          name: result.member.name,
-          pin: result.initialPin,
-        ),
-      );
-      flash('เพิ่มสมาชิกแล้ว · member added');
-    } on ApiException catch (e) {
-      state = state.copyWith(busy: false);
-      flash(e.message);
-    }
-  }
-
-  /// ปิดจอแสดง PIN เริ่มต้น (admin กดรับทราบแล้ว)
-  void dismissInitialPin() => state = state.copyWith(clearInitialPin: true);
-
-  /// admin สั่งรีเซ็ต PIN ของสมาชิก — ได้ PIN ใหม่มาแสดงครั้งเดียว
-  Future<void> resetPin(String empId) async {
-    if (!state.me.role.isAdmin) {
-      flash('ต้องมีสิทธิ์ผู้ดูแลเพื่อรีเซ็ต PIN');
-      return;
-    }
-    if (!ApiConfig.isConfigured || state.busy) return;
-
-    state = state.copyWith(busy: true);
-    try {
-      final pin = await ref.read(membersRepositoryProvider).resetPin(empId);
-      final target = state.members.firstWhere((m) => m.empId == empId);
-      state = state.copyWith(
-        busy: false,
-        lastInitialPin: (empId: empId, name: target.name, pin: pin),
-      );
-    } on ApiException catch (e) {
-      state = state.copyWith(busy: false);
       flash(e.message);
     }
   }

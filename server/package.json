@@ -18,8 +18,10 @@
     "test:unit": "jest --testPathIgnorePatterns '/test/(auth-integration|count-cycle)\\.spec\\.ts$'",
     "test:integration": "jest test/auth-integration.spec.ts test/count-cycle.spec.ts",
     "verify:erp": "ts-node scripts/verify-erp.ts",
+    "verify:erp-users": "ts-node scripts/verify-erp-users.ts",
+    "verify:fleet-readiness": "ts-node scripts/verify-fleet-readiness.ts",
     "simulate": "ts-node scripts/simulate.ts",
-    "create-admin": "ts-node src/cli/create-admin.ts",
+    "create-admin": "node dist/cli/create-admin.js",
     "db:schema": "psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -f db/schema.sql"
   },
   "dependencies": {

@@ -17,6 +17,8 @@
 
 import { z } from 'zod';
 
+import { ErpSecret } from './erp-secret';
+
 // ────────────────────────────────────────────────────────────────────────────
 // 1. Canonical types (รูปข้อมูลหลัง map จาก ERP แล้ว — domain ไม่เห็นชื่อคอลัมน์ ERP)
 // ────────────────────────────────────────────────────────────────────────────
@@ -62,6 +64,34 @@ export interface CanonicalItem {
  *
  *    รอบนับทั้งหมด **เปิดจากแอปเราเอง** → freeze ยอดจาก items_cache
  */
+
+/**
+ * ผู้ใช้ 1 คนจากตาราง `menuuser` ของ ERP (รูปข้อมูลกลาง — domain ไม่เห็นชื่อคอลัมน์ ERP)
+ *
+ * 🚫 `password` เป็น `ErpSecret` โดยตั้งใจ ไม่ใช่ `string` — plaintext ของ ERP ห้ามหลุด
+ *    ผ่าน template literal / `JSON.stringify` / logger โดยไม่ตั้งใจ (ดู erp-secret.ts)
+ *    ค่าดิบดึงได้จุดเดียวคือ `.expose()` แล้วต้องเข้า argon2 ทันที
+ */
+export interface ErpUserRow {
+  /** `menuuser.user_name` — ยังไม่ normalize (ผู้เรียกเป็นคน trim/lower เอง) */
+  loginName: string;
+  /** `menuuser.a_Password` — ⚠️ ห้าม trim ห้าม normalize (ERP เทียบแบบ string เป๊ะ) */
+  password: ErpSecret;
+  /** `menuuser.user_level` แบบดิบ — เก็บไว้ตอบคำถาม U1 จากข้อมูลจริงได้ทุกเมื่อ */
+  userLevel: string;
+  /** `menuuser.name_thai` — **ว่างได้จริง** (ดู `screenUserRows` ที่หาค่าแทนให้) */
+  nameThai: string;
+  /**
+   * ตัวตนของผู้ใช้ตามที่ ERP นิยาม = **`menuuser.user_name`** (query ต้นฉบับของเจ้าของ
+   * ระบบ alias คอลัมน์นี้ว่า `USERID` ตรง ๆ) → ลงเป็น `users.emp_id` ฝั่งเรา
+   *
+   * ⚠️ **ไม่ใช่ `menuuser.emp_id`** — คอลัมน์นั้นเป็นแค่ join key เข้า `Employee` และบน ERP
+   *    จริง `Employee` มี 0 แถว `emp_id` จึงว่างทุกแถว ใช้เป็นตัวตนไม่ได้เลย
+   * ⚠️ ด้วย query มาตรฐาน (`DEFAULT_USERS_SQL`) ค่านี้จึงเป็น **สตริงเดียวกับ `loginName`**
+   *    ต่างกันได้เฉพาะเมื่อตั้ง `ERP_SQL_USERS_SQL_FILE` ให้ดึงคนละคอลัมน์เท่านั้น
+   */
+  empCode: string;
+}
 
 /** สถานะ ERP สำหรับ `GET /healthz/erp` — ERP ล่มห้ามทำให้ container unhealthy */
 export interface ErpHealth {
@@ -130,6 +160,31 @@ export interface ErpAdapter {
    * ยังเป็น SELECT ล้วน — ชื่อขึ้นต้น `fetch` โดยตั้งใจให้ผ่าน `WriteishMethodName`
    */
   fetchItemsBySku(skus: readonly string[]): Promise<CanonicalItem[]>;
+
+  /**
+   * อ่านผู้ใช้ทั้งหมดจาก `menuuser` — ยังเป็น SELECT ล้วน ชื่อขึ้นต้น `fetch` โดยตั้งใจ
+   * ให้ผ่าน `WriteishMethodName` เหมือน `fetchItemsBySku`
+   *
+   * คืนอาเรย์เดียว (ไม่ stream) — จำนวนผู้ใช้อยู่หลักร้อย และ deactivation sweep
+   * ต้องเห็น "ชุดครบ" ของรอบนั้นถึงจะตัดสินได้ว่าใครหายไปจาก ERP แล้วจริง
+   *
+   * ⚠️ 5 ก.ย. 2569: **ล็อกอินไม่ใช้เมธอดนี้แล้ว** — ใช้ `fetchUserByLogin()` ยิงทีละคน
+   *    ตามที่ลูกค้าสั่ง เหลือผู้เรียกเดียวคือรอบ sync ผู้ใช้ ซึ่งเป็นผู้สมัครถูกลบ (ดู sync.module.ts)
+   */
+  fetchUsers(): Promise<ErpUserRow[]>;
+
+  /**
+   * อ่านผู้ใช้ **คนเดียว** ตามชื่อที่พิมพ์ตอนล็อกอิน — รูปเดียวกับ query ต้นฉบับของลูกค้า
+   * (`WHERE user_name = ?cUser` ซึ่งเป็น query ต่อการล็อกอินหนึ่งครั้ง ไม่ใช่ query กวาดทั้งตาราง)
+   *
+   * ไม่พบ = `null` (ล็อกอินไม่ผ่านทันที ไม่มีระยะผ่อนผัน — คำสั่งลูกค้า "ถ้าหาไม่เจอก็เข้าไม่ได้")
+   * ต่อ ERP ไม่ได้ = **โยน error** ห้ามคืน `null` เด็ดขาด — สองกรณีนี้ต้องแยกจากกันที่ผู้เรียก
+   * ไม่งั้น ERP ล่ม 1 นาทีจะกลายเป็น "ไม่พบชื่อผู้ใช้" ของทั้งคลังพร้อมกัน
+   *
+   * 🚫 `password` ต้องถูกห่อเป็น `ErpSecret` เหมือน `fetchUsers()` เป๊ะ ๆ
+   *    ชื่อขึ้นต้น `fetch` โดยตั้งใจให้ผ่าน `WriteishMethodName` — ยังเป็น SELECT ล้วน
+   */
+  fetchUserByLogin(loginName: string): Promise<ErpUserRow | null>;
 
   healthCheck(): Promise<ErpHealth>;
 }
@@ -407,6 +462,8 @@ export abstract class BaseErpDriver implements ErpAdapter {
   abstract capabilities(): ErpCapabilities;
   abstract fetchItems(since?: ErpCursor): AsyncIterable<CanonicalItem[]>;
   abstract fetchItemsBySku(skus: readonly string[]): Promise<CanonicalItem[]>;
+  abstract fetchUsers(): Promise<ErpUserRow[]>;
+  abstract fetchUserByLogin(loginName: string): Promise<ErpUserRow | null>;
   abstract healthCheck(): Promise<ErpHealth>;
 
   /**

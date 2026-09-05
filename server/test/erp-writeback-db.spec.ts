@@ -278,7 +278,17 @@ describeWithDb('ส่งผลนับกลับ ERP (ต้องมี Pos
   it('⭐ VoucherDate / CountDate / CountYear ต้องมาจากเวลาปิดรอบจุดเดียวกัน', async () => {
     await seedClosedSession([{ sku: 'J-001', system: 5, counted: 5, status: 'match' }]);
     const closedAt = new Date('2026-08-31T17:30:00+07:00');
-    await db.query(`UPDATE count_sessions SET closed_at = $2 WHERE id = $1`, [SESSION, closedAt]);
+    // ⚠️ ต้องเลื่อน opened_at ตามไปด้วย ไม่ใช่แค่ closed_at — `seedClosedSession` เปิดรอบ
+    // ด้วย now() ถ้าปล่อยไว้ วันที่คงที่ข้างบนจะกลายเป็น "ปิดก่อนเปิด" ทันทีที่นาฬิกาจริง
+    // เดินผ่าน 31 ส.ค. 2569 แล้วชน CHECK count_sessions_close_consistent
+    // (เทสต์เคยเขียวเพราะบังเอิญรันก่อนวันนั้น ไม่ใช่เพราะถูก)
+    await db.query(
+      // ต้อง cast $2 เอง — ถ้าปล่อยไว้ Postgres เดาชนิดจาก `$2 - interval` เป็น interval
+      `UPDATE count_sessions
+          SET opened_at = $2::timestamptz - interval '1 hour', closed_at = $2::timestamptz
+        WHERE id = $1`,
+      [SESSION, closedAt],
+    );
 
     await svc.send(SESSION, '52104');
 

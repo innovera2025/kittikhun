@@ -94,45 +94,72 @@ void main() {
       await db.close();
     });
 
-    test('รหัสพนักงานไม่มีในระบบ → ข้อความตรงตาม design', () async {
+    test('ชื่อผู้ใช้ไม่มีในระบบ → ข้อความตรงตาม design', () async {
       final c = container.read(appProvider.notifier);
       c.setEmpId('99999');
       await c.signIn();
       final s = container.read(appProvider);
       expect(s.signedIn, isFalse);
       expect(s.loginError, isTrue);
-      expect(s.loginMessage, 'ไม่พบรหัสพนักงานนี้ · unknown employee ID');
+      // ⚠️ ต้องเป็นข้อความเดียวกับ AUTH_ERROR_MESSAGE_TH.UNKNOWN_EMPLOYEE ฝั่ง server
+      expect(s.loginMessage, 'ไม่พบชื่อผู้ใช้นี้ · unknown user');
     });
 
-    test('PIN ว่างต้องถูกปฏิเสธ (ต่างจาก demo ที่ยอมให้ผ่าน)', () async {
+    test('รหัสผ่านว่างต้องถูกปฏิเสธ (ต่างจาก demo ที่ยอมให้ผ่าน)', () async {
       final c = container.read(appProvider.notifier);
       c.setEmpId('52104');
       await c.signIn();
-      expect(container.read(appProvider).signedIn, isFalse);
+      final s = container.read(appProvider);
+      expect(s.signedIn, isFalse);
+      expect(s.loginError, isTrue);
+      expect(s.loginMessage, 'กรอกรหัสผ่านก่อนเข้าสู่ระบบ');
     });
 
-    test('รหัสถูกและ PIN ครบ 6 หลัก → เข้าสู่ระบบได้', () async {
+    test('ชื่อผู้ใช้ถูกและมีรหัสผ่าน → เข้าสู่ระบบได้', () async {
       final c = container.read(appProvider.notifier);
       c.setEmpId('52104');
-      for (final k in ['1', '2', '3', '4', '5', '6']) {
-        c.pressKey(k);
-      }
+      c.setPassword('123456');
       await c.signIn();
       final s = container.read(appProvider);
       expect(s.signedIn, isTrue);
       expect(s.me.empId, '52104');
     });
 
-    test('keypad: C ล้าง · ⌫ ลบตัวท้าย · สูงสุด 6 หลัก', () {
+    test('⭐ รหัสผ่าน ERP ที่ไม่ใช่ 6 หลัก เข้าได้ — ความยาวไม่ใช่ด่านของแอปอีกต่อไป', () async {
       final c = container.read(appProvider.notifier);
-      for (final k in ['1', '2', '3', '4', '5', '6', '7']) {
-        c.pressKey(k);
-      }
-      expect(container.read(appProvider).pin, '123456');
-      c.pressKey('⌫');
-      expect(container.read(appProvider).pin, '12345');
-      c.pressKey('C');
-      expect(container.read(appProvider).pin, '');
+      c.setEmpId('52104');
+      c.setPassword('ปลาทอง-2569!Warehouse');
+      await c.signIn();
+      expect(container.read(appProvider).signedIn, isTrue);
+    });
+
+    test('⭐ รหัสผ่านเก็บดิบ ไม่ถูก trim — ERP เทียบ string เป๊ะ ช่องว่างท้ายมีความหมาย', () {
+      final c = container.read(appProvider.notifier);
+      c.setPassword('  รหัส ผ่าน  ');
+      expect(container.read(appProvider).pin, '  รหัส ผ่าน  ');
+    });
+
+    test('ชื่อผู้ใช้ถูก trim หัวท้าย แต่ไม่ถูกกรองอักขระ (ชื่อ ERP ไม่รู้รูปแบบล่วงหน้า)', () {
+      final c = container.read(appProvider.notifier);
+      c.setEmpId('  somchai.p  ');
+      expect(container.read(appProvider).empId, 'somchai.p');
+    });
+
+    test('พิมพ์ต่อหลังถูกปฏิเสธ → ล้างสถานะ error ทั้งสองช่อง', () async {
+      final c = container.read(appProvider.notifier);
+      c.setEmpId('99999');
+      await c.signIn();
+      expect(container.read(appProvider).loginError, isTrue);
+
+      c.setPassword('x');
+      expect(container.read(appProvider).loginError, isFalse);
+
+      c.setEmpId('99999');
+      await c.signIn();
+      expect(container.read(appProvider).loginError, isTrue);
+
+      c.setEmpId('5');
+      expect(container.read(appProvider).loginError, isFalse);
     });
   });
 
@@ -182,9 +209,7 @@ void main() {
     Future<void> signInAs(String empId) async {
       final c = container.read(appProvider.notifier);
       c.setEmpId(empId);
-      for (final k in ['0', '0', '0', '0', '0', '0']) {
-        c.pressKey(k);
-      }
+      c.setPassword('any-secret');
       await c.signIn();
     }
 

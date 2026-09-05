@@ -1,24 +1,28 @@
 // -----------------------------------------------------------------------------
-// TCL Mobile Stock Check — CLI สร้าง admin คนแรก (bootstrap)
+// TCL Mobile Stock Check — CLI สร้าง admin แบบ break-glass (bootstrap)
 // -----------------------------------------------------------------------------
-// ⚠️ ต้องมี script บรรทัดนี้ใน package.json (agent อื่นเป็นคนแก้ไฟล์นั้น):
-//       "create-admin": "node dist/cli/create-admin.js"
+// ⚠️ script ใน package.json ต้องเป็น `node dist/cli/create-admin.js` เท่านั้น
+//    (เคยเป็น `ts-node src/cli/create-admin.ts` ซึ่ง **ใช้ในคอนเทนเนอร์จริงไม่ได้**:
+//     runtime stage ของ Dockerfile COPY มาแค่ node_modules ที่ผ่าน `npm prune --omit=dev`
+//     แล้ว + dist + package.json + sql → ไม่มีทั้ง ts-node และไม่มีโฟลเดอร์ src/ เลย
+//     ทางถอยฉุกเฉินจึงพังเงียบด้วย MODULE_NOT_FOUND ตอนที่ต้องใช้จริงที่สุด)
 //
 // เรียกใช้ (หลัง npm run build):
-//   npm run create-admin -- --emp-id 52104 --name "Tcl S." \
+//   npm run create-admin -- --emp-id 52901 --name "Tcl S." \
 //                           [--shift "กะเช้า · A"] [--pin 481920]
 // ระหว่าง dev (ไม่ต้อง build):
-//   npx ts-node src/cli/create-admin.ts --emp-id 52104 --name "Tcl S."
+//   npx ts-node src/cli/create-admin.ts --emp-id 52901 --name "Tcl S."
 // ในคอนเทนเนอร์:
-//   docker compose exec api node dist/cli/create-admin.js --emp-id 52104 --name "..."
+//   docker compose exec api node dist/cli/create-admin.js --emp-id 52901 --name "..."
 //
-// ทำไมต้องมีไฟล์นี้ (ไก่กับไข่): POST /members ต้องมี admin ที่ยืนยันตัวแล้ว →
-// ตอน deploy ครั้งแรกยังไม่มี admin จึงสร้างใครผ่าน API ไม่ได้เลย
-// CLI นี้คือทางเดียวที่เขียน users แถวแรก (รันบนเครื่อง server เท่านั้น)
+// ทำไมต้องมีไฟล์นี้ (ไก่กับไข่): ไม่มี endpoint ไหนสร้างผู้ใช้ได้อีกแล้ว — บัญชีมาจาก
+// sync ผู้ใช้ของ ERP เท่านั้น และ sync เองก็ **ปฏิเสธการรันทั้งรอบ** ถ้าไม่มี admin ที่
+// มี credential `source='local'` เหลืออยู่อย่างน้อย 1 คน (ด่าน last-admin ชั้นที่ 1)
+// CLI นี้จึงเป็นทั้งผู้ใช้คนแรกและกุญแจสำรองที่ ERP แตะไม่ได้ (รันบนเครื่อง server เท่านั้น)
 //
-// 🚫 ไม่แตะ ERP: ไฟล์นี้คุยกับ Postgres ของระบบเราเท่านั้น (users เป็นของระบบเราทั้งหมด)
-// 🚫 ไม่เขียน PIN ลง log/audit — พิมพ์ PIN เริ่มต้นบน stdout "ครั้งเดียว" ตามการใช้งานจริง
-//    (ผู้ดูแลแจ้งเจ้าตัว แล้ว must_change_pin=true บังคับตั้ง PIN ใหม่ตอน login ครั้งแรก)
+// 🚫 ไม่แตะ ERP: ไฟล์นี้คุยกับ Postgres ของระบบเราเท่านั้น
+// 🚫 ไม่เขียนรหัสผ่านลง log/audit — พิมพ์บน stdout "ครั้งเดียว" ตามการใช้งานจริง
+//    (ผู้ดูแลแจ้งเจ้าตัว แล้วเก็บเฉพาะ argon2id hash ลง user_credentials.secret_hash)
 // -----------------------------------------------------------------------------
 
 // env.config.ts มี @Module decorator → ต้องมี polyfill นี้ก่อน import (CLI ไม่ได้บูต Nest)
@@ -57,11 +61,13 @@ const USAGE = [
   '  --emp-id     รหัสพนักงาน (A-Z a-z 0-9 . _ - ยาวไม่เกิน 32 ตัว) — บังคับ',
   '  --name       ชื่อที่แสดงในแอป — บังคับ',
   '  --shift      กะ/ทีม เช่น "กะเช้า · A" — ไม่บังคับ',
-  '  --pin        PIN 6 หลัก — ไม่บังคับ (ไม่ระบุ = ระบบสุ่มให้แบบปลอดภัย)',
+  '  --pin        รหัสผ่านของบัญชีนี้ — ตัวเลข 6 หลัก ไม่บังคับ (ไม่ระบุ = ระบบสุ่มให้)',
   '  -h, --help   แสดงวิธีใช้',
   '',
   'หมายเหตุ:',
-  '  • สิทธิ์เป็น admin เสมอ และบังคับตั้ง PIN ใหม่ตอน login ครั้งแรก',
+  '  • สิทธิ์เป็น admin เสมอ',
+  '  • ชื่อผู้ใช้ตอนล็อกอินคือรหัสพนักงานตัวพิมพ์เล็ก และรหัสผ่านคือค่าที่พิมพ์ออกมาข้างล่าง',
+  '  • credential เขียนเป็น source=local ซึ่ง sync ผู้ใช้ของ ERP ห้ามแตะ (กุญแจสำรอง)',
   '  • รหัสคลังมาจาก WAREHOUSE_CODE ใน .env (ไม่ต้องส่งเข้ามา)',
   '  • ถ้ามีรหัสพนักงานนี้อยู่แล้ว จะไม่ทับของเดิม (ออกด้วย exit code 1)',
 ].join('\n');
@@ -211,9 +217,12 @@ function isSequential(pin: string): boolean {
 }
 
 /**
- * PIN ที่เดาง่าย — เกณฑ์เดียวกับที่ AuthService.changePin ปฏิเสธ (เลขซ้ำ/123456)
- * บวกเลขเรียง เลขซ้ำเป็นคู่ และ **PIN ที่ตรงกับรหัสพนักงาน** เพราะรหัสพนักงาน
- * อยู่บนป้ายชื่อ ใครก็เห็น (docs/architecture.md §7)
+ * รหัสผ่านที่เดาง่าย — เลขซ้ำ/เลขเรียง/รหัสยอดฮิต และ **ค่าที่ตรงกับรหัสพนักงาน**
+ * เพราะรหัสพนักงานอยู่บนป้ายชื่อ ใครก็เห็น (docs/architecture.md §7)
+ *
+ * ยังยึด "ตัวเลข 6 หลัก" ตาม `PinSchema` โดยตั้งใจ แม้ล็อกอินจะรับรหัสผ่านแบบใดก็ได้แล้ว:
+ * ค่านี้ถูกพิมพ์ปากเปล่า/จดใส่กระดาษเพื่อส่งต่อในสถานการณ์ฉุกเฉิน สั้นและกดง่ายจึงสำคัญ
+ * กว่าเอนโทรปี — ด่านกัน brute force ตัวจริงคือ throttle ทวีคูณใน AuthService
  */
 function isGuessablePin(pin: string, empId: string): boolean {
   if (/^(\d)\1{5}$/.test(pin)) return true;
@@ -248,7 +257,7 @@ function describeDbError(err: unknown): string {
   switch (code) {
     case '42P01': // undefined_table
       return [
-        'ยังไม่มีตาราง users ในฐานข้อมูล — ต้องติดตั้งสคีมาก่อน',
+        'ยังไม่มีตาราง users / user_credentials ในฐานข้อมูล — ต้องติดตั้งสคีมาก่อน',
         '  psql "$DATABASE_URL" -f db/schema.sql',
         '  (หรือ: docker compose exec -T db psql -U <user> -d <db> < db/schema.sql)',
       ].join('\n');
@@ -258,12 +267,18 @@ function describeDbError(err: unknown): string {
     case '28000': // invalid_authorization_specification
       return 'ชื่อผู้ใช้หรือรหัสผ่านใน DATABASE_URL ไม่ถูกต้อง (Postgres ปฏิเสธการยืนยันตัวตน)';
     case '42501': // insufficient_privilege
-      return 'บัญชีใน DATABASE_URL ไม่มีสิทธิ์เขียนตาราง users — ใช้บัญชีเจ้าของสคีมา';
+      return 'บัญชีใน DATABASE_URL ไม่มีสิทธิ์เขียนตาราง users / user_credentials — ใช้บัญชีเจ้าของสคีมา';
+    case '23505': {
+      // unique_violation — เกิดได้ที่ user_credentials (login_name PK / emp_id UNIQUE)
+      const constraint = (err as { constraint?: unknown }).constraint;
+      const name = typeof constraint === 'string' ? ` (${constraint})` : '';
+      return `รหัสพนักงานหรือชื่อผู้ใช้ซ้ำกับที่มีอยู่แล้ว${name} — ใช้ --emp-id ค่าอื่น`;
+    }
     case '23514': {
       // check_violation — บอกชื่อ constraint ให้ตามได้ว่าเงื่อนไขไหนไม่ผ่าน
       const constraint = (err as { constraint?: unknown }).constraint;
       const name = typeof constraint === 'string' ? ` (${constraint})` : '';
-      return `ข้อมูลไม่ผ่านเงื่อนไขของตาราง users${name} — ตรวจค่า --emp-id / --name / WAREHOUSE_CODE`;
+      return `ข้อมูลไม่ผ่านเงื่อนไขของตาราง${name} — ตรวจค่า --emp-id / --name / WAREHOUSE_CODE`;
     }
     case 'ECONNREFUSED':
       return 'ต่อ Postgres ไม่ได้: ถูกปฏิเสธการเชื่อมต่อ — ตรวจว่า DB รันอยู่และ host/port ใน DATABASE_URL ถูกต้อง';
@@ -274,6 +289,79 @@ function describeDbError(err: unknown): string {
       return 'ต่อ Postgres ไม่ได้: หมดเวลาเชื่อมต่อ — ตรวจ network/firewall ระหว่างเครื่องนี้กับ DB';
     default:
       return `ทำงานกับฐานข้อมูลไม่สำเร็จ: ${detail}`;
+  }
+}
+
+// ── เขียนลงฐานข้อมูล ────────────────────────────────────────────────────────
+
+interface AdminRow {
+  empId: string;
+  name: string;
+  shift: string | null;
+  warehouseCode: string;
+  /** สิ่งที่ผู้ใช้พิมพ์ตอนล็อกอิน = lower(emp_id) (CHECK user_credentials_login_fmt บังคับ) */
+  loginName: string;
+  secretHash: string;
+}
+
+/**
+ * สร้าง admin หนึ่งคน = `users` + `user_credentials` **ในทรานแซกชันเดียว**
+ *
+ * ทั้งสองแถวต้องเกิดพร้อมกันหรือไม่เกิดเลย: แถว `users` ที่ไม่มี credential คือ admin
+ * ที่ล็อกอินไม่ได้ (ล็อกอินอ่านจาก `user_credentials` เท่านั้นแล้ว) และแย่กว่านั้นคือ
+ * มันไป**ปิด**ทางสร้างใหม่ด้วย เพราะ `ON CONFLICT (emp_id) DO NOTHING` จะเจอแถวเดิม
+ * ทุกครั้งที่รันซ้ำ
+ *
+ * `source='local'` คือสัญญากับ sync ผู้ใช้ของ ERP ว่าห้ามแตะแถวนี้ (ด่าน last-admin
+ * ชั้นที่ 1) — ค่านี้ห้ามเปลี่ยนเป็นอย่างอื่นเด็ดขาด
+ */
+async function insertAdmin(pool: Pool, row: AdminRow): Promise<'created' | 'duplicate'> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // ON CONFLICT DO NOTHING = กันชนแบบ race-safe (ไม่ต้อง pre-check แล้วเจอ TOCTOU)
+    // 🚫 ไม่เขียน users.pin_hash อีกต่อไป — คอลัมน์นั้น DEPRECATED (ดู db/schema.sql §3.1b)
+    const inserted = await client.query<{ emp_id: string }>(
+      `INSERT INTO users (emp_id, name, role, shift, warehouse_code, must_change_pin)
+       VALUES ($1, $2, 'admin', $3, $4, false)
+       ON CONFLICT (emp_id) DO NOTHING
+       RETURNING emp_id`,
+      [row.empId, row.name, row.shift, row.warehouseCode],
+    );
+    if (inserted.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return 'duplicate';
+    }
+
+    // DO UPDATE มี WHERE คุมไว้: ถ้า login_name นี้เป็นของ "คนอื่น" อยู่แล้ว จะได้ 0 แถว
+    // แทนที่จะไปทับ credential ของเขาแล้วล็อกเจ้าตัวออกจากระบบเงียบ ๆ
+    const cred = await client.query<{ emp_id: string }>(
+      `INSERT INTO user_credentials (login_name, emp_id, secret_hash, source)
+       VALUES ($1, $2, $3, 'local')
+       ON CONFLICT (login_name) DO UPDATE
+         SET secret_hash = EXCLUDED.secret_hash, secret_rotated_at = now(), source = 'local'
+       WHERE user_credentials.emp_id = EXCLUDED.emp_id
+       RETURNING emp_id`,
+      [row.loginName, row.empId, row.secretHash],
+    );
+    if (cred.rows.length === 0) {
+      throw new CliError(
+        [
+          `ชื่อผู้ใช้ "${row.loginName}" ถูกใช้โดยรหัสพนักงานอื่นอยู่แล้ว — ไม่ได้สร้างอะไรเลย`,
+          '  (ชื่อผู้ใช้คือรหัสพนักงานตัวพิมพ์เล็ก จึงชนกันได้แม้รหัสพนักงานจะต่างตัวพิมพ์)',
+          '  ใช้ --emp-id ค่าอื่น',
+        ].join('\n'),
+      );
+    }
+
+    await client.query('COMMIT');
+    return 'created';
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw err;
+  } finally {
+    client.release();
   }
 }
 
@@ -293,10 +381,12 @@ async function run(): Promise<number> {
   const pinWasGiven = args.pin !== undefined;
   const pin = args.pin ?? generatePin(args.empId);
   if (pinWasGiven && isGuessablePin(pin, args.empId)) {
-    console.error('⚠️  PIN ที่ระบุมาเดาง่าย — แนะนำให้ไม่ใส่ --pin เพื่อให้ระบบสุ่มให้');
+    console.error('⚠️  รหัสผ่านที่ระบุมาเดาง่าย — แนะนำให้ไม่ใส่ --pin เพื่อให้ระบบสุ่มให้');
   }
 
-  const pinHash = await argon2.hash(pin + config.PIN_PEPPER, ARGON_OPTS);
+  // pepper ตัวเดียวกับ AuthService เสมอ — hash ที่ใช้ pepper อื่นจะ verify ไม่ผ่านตอนล็อกอิน
+  const secretHash = await argon2.hash(pin + config.PIN_PEPPER, ARGON_OPTS);
+  const loginName = args.empId.toLowerCase();
 
   const pool = new Pool({
     connectionString: config.DATABASE_URL,
@@ -305,38 +395,39 @@ async function run(): Promise<number> {
   });
 
   try {
-    const inserted = await pool.query<{ emp_id: string }>(
-      `INSERT INTO users (emp_id, name, pin_hash, role, shift, warehouse_code, must_change_pin)
-       VALUES ($1, $2, $3, 'admin', $4, $5, true)
-       ON CONFLICT (emp_id) DO NOTHING
-       RETURNING emp_id`,
-      [args.empId, args.name, pinHash, args.shift ?? null, config.WAREHOUSE_CODE],
-    );
+    const outcome = await insertAdmin(pool, {
+      empId: args.empId,
+      name: args.name,
+      shift: args.shift ?? null,
+      warehouseCode: config.WAREHOUSE_CODE,
+      loginName,
+      secretHash,
+    });
 
-    if (inserted.rows.length === 0) {
+    if (outcome === 'duplicate') {
       console.error(
         [
-          `✖ มีรหัสพนักงาน ${args.empId} อยู่ในระบบแล้ว — ไม่ได้สร้างใหม่และไม่ได้แก้ข้อมูล/PIN ของเดิม`,
-          '  ถ้าต้องการรีเซ็ต PIN หรือเปลี่ยนสิทธิ์ ให้ทำผ่านหน้าจัดการผู้ใช้ด้วยบัญชี admin',
+          `✖ มีรหัสพนักงาน ${args.empId} อยู่ในระบบแล้ว — ไม่ได้สร้างใหม่และไม่ได้แก้ข้อมูล/รหัสผ่านของเดิม`,
+          '  ถ้าต้องการกุญแจสำรองอีกดอก ให้รันคำสั่งนี้กับรหัสพนักงานที่ยังไม่มีในระบบ',
         ].join('\n'),
       );
       return 1;
     }
 
     // audit: ไม่มี actor ที่ล็อกอิน → actor='system', payload.by บอกว่ามาจากช่องทาง CLI
-    // 🚫 ห้ามใส่ PIN หรือ hash ลง payload
+    // 🚫 ห้ามใส่รหัสผ่านหรือ hash ลง payload
     await pool
       .query(`INSERT INTO audit_log (actor, action, payload) VALUES ($1, $2, $3::jsonb)`, [
         'system',
         'members.bootstrap_admin',
-        JSON.stringify({ empId: args.empId, by: 'cli' }),
+        JSON.stringify({ empId: args.empId, loginName, source: 'local', by: 'cli' }),
       ])
       .catch((err: unknown) => {
         // สร้าง user สำเร็จแล้ว — audit พลาดไม่ควรทำให้คำสั่งล้มเหลว แต่ต้องเห็นว่าพลาด
         console.error(`⚠️  เขียน audit_log ไม่สำเร็จ: ${(err as Error).message}`);
       });
 
-    // พิมพ์ PIN เริ่มต้นครั้งเดียวบน stdout (ไม่มีที่อื่นเก็บค่านี้ — hash เท่านั้นที่อยู่ใน DB)
+    // พิมพ์รหัสผ่านครั้งเดียวบน stdout (ไม่มีที่อื่นเก็บค่านี้ — hash เท่านั้นที่อยู่ใน DB)
     console.log(
       [
         '',
@@ -346,16 +437,18 @@ async function run(): Promise<number> {
         `  สิทธิ์ : admin`,
         `  คลัง : ${config.WAREHOUSE_CODE}`,
         `  กะ : ${args.shift ?? '(ไม่ระบุ)'}`,
-        `  PIN เริ่มต้น : ${pin}${pinWasGiven ? ' (ตามที่ระบุด้วย --pin)' : ' (ระบบสุ่มให้)'}`,
+        `  ชื่อผู้ใช้ตอนล็อกอิน : ${loginName}`,
+        `  รหัสผ่าน : ${pin}${pinWasGiven ? ' (ตามที่ระบุด้วย --pin)' : ' (ระบบสุ่มให้)'}`,
         '',
-        '⚠️  PIN นี้แสดงเพียงครั้งเดียว — ระบบเก็บเฉพาะ hash จึงเปิดดูย้อนหลังไม่ได้',
-        '    แจ้ง PIN ให้เจ้าตัวโดยตรง แล้วระบบจะบังคับตั้ง PIN ใหม่ตอน login ครั้งแรก',
-        '    (ถ้า PIN หาย: ให้ admin อีกคนรีเซ็ต หรือรันคำสั่งนี้กับรหัสพนักงานใหม่)',
+        '⚠️  รหัสผ่านนี้แสดงเพียงครั้งเดียว — ระบบเก็บเฉพาะ hash จึงเปิดดูย้อนหลังไม่ได้',
+        '    แจ้งเจ้าตัวโดยตรง (บัญชีนี้เป็น source=local — sync ของ ERP จะไม่แตะและไม่เขียนทับ)',
+        '    (ถ้ารหัสผ่านหาย: รันคำสั่งนี้กับรหัสพนักงานใหม่ แล้วปลดบัญชีเดิมทีหลัง)',
         '',
       ].join('\n'),
     );
     return 0;
   } catch (err) {
+    if (err instanceof CliError) throw err;
     throw new CliError(describeDbError(err));
   } finally {
     await pool.end().catch(() => undefined);

@@ -18,7 +18,7 @@ ERP (`db_TCL` / SQL Server 2019) เป็นแหล่ง **อ่านอ�
 ผลการนับและส่วนต่างเก็บใน PostgreSQL ของระบบนี้เท่านั้น
 
 **ขอบเขตข้อมูลที่ดึงจาก ERP** (ยืนยัน 22 ส.ค. 2569): ดึง **item master + จำนวนคงเหลือ** เท่านั้น
-ผู้ใช้/สิทธิ์/PIN เป็นของระบบเราล้วน · **ไม่** mirror รอบนับของ ERP อีกต่อไป — รอบนับทุกรอบเปิดจากแอปเราเอง
+บวก **บัญชีผู้ใช้จาก `menuuser`** (ตกลงเพิ่ม 4 ก.ย. 2569) · **ไม่** mirror รอบนับของ ERP — รอบนับทุกรอบเปิดจากแอปเราเอง
 
 ## สถานะโปรเจค
 
@@ -28,10 +28,10 @@ ERP (`db_TCL` / SQL Server 2019) เป็นแหล่ง **อ่านอ�
 | ทดสอบเชื่อมต่อ ERP จริง | ✅ เชื่อมได้ สำรวจข้อมูลครบ (อ่านอย่างเดียว) |
 | **UI (Flutter) — 8 หน้าจอ** | ✅ `flutter analyze` สะอาด · `flutter test` **59/59 ผ่าน** |
 | **Backend (NestJS) — โครงครบ** | ✅ `tsc` สะอาด · boot ได้จริง · เทสต์ **259/259 ผ่าน** · CI รันทุก push |
-| **ระบบผู้ใช้/login (ของเราเอง ไม่ดึงจาก ERP)** | ✅ **ใช้งานได้จริง** — `test/auth-integration.spec.ts` **36/36 ผ่าน** กับ Postgres จริง |
+| **ระบบผู้ใช้/login (บัญชีจาก ERP · hash เก็บที่เรา)** | ✅ **ใช้งานได้จริง** — `test/auth-integration.spec.ts` **36/36 ผ่าน** กับ Postgres จริง |
 | ต่อ UI เข้ากับ backend (auth + members) | ✅ ตั้ง `API_BASE_URL` = ใช้ backend · ไม่ตั้ง = fixture สำหรับดู UI |
 | **โมดูล Catalog / Count / Sync** | ✅ **ใช้งานได้จริง** — `test/count-cycle.spec.ts` **41/41 ผ่าน** กับ Postgres จริง |
-| จอแสดง PIN เริ่มต้นหลังเพิ่มสมาชิก | ✅ |
+| ล็อกอินด้วยบัญชี ERP (`menuuser`) แทน PIN 6 หลัก | ✅ ทั้ง sync ผู้ใช้ · จอล็อกอินใหม่ · ด่านกันเครื่องยิงบาร์โค้ด |
 | **Offline-first layer (drift + outbox + SyncEngine)** | ✅ **ใช้งานได้จริง** — เทสต์ **19/19 ผ่าน** |
 | ต่อหน้าจอ scan/search/count เข้า replica ในเครื่อง | ✅ สแกน/ค้นหา/นับ ทำงานได้แม้ออฟไลน์ |
 | จอ pending-review + แถบสถานะซิงค์ | ✅ |
@@ -86,30 +86,38 @@ admin ตัดสิน conflict → ปิดรอบ → closed_variance (�
 | แถบสถานะ | 'ออฟไลน์ · บันทึกไว้ในเครื่อง' · 'รอซิงค์ n รายการ' · 'ข้อมูล ณ HH:MM' |
 | sign-out | หยุดซิงค์แต่ **ไม่ลบคิว** — งานนับที่ยังไม่ส่งต้องอยู่รอด |
 
-## ระบบผู้ใช้ (จัดการในระบบเราเองทั้งหมด)
+## ระบบผู้ใช้ (บัญชีมาจาก ERP · ตัวยืนยันตัวตนเป็นของระบบเรา)
 
-ผู้ใช้ถูกสร้างและจัดการที่นี่ **ไม่ดึงจาก ERP** — ERP ใช้แค่ดึงยอดสต็อกมาเทียบ
+บัญชีและรหัสผ่านมาจากตาราง `menuuser` ของ ERP ผ่านรอบ sync ผู้ใช้ แล้ว hash เก็บไว้ใน
+`user_credentials` ของเราเอง — **login ยังทำงานได้แม้ ERP ล่ม** (ไม่ query สดตอนล็อกอิน)
+และ **plaintext ของ ERP ไม่ถูกเก็บ/ไม่ลง log/ไม่โผล่ในข้อความ error** ที่ใดเลย
 
 | ความสามารถ | รายละเอียด |
 |---|---|
-| PIN | argon2id + server pepper · **ปฏิเสธ PIN ที่เดาง่าย** (เลขซ้ำ + เรียงขึ้น/ลง เช่น 123456, 654321) — กติกาเดียวกันทั้งตอนผู้ใช้ตั้งเองและตอนระบบสุ่ม PIN เริ่มต้น (`src/auth/pin-policy.ts`) |
-| กัน brute force | **หน่วงเวลาแบบทวีคูณต่อรหัสพนักงาน** (1s→2s→4s…) ไม่ล็อคบัญชี — กันคนอื่นยิง PIN ผิดเพื่อล็อคเพื่อนร่วมงาน |
+| รหัสผ่าน | argon2id + server pepper · ค่าที่ hash คือรหัสผ่านของ ERP ที่ sync ดึงมา (ระบบเราไม่ตั้ง/ไม่รีเซ็ตรหัสผ่านให้ใคร) |
+| ที่มาของบัญชี | `source='erp'` (จาก sync) · `source='local'` (break-glass CLI ที่ sync ห้ามแตะ) · `source='legacy_pin'` (PIN เดิมระหว่างเปลี่ยนผ่าน) |
+| กัน brute force | **หน่วงเวลาแบบทวีคูณต่อชื่อผู้ใช้** (1s→2s→4s…) ไม่ล็อคบัญชี — กันคนอื่นยิงรหัสผ่านผิดเพื่อล็อคเพื่อนร่วมงาน |
 | Token | access 15 นาที + refresh 30 วัน rotate ทุกครั้ง · เก็บเฉพาะ sha256 · **ผูกกับเครื่อง** |
 | WiFi คลังหลุด | **grace window 60 วิ** — retry ด้วย token เดิมไม่ทำให้ถูกเตะออกจากระบบ |
-| สิทธิ์ | admin / staff / viewer · endpoint สำคัญ**ตรวจ role กับ DB** (`role_version`) ไม่เชื่อ JWT |
-| เพิ่มสมาชิก | admin สร้าง → server **สุ่ม PIN เริ่มต้น** → แสดงให้ admin ครั้งเดียวเพื่อแจ้งพนักงาน |
-| ครั้งแรก / reset | บังคับตั้ง PIN ใหม่ (`mustChangePin`) → จอ `ChangePinScreen` |
-| กันล็อคตัวเอง | ลด admin คนสุดท้ายไม่ได้ ทั้งฝั่งแอปและ server |
-| Audit | ทุกการกระทำลง `audit_log` แบบ append-only · **ตรวจแล้วว่าไม่มี PIN รั่ว** |
+| สิทธิ์ | admin / staff / viewer มาจาก `menuuser.user_level` แบบ **allowlist ล้วน** (level ที่ไม่ได้ map = ไม่ได้บัญชีเลย) · endpoint สำคัญ**ตรวจ role กับ DB** (`role_version`) ไม่เชื่อ JWT |
+| เพิ่ม/แก้สมาชิก | **ไม่มี endpoint สร้างผู้ใช้/รีเซ็ตรหัสผ่านแล้ว** — เพิ่มคนที่ ERP แล้วรอ sync รอบถัดไป · `PATCH /members/:empId/role` ปฏิเสธบัญชีของ ERP ด้วย `ERP_MANAGED` |
+| กันล็อคตัวเอง | ลด admin คนสุดท้ายไม่ได้ ทั้งฝั่งแอป · `PATCH role` · และรอบ sync (ทั้งรายแถวและทั้ง sweep) |
+| Audit | ทุกการกระทำลง `audit_log` แบบ append-only · **ตรวจแล้วว่าไม่มีรหัสผ่านรั่ว** |
 
-**สร้าง admin คนแรก** (แก้ปัญหาไก่กับไข่ — ยังไม่มี admin จึงสร้างผ่านแอปไม่ได้):
+**สร้าง admin คนแรก** (แก้ปัญหาไก่กับไข่ — ยังไม่มี admin จึงสร้างผ่านแอปไม่ได้
+และรอบ sync ผู้ใช้ **ปฏิเสธการรันทั้งรอบ** ถ้าไม่มี admin `source='local'` เหลืออยู่):
 
 ```bash
 cd server
 npm run db:schema                                    # สร้างตาราง
-npm run create-admin -- --emp-id 52104 --name "ชื่อ ผู้ดูแล" --shift "กะเช้า · A"
-# → พิมพ์ PIN เริ่มต้นออกมาครั้งเดียว · login แล้วระบบบังคับตั้ง PIN ใหม่ทันที
+npm run build                                        # create-admin รันจาก dist/
+npm run create-admin -- --emp-id 52901 --name "ชื่อ ผู้ดูแล" --shift "กะเช้า · A"
+# → พิมพ์รหัสผ่านเริ่มต้นออกมาครั้งเดียว · ชื่อผู้ใช้คือรหัสพนักงานตัวพิมพ์เล็ก
 ```
+
+⚠️ รหัสพนักงานของ admin break-glass ต้อง**ไม่ซ้ำกับแถวใดใน `menuuser`** มิฉะนั้นรอบ sync
+จะเขียนสิทธิ์ตาม `user_level` ทับ (credential ไม่ถูกแตะ แต่ role ถูกลด) — ตัวอย่างใช้ `52901`
+เพราะ fixture ของ `ERP_DRIVER=mock` จองช่วง `52101–52105` ไว้แล้ว
 
 ## สแต็กเทคโนโลยี
 
@@ -144,17 +152,18 @@ server/                   NestJS backend
   sql/erp/verify-balance.sql            diagnostic ตรวจสูตรก่อนเชื่อตัวเลข (อ่านอย่างเดียว)
   scripts/verify-erp.ts                 `npm run verify:erp` ตรวจสิทธิ์ + ความแม่นของยอด
   scripts/simulate.ts                   `npm run simulate` จำลองวันนับสต็อกทั้งวันผ่าน HTTP จริง
+                                        (ต้องตั้ง SIM_ADMIN_EMP/SIM_ADMIN_PIN · บัญชีพนักงานมาจาก `POST /sync/users`)
   src/config/env.config.ts              zod ตรวจ .env ตอน boot (fail fast บอกชื่อตัวแปร)
   src/erp/erp-adapter.ts                ⭐ สัญญา read-only + statement guard + compile guard
   src/erp/drivers/mssql.driver.ts       SQL Server driver + boot write-probe + charset ไทย
   src/erp/drivers/mock.driver.ts        fixture จาก design
   db/schema.sql                         Postgres schema 13 ตาราง + view v_variance
   docker-compose.yml · Dockerfile · Caddyfile
-  src/auth/pin-policy.ts                ⭐ กติกา PIN ที่เดาง่าย — แหล่งความจริงเดียว
+  src/sync/sync.module.ts               ⭐ รอบ sync items + ผู้ใช้ (allowlist · last-admin floor · grace)
   test/erp-read-only.spec.ts            24 เทสต์กฎเหล็ก read-only
   test/erp-items-script.spec.ts         25 เทสต์ล็อกเงื่อนไขสูตรยอดคงเหลือ
   test/catalog-sync.spec.ts             29 เทสต์ tombstone guardrail + delta feed (ต้องมี Postgres)
-  test/pin-policy.spec.ts               31 เทสต์กติกา PIN
+  test/users-sync.spec.ts               ⭐ เทสต์ sync ผู้ใช้: last-admin floor · allowlist · grace (ต้องมี Postgres)
   test/auth-crypto.spec.ts              23 เทสต์ argon2 + pepper + sha256 + TTL
   test/variance-csv.spec.ts             26 เทสต์ CSV ไทย (BOM, null≠0, formula injection)
   test/auth-integration.spec.ts         36 เทสต์ login/refresh/throttle/audit (ต้องมี Postgres)
@@ -189,8 +198,8 @@ cd server
 npm install
 cp ../.env.example .env    # กรอกค่าจริง (ไฟล์ .env ไม่ถูก commit)
 npm run db:schema          # สร้างตารางใน Postgres
-npm run create-admin -- --emp-id 52104 --name "ชื่อ ผู้ดูแล"
-npm run build
+npm run build              # ต้อง build ก่อน — create-admin รันจาก dist/ (ไม่ใช่ ts-node)
+npm run create-admin -- --emp-id 52901 --name "ชื่อ ผู้ดูแล"
 npm run start:dev          # ERP_DRIVER=mock ใช้ได้เลยไม่ต้องต่อ ERP
 npm run test:unit          # 104 เทสต์ ไม่ต้องมี DB
 npx jest                   # ทั้งหมด — ข้าม integration อัตโนมัติถ้าไม่มี DB

@@ -11,8 +11,6 @@ import '../count/pending_counts_screen.dart';
 import '../pending/pending_review_screen.dart';
 import '../scan/scan_screen.dart';
 import '../search/search_screen.dart';
-import '../team/add_member_sheet.dart';
-import '../team/initial_pin_sheet.dart';
 import '../team/team_screen.dart';
 import 'sync_status_bar.dart';
 
@@ -26,9 +24,9 @@ TextStyle _head12(Color color) =>
 
 /// เปลือกแอปหลัง sign-in (design §2.2) — header + เนื้อหาแท็บ + แถบแท็บล่าง
 ///
-/// Toast (§2.8) และ sheet เพิ่มสมาชิก (§2.7) เป็น layer ใน Stack เดียวกัน
-/// **ห้ามเปลี่ยนไปใช้ `showModalBottomSheet`** — barrier ของ route จะทับ toast
-/// จนมองไม่เห็นข้อความ validation
+/// Toast (§2.8) เป็น layer ใน Stack เดียวกับเนื้อหา
+/// **ห้ามเปลี่ยน sheet ใด ๆ ไปใช้ `showModalBottomSheet`** — barrier ของ route
+/// จะทับ toast จนมองไม่เห็นข้อความ validation
 /// เปิดจอ pending-review อยู่หรือไม่ (จอชั่วคราว — ไม่แตะแท็บล่าง 4 ช่องของ design)
 class ShowPending extends Notifier<bool> {
   @override
@@ -113,52 +111,6 @@ class AppShell extends ConsumerWidget {
             ),
           ],
         ),
-
-        // sheet ต้องอยู่ใต้ toast เสมอ (ลำดับใน Stack = ลำดับการวาด)
-        if (state.addSheetOpen)
-          const Positioned.fill(
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                // dismissible:false — design ไม่ปิด sheet ด้วยการแตะฉากหลัง
-                ModalBarrier(color: TclTokens.scrim, dismissible: false),
-                Padding(
-                  padding: EdgeInsets.all(16),
-                  child: Align(
-                    alignment: Alignment.bottomCenter,
-                    child: AddMemberSheet(),
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-        // จอแสดง PIN เริ่มต้นหลังเพิ่มสมาชิก / admin reset PIN — แสดงครั้งเดียว
-        // วางหลัง add-member sheet เพราะเปิดต่อจากกันได้ และต้องทับ sheet เดิม
-        if (state.lastInitialPin != null)
-          Positioned.fill(
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                const ModalBarrier(
-                  color: TclTokens.scrim,
-                  dismissible: false,
-                ),
-                Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Align(
-                    alignment: Alignment.bottomCenter,
-                    child: InitialPinSheet(
-                      empId: state.lastInitialPin!.empId,
-                      name: state.lastInitialPin!.name,
-                      pin: state.lastInitialPin!.pin,
-                      onDismiss: controller.dismissInitialPin,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
 
         if (state.toast != null)
           Positioned(

@@ -11,7 +11,9 @@ import {
   BaseErpDriver,
   type CanonicalItem,
   type Cursor,
+  type ErpUserRow,
 } from '../erp-adapter';
+import { ErpSecret } from '../erp-secret';
 
 /**
  * ERP driver: Microsoft SQL Server 2019 · database `db_TCL` · collation `Thai_CI_AS`
@@ -295,6 +297,25 @@ function pickItemFields(row: Record<string, unknown>): Record<string, unknown> {
   };
 }
 
+/**
+ * 1 แถวดิบจาก `menuuser` → `ErpUserRow` (pure — ไม่แตะ connection ของ ERP)
+ *
+ * 🚫 บรรทัด `ErpSecret.of(...)` ข้างล่างคือ **จุดเดียวในระบบ** ที่ plaintext ของ ERP ข้ามเข้ามา
+ *    ถ้ามีใครถอดการห่อออก (หรือเผลอเปลี่ยนเป็น string ดิบ) จะไม่มีอะไรฟ้องเลยจนกว่ามันจะไป
+ *    โผล่ใน log/anomaly/audit_log ของจริง ซึ่ง `audit_log` เป็น append-only ลบคืนไม่ได้
+ *    → แยกออกมาเป็นฟังก์ชันบริสุทธิ์เพื่อให้เทสต์จับตรงนี้ได้โดยไม่ต้องมี SQL Server จริง
+ */
+export function toErpUserRow(row: Record<string, unknown>): ErpUserRow {
+  return {
+    loginName: asScalarString(row['login_name']),
+    // ⚠️ ห้าม trim ค่านี้ — ERP เทียบ a_Password แบบ string เป๊ะ ช่องว่างท้ายมีความหมาย
+    password: ErpSecret.of(asScalarString(row['password'])),
+    userLevel: asScalarString(row['user_level']),
+    nameThai: asScalarString(row['name_thai']),
+    empCode: asScalarString(row['emp_code']),
+  };
+}
+
 function firstIssue(error: z.ZodError): string {
   const issue = error.issues[0];
   return issue ? `${issue.path.join('.') || '(root)'}: ${issue.message}` : 'ไม่ผ่าน validation';
@@ -340,6 +361,7 @@ const DriverEnvSchema = z.object({
   ERP_SQL_CHARSET: z.enum(['utf8', 'win874', 'tis620']).default('utf8'),
   ERP_SQL_ITEMS_VIEW: zSqlIdentifier.optional(),
   ERP_SQL_ITEMS_SQL_FILE: z.string().trim().min(1).optional(),
+  ERP_SQL_USERS_SQL_FILE: z.string().trim().min(1).optional(),
   WAREHOUSE_CODE: z.string().trim().min(1),
 });
 
@@ -356,6 +378,8 @@ interface MssqlDriverConfig {
   readonly charset: ThaiCharset;
   readonly itemsTable: string;
   readonly itemsSqlFile?: string;
+  /** override ของ query ดึงผู้ใช้ — ไม่ตั้ง = ใช้ DEFAULT_USERS_SQL ในไฟล์นี้ */
+  readonly usersSqlFile?: string;
   readonly warehouseCode: string;
   /** 🚨 ERP_UNSAFE_ALLOW_PRIVILEGED_ACCOUNT — ยอมให้ login เขียนได้ (sa) โดยไม่หยุด boot */
   readonly allowPrivilegedAccount: boolean;
@@ -375,6 +399,7 @@ function readDriverConfig(cfg: ConfigService<AppConfig, true>): MssqlDriverConfi
     ERP_SQL_CHARSET: cfg.get('ERP_SQL_CHARSET', { infer: true }),
     ERP_SQL_ITEMS_VIEW: cfg.get('ERP_SQL_ITEMS_VIEW', { infer: true }),
     ERP_SQL_ITEMS_SQL_FILE: cfg.get('ERP_SQL_ITEMS_SQL_FILE', { infer: true }),
+    ERP_SQL_USERS_SQL_FILE: cfg.get('ERP_SQL_USERS_SQL_FILE', { infer: true }),
     WAREHOUSE_CODE: cfg.get('WAREHOUSE_CODE', { infer: true }),
   });
 
@@ -402,6 +427,7 @@ function readDriverConfig(cfg: ConfigService<AppConfig, true>): MssqlDriverConfi
     charset: env.ERP_SQL_CHARSET,
     itemsTable: env.ERP_SQL_ITEMS_VIEW ?? DEFAULT_ITEMS_TABLE,
     itemsSqlFile: env.ERP_SQL_ITEMS_SQL_FILE,
+    usersSqlFile: env.ERP_SQL_USERS_SQL_FILE,
     warehouseCode: env.WAREHOUSE_CODE,
     allowPrivilegedAccount:
       cfg.get('ERP_UNSAFE_ALLOW_PRIVILEGED_ACCOUNT', { infer: true }) === true,
@@ -441,6 +467,80 @@ WHERE rn = 1
 ORDER BY ItemCode
 OFFSET @offset ROWS FETCH NEXT @batch ROWS ONLY`;
 }
+
+/**
+ * ผู้ใช้ทั้งหมดจาก `menuuser` — ตรงตาม query ต้นฉบับที่เจ้าของโปรเจคให้มา:
+ *
+ *     SELECT user_name As USERID, a_Password, id_random, user_level As Ulevel,
+ *            name_thai, Employee.EmpPict
+ *     FROM  menuuser WITH (NOLOCK)
+ *     LEFT OUTER JOIN Employee WITH (NOLOCK) ON menuuser.emp_id = Employee.EmployeeCode
+ *     WHERE user_name = ?cUser
+ *     ORDER BY User_Name
+ *
+ * ⭐ **ตัวตนของผู้ใช้ = `user_name`** — query ต้นฉบับ alias มันเป็น `USERID` ตรง ๆ
+ *    `emp_id` เป็นเพียง join key เข้า `Employee` เท่านั้น ไม่ใช่ตัวตน → `emp_code`
+ *    (ที่ลงเป็น `users.emp_id` ฝั่งเรา) จึงดึงจาก `user_name` เหมือน `login_name`
+ *    วัดจาก ERP จริง (43.229.134.162 / db_TCL): `menuuser` 3 แถว · `Employee` **0 แถว**
+ *    → `menuuser.emp_id` ว่างทุกแถว การใช้มันเป็นตัวตนคือปฏิเสธผู้ใช้ 100%
+ *
+ * ⚠️ ตัด `LEFT JOIN Employee` + `EmpPict` ทั้งก้อนทิ้ง (U5) — และตอนนี้มีเหตุผลที่แข็งกว่าเดิม:
+ *    `Employee` ว่างทั้งตาราง join ไปก็ได้ NULL ทุกแถว ส่วน `EmpPict` ไม่มีที่ลงใน
+ *    `UserProfile` อยู่แล้ว → join เพิ่ม = ภาระเปล่ากับ ERP ล้วน ๆ
+ * 🚨 **ไม่มี WHERE กรองคลัง/แผนกเลย** — `menuuser` คือตารางบัญชีของ ERP ทั้งระบบ
+ *    (บัญชี · ขาย · จัดซื้อ · superuser) เดิมเป็น known-tradeoff ที่แก้ด้วย allowlist ระดับ
+ *    role map (`ERP_USER_LEVEL_ROLE_MAP`) — **allowlist นั้นถูกถอดออกแล้ว 5 ก.ย. 2569**
+ *    ตามคำสั่งลูกค้า ("ทำทั้งหมดให้อยู่ใน Role เดียวกัน") ทุกแถวที่ query นี้คืนมาจึงได้บัญชี
+ *    ในแอปคลังด้วย `ERP_USER_FIXED_ROLE` เท่ากันหมด · ถ้าจะกันบัญชีที่ไม่เกี่ยวข้องอีกครั้ง
+ *    ต้องใส่ WHERE ที่นี่ (ผ่าน `ERP_SQL_USERS_SQL_FILE`) ซึ่ง U4/U7 ยังไม่มีคอลัมน์ให้กรอง
+ *    (query ต้นฉบับกรองด้วย `WHERE user_name = ?cUser` เพราะมันคือ query ตอน "ล็อกอินทีละคน"
+ *     ส่วนรอบ sync ต้องเห็นทั้งตารางเพื่อรู้ว่าใคร **หายไปแล้ว** จึงไม่มี WHERE)
+ */
+export const DEFAULT_USERS_SQL = `SELECT user_name  AS login_name,
+       a_Password AS password,
+       user_level AS user_level,
+       name_thai  AS name_thai,
+       user_name  AS emp_code
+  FROM menuuser WITH (NOLOCK)
+ ORDER BY user_name`;
+
+/**
+ * ผู้ใช้ **คนเดียว** ตอนล็อกอิน — คือ query ต้นฉบับของลูกค้าตามรูปที่เขาส่งมาจริง ๆ
+ *
+ *     SELECT user_name As USERID, a_Password, id_random, user_level As Ulevel,
+ *            name_thai, Employee.EmpPict
+ *     FROM  menuuser WITH (NOLOCK)
+ *     LEFT OUTER JOIN Employee WITH (NOLOCK) ON menuuser.emp_id = Employee.EmployeeCode
+ *     WHERE user_name = ?cUser
+ *     ORDER BY User_Name
+ *
+ * ⭐ `?cUser` คือ **พารามิเตอร์** ไม่ใช่ค่าคงที่ — query นี้จึงเป็น "หาแถวของคนที่กำลังล็อกอิน
+ *    หนึ่งคน แล้วเทียบรหัสผ่าน" ไม่ใช่ query กวาดรายชื่อทั้งตาราง (นั่นคือ `DEFAULT_USERS_SQL`)
+ *    ที่นี่ผูกเป็น `@cUser` ผ่าน `request.input()` ของ mssql → **ไม่มีการต่อสตริงเข้า SQL เลย**
+ *    ชื่อผู้ใช้คือ input จากอินเทอร์เน็ต การ concat ตรงนี้ = SQL injection เต็มรูปแบบบน ERP
+ *
+ * คงไว้ตามที่ลูกค้าเขียนโดยตั้งใจ:
+ *  - `WITH (NOLOCK)` ทั้งสองตาราง — ล็อกอินต้องไม่ไปรอ lock ของงาน ERP ที่วิ่งอยู่
+ *  - `LEFT OUTER JOIN Employee` — `Employee` มี 0 แถวใน db_TCL จริง (คืน NULL ทุกครั้ง)
+ *    แต่เป็น LEFT JOIN จึงไม่ตัดแถวใครทิ้ง และเป็นรูปที่ลูกค้ายืนยันว่าต้องใช้
+ *  - `ORDER BY User_Name` — เหลือได้แถวเดียวอยู่แล้ว แต่คงไว้ให้ตรงต้นฉบับ
+ *
+ * ต่างจากต้นฉบับแค่รายการคอลัมน์: alias เป็นชื่อที่ `toErpUserRow()` อ่าน และ **ไม่ดึง**
+ * `id_random` / `Employee.EmpPict` เพราะไม่มีอะไรในระบบนี้ใช้ค่าสองตัวนั้นเลย
+ * (`EmpPict` เป็นรูปภาพ — ดึงมาทุกครั้งที่มีคนกดล็อกอินคือภาระเปล่าบน ERP)
+ *
+ * 🚫 ไม่มี ENV ให้ override query นี้โดยตั้งใจ — มันคือสัญญาที่ลูกค้าเขียนมาเอง
+ *    ถ้ารูปนี้เปลี่ยน ต้องเป็นการแก้โค้ดที่มีคนอ่าน ไม่ใช่บรรทัดใน .env ของเครื่องใดเครื่องหนึ่ง
+ */
+export const DEFAULT_USER_LOGIN_SQL = `SELECT user_name  AS login_name,
+       a_Password AS password,
+       user_level AS user_level,
+       name_thai  AS name_thai,
+       user_name  AS emp_code
+  FROM menuuser WITH (NOLOCK)
+  LEFT OUTER JOIN Employee WITH (NOLOCK) ON menuuser.emp_id = Employee.EmployeeCode
+ WHERE user_name = @cUser
+ ORDER BY User_Name`;
 
 /**
  * หัวรอบนับแบบ dedupe แล้ว
@@ -499,6 +599,7 @@ export class MssqlDriver extends BaseErpDriver {
   private readonly sqlCfg: MssqlDriverConfig;
   private poolPromise?: Promise<sql.ConnectionPool>;
   private itemsSqlCache?: string;
+  private usersSqlCache?: string;
   private readOnlyVerified = false;
 
   constructor(cfg: ConfigService<AppConfig, true>) {
@@ -808,6 +909,57 @@ export class MssqlDriver extends BaseErpDriver {
     return items;
   }
 
+  /**
+   * ผู้ใช้ทั้งหมดจาก `menuuser` — SELECT ล้วน ยิงครั้งเดียวต่อรอบ sync
+   *
+   * ยิงแค่ **query เดียว** โดยตั้งใจ (ไม่แบ่งหน้า ไม่ยิงขนาน) เพื่อไม่ให้รอบผู้ใช้กิน
+   * connection ของ ERP เกินหนึ่งตัวจาก `ERP_SQL_POOL_MAX` (ค่าเริ่มต้น 3) — รอบ items
+   * ที่วิ่งอยู่พร้อมกันต้องเหลือ connection ใช้เสมอ
+   *
+   * 🚫 `password` ถูกห่อเป็น `ErpSecret` **ทันทีที่ข้าม boundary ของ driver** — ตั้งแต่
+   *    บรรทัดนั้นไปไม่มี plaintext เปลือย ๆ ลอยอยู่ในระบบอีก (ดู erp-secret.ts)
+   */
+  async fetchUsers(): Promise<ErpUserRow[]> {
+    const text = this.loadUsersSqlFile();
+    const rows = await this.runQuery('users-script', text);
+    logger.log(`ดึงผู้ใช้จาก ERP สำเร็จ: ${rows.length} แถว`);
+    // ⚠️ ไม่เรียก normalizeRow ซ้ำ — runQuery() decode ผ่าน decodeThai ให้ทุกคอลัมน์แล้ว
+    //    การ decode ซ้ำรอบสองอาจแปลงรหัสผ่านที่ decode ถูกแล้วให้เพี้ยนแบบเงียบ ๆ
+    return rows.map(toErpUserRow);
+  }
+
+  /**
+   * ผู้ใช้คนเดียวตอนล็อกอิน — ยิง `DEFAULT_USER_LOGIN_SQL` โดยผูกชื่อผู้ใช้เป็นพารามิเตอร์
+   *
+   * 🚫 `@cUser` ผูกผ่าน `runQuery()` → `request.input()` เท่านั้น **ห้ามต่อสตริงเข้า SQL**
+   *    (ค่านี้มาจากช่องกรอกบนมือถือ = input จากภายนอกล้วน ๆ)
+   * ⚠️ ไม่ trim / ไม่ lower ค่าที่ส่งเข้า ERP — SQL Server เทียบตาม collation ของคอลัมน์เอง
+   *    (`Thai_CI_AS` = ไม่สนตัวพิมพ์) การ normalize ฝั่งเราจะทำให้ผลต่างจากที่ ERP เห็นจริง
+   *    ตัดเฉพาะช่องว่างหัวท้ายที่คนพิมพ์ติดมา ซึ่งไม่มีทางเป็นส่วนของชื่อผู้ใช้จริง
+   *
+   * ต่อ ERP ไม่ได้ → error ลอยขึ้นไปตามสัญญาของ adapter (ห้ามกลืนเป็น "ไม่พบผู้ใช้")
+   */
+  async fetchUserByLogin(loginName: string): Promise<ErpUserRow | null> {
+    const wanted = loginName.trim();
+    if (wanted.length === 0) return null;
+
+    const rows = await this.runQuery('user-login', DEFAULT_USER_LOGIN_SQL, { cUser: wanted });
+    const row = rows[0];
+    if (row === undefined) return null;
+
+    // `user_name` ไม่ใช่ PK ใน `menuuser` → ซ้ำได้ตามทฤษฎี · เอาแถวแรกตาม ORDER BY เหมือน
+    // ต้นฉบับ แต่ต้องดังพอให้ผู้ดูแลไปแก้ที่ ERP (สองคนใช้ชื่อล็อกอินเดียวกัน = ปัญหาที่นั่น)
+    // 🚫 ห้ามใส่ค่าจากแถว (โดยเฉพาะรหัสผ่าน) ลง log บรรทัดนี้
+    if (rows.length > 1) {
+      logger.warn(
+        `menuuser คืน ${rows.length} แถวสำหรับชื่อผู้ใช้เดียว — ใช้แถวแรกตาม ORDER BY User_Name ` +
+          'และต้องไปแก้ข้อมูลซ้ำที่ ERP',
+      );
+    }
+
+    return toErpUserRow(row);
+  }
+
   // -------------------------------------------------------------------------
   // ภายใน
   // -------------------------------------------------------------------------
@@ -993,6 +1145,44 @@ export class MssqlDriver extends BaseErpDriver {
     assertReadOnlySql(text);
     this.itemsSqlCache = text;
     logger.log(`ใช้ script ดึง item master จาก ${path} (${text.length} ตัวอักษร)`);
+    return text;
+  }
+
+  /**
+   * query ดึงผู้ใช้ — ใช้ `DEFAULT_USERS_SQL` เว้นแต่ตั้ง `ERP_SQL_USERS_SQL_FILE`
+   * ชั้นที่ 3 ของกฎเหล็ก (`assertReadOnlySql`) บังคับกับทั้งสองทาง แม้ค่ามาจาก default เอง
+   */
+  private loadUsersSqlFile(): string {
+    if (this.usersSqlCache) return this.usersSqlCache;
+
+    const path = this.sqlCfg.usersSqlFile;
+    let text: string;
+    if (path === undefined) {
+      text = DEFAULT_USERS_SQL.trim();
+    } else {
+      try {
+        text = readFileSync(path, 'utf8');
+      } catch (err) {
+        throw new MssqlDriverError(
+          'ERP_CONFIG',
+          `อ่านไฟล์ ERP_SQL_USERS_SQL_FILE ไม่ได้: ${path} — ${errMessage(err)}`,
+        );
+      }
+      text = text.replace(/^\uFEFF/, '').trim();
+      if (text.length === 0) {
+        throw new MssqlDriverError('ERP_CONFIG', `ไฟล์ ERP_SQL_USERS_SQL_FILE ว่างเปล่า: ${path}`);
+      }
+      if (/^\s*GO\s*$/im.test(text)) {
+        throw new MssqlDriverError(
+          'ERP_CONFIG',
+          `ERP_SQL_USERS_SQL_FILE ต้องเป็นคำสั่ง SELECT เดียว ห้ามมีตัวคั่นแบตช์ GO: ${path}`,
+        );
+      }
+      logger.log(`ใช้ script ดึงผู้ใช้จาก ${path} (${text.length} ตัวอักษร)`);
+    }
+
+    assertReadOnlySql(text);
+    this.usersSqlCache = text;
     return text;
   }
 

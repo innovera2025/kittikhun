@@ -54,7 +54,8 @@ services:
         required: false
     depends_on:
       postgres:
-        # ต้องรอ Postgres พร้อมจริง ไม่ใช่แค่ container start — migration ตอน boot ต้องต่อ DB ได้
+        # ต้องรอ Postgres พร้อมจริง ไม่ใช่แค่ container start — ทุกคำขอและ /healthz ต้องต่อ DB ได้
+        # (ไม่ใช่เพราะ migration — api ไม่ได้รัน migration ตอน boot ดู deploy/update.sh ขั้น 4)
         condition: service_healthy
     volumes:
       # ไฟล์ .sql ของ script ดึง Inventory (ERP_SQL_*_SQL_FILE ชี้มาที่ /config/...)
@@ -78,7 +79,8 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-      # เผื่อเวลา migration ตอน boot (รันใต้ Postgres advisory lock) ก่อนเริ่มนับ retry
+      # เผื่อเวลา boot ของ Nest + ตรวจ ERP ตอน boot ก่อนเริ่มนับ retry
+      # (ไม่มี migration ตอน boot — schema ถูกอัปเดตด้วยมือก่อนสลับคอนเทนเนอร์เสมอ)
       start_period: 60s
     # ให้รอบ sync/คำขอที่ค้างจบก่อนถูก kill
     stop_grace_period: 30s
@@ -100,7 +102,8 @@ services:
       TZ: ${TZ:-Asia/Bangkok}
     volumes:
       - pgdata:/var/lib/postgresql/data
-      # ⚠️ รันครั้งเดียวตอน volume ยังว่าง (init ครั้งแรก) — แก้ schema ภายหลังต้องใช้ migration ของ api
+      # ⚠️ รันครั้งเดียวตอน volume ยังว่าง (init ครั้งแรก) — แก้ schema ภายหลังต้องรัน
+      #    `npm run migrate` (psql -f db/schema.sql) ด้วยมือ ไม่มีอะไรรันให้อัตโนมัติ
       - ./db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
     healthcheck:
       # $$ = ให้ shell ในคอนเทนเนอร์ขยายตัวแปร ไม่ใช่ compose ขยายตอน parse

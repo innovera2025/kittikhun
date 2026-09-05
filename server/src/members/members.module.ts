@@ -7,7 +7,6 @@ import {
   Module,
   Param,
   Patch,
-  Post,
   UseGuards,
 } from '@nestjs/common';
 import { z } from 'zod';
@@ -21,26 +20,23 @@ import {
 } from '../auth/auth.guards';
 import { AuthModule } from '../auth/auth.module';
 import { EmpIdSchema, RoleSchema, type AuthenticatedUser, type Role } from '../auth/auth.types';
-import {
-  MemberCreateSchema,
-  MembersService,
-  type MemberCreatedDto,
-  type MemberDto,
-} from './members.service';
+import { MembersService, type MemberDto } from './members.service';
 
 /** body ของ PATCH /members/:empId/role */
 const ChangeRoleBodySchema = z.object({ role: RoleSchema });
 
 /**
- * Members — **ผู้ใช้เป็นของระบบเราเองทั้งหมด สร้าง/เปลี่ยนสิทธิ์/รีเซ็ต PIN ที่นี่**
- * 🚫 ไม่แตะ ERP เลย (roster ไม่ได้ดึงจาก ERP และห้ามเขียนกลับ ERP)
+ * Members — roster (`GET`) + สลับสิทธิ์ (`PATCH :empId/role`) เท่านั้น
+ * 🚫 ไม่แตะ ERP เลย (ไม่ยิง query ไป ERP และห้ามเขียนกลับ ERP)
+ *
+ * ⚠️ `POST /members` (เพิ่มสมาชิก) และ `POST /members/:empId/reset-pin` **ถูกลบแล้ว**:
+ *    ตัวยืนยันตัวตนย้ายไปตาราง `user_credentials` ที่ sync ของ ERP เป็นเจ้าของ —
+ *    endpoint ที่ตั้ง PIN ให้คนใหม่จะถูกรอบ sync ถัดไปเขียนทับหรือกวาดทิ้งอยู่ดี
+ *    ทางเดียวที่สร้างบัญชีที่ ERP ไม่ได้เป็นเจ้าของคือ CLI `create-admin` (source='local')
  *
  * ⚠️ endpoint ที่เปลี่ยน roster ติด `@RequireFreshRole()` — blast radius สูง
  *    จึงต้องเทียบ `users.role_version` กับ DB ไม่เชื่อ claim `role` ใน token
  *    (admin ที่ถูกลดสิทธิ์ยังถือ access token เดิมได้อีกถึง 15 นาที)
- *
- * ⚠️ `initialPin` ที่ create/reset-pin ตอบกลับเป็น plaintext ครั้งเดียวสำหรับ
- *    ให้ admin แจ้งพนักงาน — ห้าม log ห้าม cache (design-fidelity.md §7 ข้อ 5)
  *
  * guard ผูกที่ controller เพราะแอปยังไม่ลงทะเบียน guard ระดับ APP_GUARD
  * error: service โยน HttpException ที่มี body `{code, message}` มาแล้ว จึงปล่อยผ่าน
@@ -57,27 +53,17 @@ export class MembersController {
     return this.members.list(user.warehouseCode);
   }
 
-  /** เพิ่มสมาชิก (bottom sheet "เพิ่มสมาชิกใหม่") — ตอบ PIN เริ่มต้นให้ admin แจ้งพนักงาน */
-  @Post()
-  @Roles('admin')
-  @RequireFreshRole()
-  @HttpCode(201)
-  async create(
-    @CurrentUser() user: AuthenticatedUser,
-    @Body() body: unknown,
-  ): Promise<MemberCreatedDto> {
-    // ใช้สคีมาตัวเดียวกับ service เพื่อไม่ให้กติกา validation แตกเป็นสองชุด
-    const parsed = MemberCreateSchema.safeParse(body);
-    if (!parsed.success) {
-      throw new BadRequestException({
-        code: 'VALIDATION',
-        message: parsed.error.issues[0]?.message ?? 'กรอกชื่อและรหัสพนักงานให้ครบ',
-      });
-    }
-    return this.members.create(parsed.data, user.empId);
-  }
-
-  /** สลับสิทธิ์ (แตะ role pill) — กติกา "ต้องเหลือ admin ≥ 1 คน" บังคับที่ service */
+  /**
+   * สลับสิทธิ์ (แตะ role pill) — กติกา "ต้องเหลือ admin ≥ 1 คน" บังคับที่ service
+   *
+   * ⚠️ บัญชีที่ ERP เป็นเจ้าของ (`source='erp'`) ถูกปฏิเสธด้วย `400 ERP_MANAGED`: รอบ sync
+   *    ถัดไปแปลง `menuuser.user_level` เป็น role แล้วเขียนทับอยู่ดี ปล่อยให้แก้ได้
+   *    เท่ากับตอบ 200 ให้ admin แล้วผลหายไปเงียบ ๆ ภายในไม่กี่นาที
+   *
+   *    ด่านนั้นอยู่**ในทรานแซกชันเดียวกับการเปลี่ยน role** ที่ `MembersService.changeRole`
+   *    ไม่ใช่ query แยกที่ controller อีกต่อไป — อ่านแหล่งที่มาก่อนแล้วค่อยเข้าทรานแซกชัน
+   *    คือช่องว่างให้รอบ sync แทรกกลางระหว่างสองคำสั่งได้ (TOCTOU)
+   */
   @Patch(':empId/role')
   @Roles('admin')
   @RequireFreshRole()
@@ -96,19 +82,6 @@ export class MembersController {
       });
     }
     return this.members.changeRole(empId, parsed.data.role, user.empId);
-  }
-
-  /** admin รีเซ็ต PIN ให้พนักงานที่ลืม PIN (เคลียร์ throttle + ตัดเซสชันทุกเครื่อง) */
-  @Post(':empId/reset-pin')
-  @Roles('admin')
-  @RequireFreshRole()
-  @HttpCode(200)
-  async resetPin(
-    @CurrentUser() user: AuthenticatedUser,
-    @Param('empId') empIdParam: string,
-  ): Promise<{ empId: string; initialPin: string }> {
-    const empId = MembersController.parseEmpId(empIdParam);
-    return this.members.resetPin(empId, user.empId);
   }
 
   /** empId ที่มาจาก path ต้องผ่าน zod ก่อนใช้เสมอ */

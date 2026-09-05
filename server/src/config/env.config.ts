@@ -2,6 +2,8 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { z } from 'zod';
 
+import { RoleSchema } from '../auth/auth.types';
+
 /**
  * คอนฟิกกลางของระบบ — zod schema ตรวจ `.env` ตอน boot (fail fast)
  *
@@ -84,13 +86,17 @@ function envStr(
   return schema;
 }
 
-function envInt(opts: { min: number; max: number; default: number; hint: string }) {
+/** จำนวนเต็มที่ยัง **ไม่มี** `.default()` — ใช้กับคีย์ที่จงใจไม่มีค่าเริ่มต้น (ต้องตั้งเองเท่านั้น) */
+function envIntBase(opts: { min: number; max: number; hint: string }) {
   return z.coerce
     .number({ invalid_type_error: `ต้องเป็นตัวเลข — ${opts.hint}` })
     .int(`ต้องเป็นจำนวนเต็ม (ไม่มีทศนิยม) — ${opts.hint}`)
     .min(opts.min, `ต้องไม่น้อยกว่า ${opts.min} — ${opts.hint}`)
-    .max(opts.max, `ต้องไม่เกิน ${opts.max} — ${opts.hint}`)
-    .default(opts.default);
+    .max(opts.max, `ต้องไม่เกิน ${opts.max} — ${opts.hint}`);
+}
+
+function envInt(opts: { min: number; max: number; default: number; hint: string }) {
+  return envIntBase(opts).default(opts.default);
 }
 
 const TRUE_WORDS = new Set(['true', '1', 'yes', 'y', 'on']);
@@ -265,6 +271,97 @@ const commonShape = {
     default: 15_000,
     hint: 'timeout ต่อ request/query ของ ERP (ms)',
   }),
+
+  // [5b] sync ผู้ใช้จาก ERP (`menuuser`) — สวิตช์คัตโอเวอร์ของการล็อกอินทั้งระบบ
+  /**
+   * 🔴 สวิตช์คัตโอเวอร์ตัวจริง — **ไม่มี default เป็น true เด็ดขาด**
+   * เปิดได้หลังผ่านด่านครบทั้งสาม (fleet readiness · break-glass admin · config ครบ) เท่านั้น
+   */
+  ERP_USER_SYNC_ENABLED: envBool(
+    false,
+    'เปิด sync ผู้ใช้จาก ERP จริง — เปิดหลัง Phase 0-2 ผ่านเท่านั้น (ดูแผนคัตโอเวอร์)',
+  ),
+  ERP_USER_SYNC_CRON: envStr('cron ของรอบ sync ผู้ใช้ เช่น 17 * * * *', {
+    pattern: CRON_RE,
+    // offset จาก ERP_SYNC_CRON (*/30) โดยตั้งใจ — สองรอบชนกันจะแย่ง ERP_SQL_POOL_MAX (ค่าเริ่มต้น 3)
+  }).default('17 * * * *'),
+  /**
+   * role **เดียว** ที่ผู้ใช้ทุกคนที่ sync มาจาก ERP ได้เหมือนกันหมด — ไม่แม็ปตาม `user_level` แล้ว
+   * (คำสั่งลูกค้า 5 ก.ย. 2569: "ไม่ต้องสนใจ Role ทำทั้งหมดให้อยู่ใน Role เดียวกัน")
+   *
+   * ค่าเริ่มต้น `staff` = สิทธิ์ที่นับสต็อกและส่งผลนับได้ ซึ่งคืองานจริงของแอปนี้ โดยไม่แจกสิทธิ์
+   * admin ให้ทุกบัญชีของ ERP · จะเปลี่ยนเป็น `admin` หรือ `viewer` ก็แก้ .env บรรทัดเดียว
+   *
+   * 🚨 **ด่านที่หายไปพร้อมกับ allowlist — ต้องรู้ก่อนใช้คีย์นี้**
+   *    `ERP_USER_LEVEL_ROLE_MAP` เดิมทำสองหน้าที่พร้อมกัน: ตัดสิน role **และ** เป็นประตูเดียว
+   *    ที่กันบัญชี ERP ซึ่งไม่เกี่ยวกับคลัง (บัญชี · ขาย · จัดซื้อ · superuser) ไม่ให้ล็อกอินเข้าแอปนี้
+   *    เพราะ `menuuser` คือตารางบัญชีของทั้งบริษัทและ query ไม่มี WHERE กรองแผนกเลย
+   *    ตอนนี้ประตูนั้น **ถูกถอดออกตามคำสั่งลูกค้า**: ทุกแถวที่ ERP ส่งมาและอ่านตัวตนออก
+   *    จะได้บัญชีในแอปคลังนี้ทันที ด้วย role นี้เหมือนกันทุกคน
+   *    ถ้าต้องการประตูนั้นคืน ต้องไปกรองที่ฝั่ง ERP (ใส่ WHERE ใน `ERP_SQL_USERS_SQL_FILE`)
+   *    ไม่ใช่ที่คีย์นี้ — คีย์นี้ตอบแค่ "ได้สิทธิ์อะไร" ไม่ได้ตอบ "ใครได้บัญชีบ้าง" อีกต่อไป
+   */
+  ERP_USER_FIXED_ROLE: envEnum(
+    RoleSchema.options,
+    'role เดียวที่ผู้ใช้จาก ERP ได้ทุกคน (ไม่แม็ปตาม user_level แล้ว)',
+  ).default('staff'),
+  /**
+   * 🗑️ ยกเลิกแล้ว 5 ก.ย. 2569 — ประกาศทิ้งไว้เพื่อ **ปฏิเสธการ boot** ถ้ายังตั้งค้างใน `.env`
+   *
+   * ปล่อยให้เป็นคีย์ที่ไม่มีใครอ่านไม่ได้: ผู้ดูแลที่ยังเห็น `9=admin` อยู่ในไฟล์จะเชื่อว่าคนระดับ 9
+   * ยังได้ admin อยู่ ทั้งที่ทุกคนได้ `ERP_USER_FIXED_ROLE` เท่ากันหมดไปแล้ว
+   */
+  ERP_USER_LEVEL_ROLE_MAP: z
+    .never({
+      invalid_type_error:
+        'คีย์นี้ถูกยกเลิกแล้ว (ไม่มีการแม็ป user_level→role อีกต่อไป) — ลบบรรทัดนี้ออกจาก .env แล้วตั้ง ERP_USER_FIXED_ROLE แทน',
+    })
+    .optional(),
+  ERP_USER_DEACTIVATE_MAX_PCT: envInt({
+    min: 1,
+    max: 100,
+    default: 10,
+    hint: 'เพดาน % ของ credential (erp+legacy_pin) ที่ลบได้ต่อรอบ sync',
+  }),
+  /**
+   * คู่ตรงข้ามของตัวข้างบน — ตัวนั้นกันการ **ถอน** สิทธิ์ทีละมาก ๆ ตัวนี้กันการ **ให้**
+   *
+   * ⚠️ ตั้ง `ERP_USER_FIXED_ROLE=admin` = คนทั้งคลังกลายเป็น admin ในรอบเดียว โดยไม่มีมนุษย์
+   *    คนไหนกดเป็นรายคน และรอบนั้นรายงาน 'success' ตามปกติ — เพดานนี้คือด่านเดียวที่เห็น
+   *    "จำนวนคน" ที่จะถูกเลื่อนจริง (ด่าน boot เห็นแค่ค่าใน .env ไม่เห็นว่ากระทบกี่คน)
+   *    เกินเพดาน = คงสิทธิ์เดิมของทุกคนไว้ทั้งรอบ + anomaly + ตัวนับใน sync_runs
+   *    ตั้งใจให้เป็นแบบนี้แม้หลังเลิกใช้ role map: การขยับ role กลางทีเดียวทั้งคลังต้องมีคนยืนยัน
+   */
+  ERP_USER_ELEVATE_MAX_PCT: envInt({
+    min: 1,
+    max: 100,
+    default: 10,
+    hint: 'เพดาน % ของผู้ใช้เดิมที่ถูกเลื่อนสิทธิ์ขึ้นได้ต่อรอบ sync',
+  }),
+  /**
+   * ต้อง "หายจากผล ERP" ต่อเนื่องนานเท่านี้ก่อน จึงจะปิดล็อกอินได้ (นาฬิกา `absent_since`)
+   *
+   * ค่าเริ่มต้น 2 ชม. (เดิม 24 ชม. ฝังตายในโค้ด) — ลูกค้าสั่งว่า "กลับมาถ้าหาไม่เจอก็เข้าไม่ได้"
+   * จึงบีบหน้าต่างลงให้ใกล้ทันทีที่สุดเท่าที่ยัง **ไม่ทิ้งการป้องกัน**: cron ผู้ใช้เดินชั่วโมงละครั้ง
+   * (`ERP_USER_SYNC_CRON` = `17 * * * *`) 2 ชม. จึงแปลว่า "ต้องมีรอบอ่าน ERP อิสระอย่างน้อย
+   * สองรอบที่เห็นตรงกันว่าคนนี้หายไปแล้ว" ไม่ใช่เชื่อการอ่านครั้งเดียว
+   *
+   * ⚠️ `min: 1` โดยตั้งใจ — ตั้ง 0 ไม่ได้ เพราะ 0 = ยอมให้ผลอ่าน ERP ที่ขาดหายรอบเดียว
+   *    ปิดล็อกอินคนทั้งคลังได้ทันที ซึ่งเสียหายหนักกว่าคนที่ลาออกแล้วยังเข้าได้อีกหนึ่งหน้าต่างมาก
+   *    (เพดานแถวขั้นต่ำและเพดาน % ยังเป็นด่านหลักของเรื่องนี้ ตัวนี้เป็นด่านซ้อนอีกชั้น)
+   */
+  ERP_USER_ABSENCE_GRACE_HOURS: envInt({
+    min: 1,
+    max: 720,
+    default: 2,
+    hint: 'ต้องหายจาก ERP ต่อเนื่องกี่ชั่วโมงก่อนปิดล็อกอิน (ตั้ง 0 ไม่ได้ — ดูคอมเมนต์)',
+  }),
+  /** ไม่มี default โดยตั้งใจ — บังคับตั้งเมื่อ ERP_USER_SYNC_ENABLED=true (ดูกฎข้ามตัวแปร) */
+  ERP_USER_MIN_EXPECTED_ROWS: envIntBase({
+    min: 1,
+    max: 100_000,
+    hint: 'จำนวนแถวขั้นต่ำที่ ERP ต้องส่งมาถึงจะยอม deactivate (ตั้งจากผล npm run verify:erp-users)',
+  }).optional(),
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -301,6 +398,11 @@ const sqlSharedShape = {
     pattern: SQL_OBJECT_RE,
   }).optional(),
   ERP_SQL_ITEMS_SQL_FILE: envStr('พาธเต็มของไฟล์ .sql เช่น /config/inventory-items.sql', {
+    max: 512,
+    pattern: ABS_SQL_FILE_RE,
+  }).optional(),
+  /** ไม่ตั้ง = ใช้ query `menuuser` เริ่มต้นที่ฝังใน driver (ไม่ใช่ค่าบังคับเหมือน ITEMS) */
+  ERP_SQL_USERS_SQL_FILE: envStr('พาธไฟล์ .sql override สำหรับดึงผู้ใช้ เช่น /config/menuuser.sql', {
     max: 512,
     pattern: ABS_SQL_FILE_RE,
   }).optional(),
@@ -577,6 +679,32 @@ function crossFieldRules(config: AppConfig, ctx: z.RefinementCtx): void {
       if (config.ERP_SQL_WRITE_USER && config.ERP_SQL_WRITE_USER.trim().toLowerCase() === 'sa') {
         addIssue('ERP_SQL_WRITE_USER', 'ห้ามใช้บัญชี sa ต่อ ERP ไม่ว่ากรณีใด');
       }
+    }
+  }
+
+  // ── sync ผู้ใช้จาก ERP: ด่านที่แข็งกว่า runtime check ──────────────────────
+  // ตั้งไม่ครบ = **เซิร์ฟเวอร์บูตไม่ขึ้นเลย** ไม่ใช่ sync ข้ามรอบเงียบ ๆ ให้ค้นหาสาเหตุทีหลัง
+  //
+  // ⚠️ **ด่าน "ต้องมี admin เหลืออยู่" ไม่ได้หายไป แต่ย้ายที่แล้ว — อย่าเติมกลับมาตรงนี้**
+  //    เดิมกฎคือ "ต้องมีอย่างน้อย 1 level ที่ map เป็น admin" ซึ่งพิสูจน์อะไรไม่ได้จริงเลย
+  //    (map ที่เขียน `9=admin` บน ERP ที่ไม่มีใคร level 9 ก็ผ่านด่านนี้ทั้งที่ไม่มี admin สักคน)
+  //    และตอนนี้ทุกคนได้ `ERP_USER_FIXED_ROLE` ค่าเดียวกันหมด กฎเดิมจึงบล็อก boot ตลอดกาล
+  //    ทุกครั้งที่ค่านั้นไม่ใช่ 'admin' ซึ่งเป็นค่าเริ่มต้นที่ถูกต้อง
+  //
+  //    ความจริงที่ต้องบังคับคือ **"มี credential break-glass `source='local'` ที่เป็น admin อยู่"**
+  //    ซึ่งเป็นข้อเท็จจริงใน DB ไม่ใช่ค่าใน `.env` — `loadConfig()` เป็นฟังก์ชัน pure ที่ไม่มี
+  //    (และต้องไม่มี) การต่อ DB จึงตรวจที่นี่ไม่ได้ ด่านจริงจึงอยู่สองจุดใน `sync.module.ts`:
+  //      1. `SyncService.onModuleInit()` — ไม่มี break-glass admin = **ไม่ติดตั้ง cron รอบผู้ใช้**
+  //         พร้อม log ระดับ error ที่บอกให้รัน `npm run create-admin` (เห็นตั้งแต่ตอน boot)
+  //      2. ด่าน 0 ของ `runUsers()` — ทุกรอบ (รวม `POST /sync/users` ที่ยิงด้วยมือ) ปฏิเสธ
+  //         ทั้ง run ถ้าไม่มี ไม่เขียนอะไรลง DB แม้แถวเดียว
+  //    ทั้งสองจุดคือสิ่งที่กัน "ระบบเหลือศูนย์ admin ที่ล็อกอินได้" ตัวจริง — ห้ามถอด
+  if (config.ERP_USER_SYNC_ENABLED) {
+    if (config.ERP_USER_MIN_EXPECTED_ROWS === undefined) {
+      addIssue(
+        'ERP_USER_MIN_EXPECTED_ROWS',
+        'ต้องตั้งเมื่อ ERP_USER_SYNC_ENABLED=true — ใช้จำนวนแถวที่ npm run verify:erp-users รายงาน (Phase 0)',
+      );
     }
   }
 

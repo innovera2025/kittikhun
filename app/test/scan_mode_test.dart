@@ -65,9 +65,7 @@ void main() {
   /// เข้าสู่ระบบโหมด fixture (เทสต์ไม่ได้ตั้ง `API_BASE_URL`)
   Future<void> signInAs(AppController c, String empId) async {
     c.setEmpId(empId);
-    for (final k in ['0', '0', '0', '0', '0', '0']) {
-      c.pressKey(k);
-    }
+    c.setPassword('any-secret');
     await c.signIn();
   }
 
